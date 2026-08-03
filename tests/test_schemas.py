@@ -1,0 +1,83 @@
+"""Pydantic 结构化输出与意图强校验测试。"""
+from types import SimpleNamespace
+
+import pytest
+
+from src.agents.config_agent import ConfigAgent
+from src.schemas import ETLIntent, ETLPlan, SyncIntent
+
+
+class TestSyncIntent:
+    def test_valid(self):
+        intent = SyncIntent.model_validate({
+            "source_db_type": "mysql",
+            "source_table": "t1",
+            "target_db_type": "es",
+            "sync_type": "增量",
+        })
+        assert intent.source_table == "t1"
+        assert intent.sync_type == "incremental"  # 增量 → incremental
+        assert intent.source_port == 3306  # 缺省默认值
+
+    def test_missing_fields_filled_by_defaults(self):
+        intent = SyncIntent.model_validate({})
+        assert intent.source_db_type == "mysql"
+        assert intent.target_db_type == "elasticsearch"
+        assert intent.source_port == 3306
+
+    def test_port_coercion(self):
+        intent = SyncIntent.model_validate({"source_port": "9030"})
+        assert intent.source_port == 9030
+
+
+class TestETLIntent:
+    def test_valid(self):
+        plan = ETLPlan(sql="INSERT INTO dwd SELECT * FROM ods")
+        assert "INSERT" in plan.sql
+        intent = ETLIntent(source_table="ods_user", target_table="dwd_user")
+        assert intent.transform_type == "clean"
+
+
+class _FakeLLM:
+    """模拟 LLM：invoke 返回固定 content。"""
+
+    def __init__(self, content: str):
+        self._content = content
+
+    def __call__(self, inputs):
+        return SimpleNamespace(content=self._content)
+
+
+def _agent_with_llm(content: str) -> ConfigAgent:
+    agent = ConfigAgent()
+    agent.llm = _FakeLLM(content)
+    agent._ok = True
+    return agent
+
+
+def test_parse_intent_full_json(monkeypatch):
+    agent = _agent_with_llm(
+        '{"source_db_type": "mysql", "source_table": "t1", '
+        '"target_db_type": "elasticsearch", "target_table": "t1", "sync_type": "增量"}'
+    )
+    intent = agent._parse_intent("同步 t1 表")
+    assert intent["source_table"] == "t1"
+    assert intent["sync_type"] == "incremental"
+    # 缺省字段被补全
+    assert intent["source_port"] == 3306
+    assert intent["target_port"] == 9200
+
+
+def test_parse_intent_invalid_json_falls_back(monkeypatch):
+    # 字段类型错误（port 不是整数）→ Pydantic 校验失败 → fallback 意图
+    agent = _agent_with_llm('{"source_db_type": "mysql", "source_port": "abc"}')
+    intent = agent._parse_intent("把 MySQL 的 user 表同步到 ES")
+    assert intent["source_table"] == "user"
+    assert intent["target_db_type"] == "elasticsearch"
+
+
+def test_parse_intent_non_json_falls_back(monkeypatch):
+    agent = _agent_with_llm("抱歉，我无法解析")
+    intent = agent._parse_intent("同步 MySQL 的 orders 表到 MongoDB")
+    assert intent["source_table"] == "orders"
+    assert intent["source_db_type"] == "mongodb"

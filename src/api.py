@@ -1,0 +1,367 @@
+"""FastAPI Web 服务。"""
+import sys
+import re
+import asyncio
+import threading
+from pathlib import Path
+from typing import Optional
+from contextlib import asynccontextmanager
+
+PROJECT_ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from src.config import config
+from src.utils.tracing import init_tracing
+from src.workflow import AgentWorkflow, get_task_manager
+from src.intent_router import get_router
+
+_workflows: dict = {}
+_workflow_lock = threading.Lock()
+_task_semaphore = threading.Semaphore(config.MAX_CONCURRENT_TASKS)
+
+# 免鉴权路径：健康检查/监控页/指标（监控网段内可信）
+_AUTH_EXEMPT = {"/", "/health", "/ui", "/metrics", "/docs", "/openapi.json"}
+
+
+def _run_with_slot(fn, *args, **kwargs):
+    """在并发信号量内执行任务。"""
+    with _task_semaphore:
+        return fn(*args, **kwargs)
+
+
+def get_workflow(task_type: str = "data_integration"):
+    """按任务类型获取工作流实例（线程安全懒加载 + 缓存）。"""
+    global _workflows
+    if task_type not in _workflows:
+        with _workflow_lock:
+            if task_type not in _workflows:
+                config.ensure_directories()
+                _workflows[task_type] = AgentWorkflow(
+                    use_checkpointer=True, task_type=task_type,
+                )
+    return _workflows[task_type]
+
+@asynccontextmanager
+async def lifespan(app):
+    init_tracing()
+    config.ensure_directories()
+    # 预热工作流，避免首个请求慢
+    await asyncio.to_thread(get_workflow, "data_integration")
+    yield
+
+app = FastAPI(title="数据集成 Agent", version="1.0.0", lifespan=lifespan)
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.middleware("http")
+async def api_token_auth(request: Request, call_next):
+    """可选 API Token 鉴权：配置 API_TOKEN 后保护所有数据接口。"""
+    token = config.API_TOKEN
+    if token and request.url.path not in _AUTH_EXEMPT:
+        provided = request.headers.get("Authorization", "")
+        if provided != f"Bearer {token}" and request.headers.get("X-API-Token") != token:
+            return JSONResponse(status_code=401, content={"detail": "未授权：缺少或错误的 API Token"})
+    return await call_next(request)
+
+
+@app.get("/ui", response_class=HTMLResponse, include_in_schema=False)
+async def dashboard():
+    """轻量监控页面。"""
+    html_path = Path(__file__).parent / "ui" / "dashboard.html"
+    return HTMLResponse(html_path.read_text(encoding="utf-8"))
+
+
+class SyncRequest(BaseModel):
+    query: str = ""
+    thread_id: Optional[str] = None
+
+    def validate_request(self):
+        query = (self.query or "").strip()
+        if not query:
+            raise HTTPException(status_code=422, detail="query 不能为空")
+        if len(query) > 2000:
+            raise HTTPException(status_code=422, detail="query 过长（最多 2000 字符）")
+        if self.thread_id is not None and not re.fullmatch(r"[\w-]{1,64}", self.thread_id):
+            raise HTTPException(status_code=422, detail="thread_id 只能包含字母数字下划线，最长 64 字符")
+        return query
+
+class SyncResponse(BaseModel):
+    task_id: str
+    status: str
+    message: str
+
+
+class RouteResponse(BaseModel):
+    task_type: Optional[str]
+    confidence: float
+    matched_keywords: list
+    source: str
+    message: str
+
+
+class BatchRequest(BaseModel):
+    query: str = ""
+    tables: list = []
+    thread_id: Optional[str] = None
+
+    def validate_request(self):
+        query = (self.query or "").strip()
+        if not query:
+            raise HTTPException(status_code=422, detail="query 不能为空")
+        if len(query) > 2000:
+            raise HTTPException(status_code=422, detail="query 过长（最多 2000 字符）")
+        tables = [t.strip() for t in (self.tables or []) if t and t.strip()]
+        if not tables:
+            raise HTTPException(status_code=422, detail="tables 不能为空")
+        if len(tables) > 50:
+            raise HTTPException(status_code=422, detail="单次最多 50 张表")
+        for t in tables:
+            if not re.fullmatch(r"[\w.-]+", t):
+                raise HTTPException(status_code=422, detail=f"非法表名: {t}")
+        return query, tables
+
+
+class OpsDiagnoseRequest(BaseModel):
+    task_id: str = ""
+    query: str = "诊断任务失败原因"
+
+    def validate_request(self):
+        task_id = (self.task_id or "").strip()
+        if not task_id:
+            raise HTTPException(status_code=422, detail="task_id 不能为空")
+        if not re.fullmatch(r"[\w-]{1,64}", task_id):
+            raise HTTPException(status_code=422, detail="task_id 格式非法")
+        query = (self.query or "诊断任务失败原因").strip()[:500]
+        return task_id, query
+
+@app.get("/")
+async def root():
+    return {"service": "数据集成 Agent", "version": "1.0.0", "status": "running"}
+
+@app.post("/sync", response_model=SyncResponse)
+async def submit_sync(req: SyncRequest):
+    query = req.validate_request()
+    # 意图路由：按任务类型选择对应工作流
+    routed = get_router().route(query)
+    if not routed.task_type:
+        detail = routed.message or "无法识别任务类型"
+        raise HTTPException(status_code=422, detail=detail)
+
+    try:
+        wf = get_workflow(routed.task_type)
+        # 工作流为同步代码，放入线程池避免阻塞事件循环
+        result = await asyncio.to_thread(
+            _run_with_slot, wf.run, query, req.thread_id,
+        )
+        task_id = result.get("_task_id", "unknown")
+        status = result.get("current_step", "unknown")
+        error = result.get("error")
+        return SyncResponse(
+            task_id=task_id,
+            status=(
+                "pending_approval" if "approval" in str(status) and not error else
+                ("success" if "complete" in str(status) and not error else "failed")
+            ),
+            message=(
+                ("等待人工审批，配置已生成: POST /tasks/" + task_id + "/approve" if "approval" in str(status) and not error else
+                 "完成: " + str(status) + (", 错误: " + str(error) if error else ""))
+            ),
+        )
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).exception("同步请求处理失败")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/route", response_model=RouteResponse)
+async def route_query(req: SyncRequest):
+    query = req.validate_request()
+    return get_router().route(query).to_dict()
+
+
+@app.post("/sync/batch")
+async def submit_sync_batch(req: BatchRequest):
+    query, tables = req.validate_request()
+    routed = get_router().route(query)
+    if routed.task_type != "data_integration":
+        detail = routed.message or "当前仅支持数据集成任务"
+        if routed.task_type:
+            detail += f"，识别为: {routed.task_type}"
+        raise HTTPException(status_code=422, detail=detail)
+    try:
+        wf = get_workflow()
+        return await asyncio.to_thread(
+            _run_with_slot, wf.run_batch, query, tables, req.thread_id,
+        )
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).exception("批量同步请求处理失败")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/ops/diagnose")
+async def ops_diagnose(req: OpsDiagnoseRequest):
+    """运维诊断：对失败/取消的任务做故障诊断 + 事故知识沉淀。"""
+    task_id, query = req.validate_request()
+    tm = get_task_manager()
+    if not tm.get_task(task_id):
+        raise HTTPException(status_code=404, detail="任务不存在")
+    try:
+        wf = get_workflow("data_ops")
+        result = await asyncio.to_thread(
+            _run_with_slot, wf.run, query,
+            diagnose_task_id=task_id,
+        )
+        diagnosis = result.get("ops_diagnosis") or {}
+        record = result.get("ops_record_result") or {}
+        return {
+            "task_id": result.get("_task_id"),
+            "diagnose_task_id": task_id,
+            "status": result.get("current_step"),
+            "error": result.get("error"),
+            "diagnosis": {
+                "root_cause": diagnosis.get("root_cause"),
+                "impact": diagnosis.get("impact"),
+                "solution_steps": diagnosis.get("solution_steps", []),
+                "confidence": diagnosis.get("confidence"),
+                "related_incidents": diagnosis.get("related_incidents", []),
+            },
+            "record": record,
+        }
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).exception("运维诊断请求处理失败")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/tasks")
+async def list_tasks(limit: int = 20):
+    tm = get_task_manager()
+    return {"tasks": tm.get_task_history(limit)}
+
+@app.get("/tasks/{task_id}")
+async def get_task(task_id: str):
+    tm = get_task_manager()
+    task = tm.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    return task
+
+@app.get("/tasks/{task_id}/logs")
+async def get_task_logs(task_id: str):
+    tm = get_task_manager()
+    return {"task_id": task_id, "logs": tm.get_task_logs(task_id)}
+
+@app.post("/tasks/{task_id}/cancel")
+async def cancel_task(task_id: str):
+    tm = get_task_manager()
+    if not tm.get_task(task_id):
+        raise HTTPException(status_code=404, detail="任务不存在")
+    ok = tm.cancel_task(task_id)
+    if not ok:
+        raise HTTPException(status_code=409, detail="任务已处于终态，无法取消")
+    # 终止正在运行的 DataX 子进程（job_name 由 task_id 确定性生成）
+    from src.tools.datax_tool import get_datax_tool
+    get_datax_tool().cancel_job(f"datax_task_{task_id}")
+    return {"task_id": task_id, "status": "cancelled"}
+
+@app.post("/tasks/{task_id}/retry")
+async def retry_task(task_id: str):
+    wf = get_workflow()
+    result = await asyncio.to_thread(wf.retry_task, task_id)
+    if result is None:
+        raise HTTPException(status_code=409, detail="只有已失败或已取消的任务可以重试")
+    return {"task_id": result["_task_id"], "status": "submitted"}
+
+
+@app.post("/tasks/{task_id}/approve")
+async def approve_task(task_id: str, request: Request):
+    """人工审批通过：执行已生成配置的待审批任务。"""
+    tm = get_task_manager()
+    task = tm.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if task.get("status") != "pending_approval":
+        raise HTTPException(status_code=409, detail="任务不在待审批状态")
+    routed = get_router().route(task.get("user_query", ""))
+    if not routed.task_type:
+        raise HTTPException(status_code=409, detail="无法确定任务类型，请人工检查")
+    try:
+        wf = get_workflow(routed.task_type)
+        operator = request.headers.get("X-Operator", "system")[:50]
+        result = await asyncio.to_thread(wf.approve_task, task_id, operator)
+        if result is None:
+            raise HTTPException(status_code=409, detail="只有待审批任务可以审批")
+        return {
+            "task_id": task_id,
+            "status": result.get("current_step"),
+            "error": result.get("error"),
+            "validation_result": result.get("validation_result"),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).exception("审批执行失败")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/tasks/{task_id}/reject")
+async def reject_task(task_id: str, request: Request):
+    """人工拒绝执行：取消待审批任务。"""
+    tm = get_task_manager()
+    task = tm.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if task.get("status") != "pending_approval":
+        raise HTTPException(status_code=409, detail="任务不在待审批状态")
+    routed = get_router().route(task.get("user_query", ""))
+    if not routed.task_type:
+        raise HTTPException(status_code=409, detail="无法确定任务类型")
+    wf = get_workflow(routed.task_type)
+    operator = request.headers.get("X-Operator", "system")[:50]
+    result = await asyncio.to_thread(wf.reject_task, task_id, operator)
+    if result is None:
+        raise HTTPException(status_code=409, detail="只有待审批任务可以拒绝")
+    return {"task_id": task_id, "status": result.get("status"), "message": "已拒绝执行"}
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "store": config.STATE_STORE_TYPE}
+
+
+@app.get("/metrics", include_in_schema=False)
+async def metrics():
+    """Prometheus 文本格式指标。"""
+    tm = get_task_manager()
+    counts = tm.count_by_status()
+    total = sum(counts.values())
+    lines = [
+        "# HELP dataagent_tasks_total 任务总数（按状态）",
+        "# TYPE dataagent_tasks_total gauge",
+    ]
+    for status in sorted(counts):
+        lines.append(f'dataagent_tasks_total{{status="{status}"}} {counts[status]}')
+    lines.append(f"dataagent_tasks_created_total {total}")
+    return PlainTextResponse("\n".join(lines) + "\n")
+
+
+@app.get("/audit")
+async def audit_logs(task_id: str = "", limit: int = 100):
+    """审计日志：谁在什么时候批准/拒绝/取消了什么任务。"""
+    tm = get_task_manager()
+    return {"logs": tm.get_audit_logs(task_id=task_id or None, limit=min(limit, 1000))}
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host=config.API_HOST, port=config.API_PORT)

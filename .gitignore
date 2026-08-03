@@ -1,0 +1,25 @@
+# 环境与密钥
+.env
+
+# 运行时产物
+state/
+logs/
+jobs/
+*.db
+*.db-wal
+*.db-shm
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# IDE
+.idea/
+.vscode/
+
+# 备份文件
+*.bak

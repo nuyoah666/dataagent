@@ -1,0 +1,34 @@
+# 核心框架
+langchain>=0.2.0
+langgraph>=0.1.0
+langchain-core>=0.2.0
+langchain-community>=0.2.0
+langchain-openai>=0.1.0
+langgraph-checkpoint-sqlite>=3.0.0
+langgraph-checkpoint-mysql>=3.0.0
+
+# 数据库驱动
+pymysql>=1.1.0
+pymongo>=4.6.0
+elasticsearch>=8.12.0
+
+# Embedding 模型
+sentence-transformers>=2.0.0
+
+# 工具依赖
+python-dotenv>=1.0.0
+pydantic>=2.6.0
+requests>=2.31.0
+jsonschema>=4.20.0
+
+# 日志
+loguru>=0.7.0
+python-dateutil>=2.8.0
+
+# Web API
+fastapi>=0.110.0
+uvicorn>=0.29.0
+
+# 测试
+pytest>=8.0.0
+httpx>=0.27.0
