@@ -2,139 +2,346 @@
 <html lang="zh">
 <head>
 <meta charset="utf-8">
-<title>数据集成 Agent 监控</title>
+<title>数据集成 Agent 全链路监控</title>
 <style>
   :root { --bg:#0f172a; --card:#1e293b; --border:#334155; --text:#e2e8f0; --muted:#94a3b8;
-          --ok:#22c55e; --err:#ef4444; --run:#f59e0b; }
+          --ok:#22c55e; --err:#ef4444; --run:#f59e0b; --accent:#38bdf8; }
   * { box-sizing:border-box; margin:0; padding:0; }
-  body { background:var(--bg); color:var(--text); font-family:"Segoe UI",system-ui,sans-serif; padding:24px; }
-  h1 { font-size:20px; margin-bottom:16px; }
-  h1 span { color:var(--muted); font-size:14px; font-weight:normal; margin-left:8px; }
-  .cards { display:flex; gap:12px; margin-bottom:20px; flex-wrap:wrap; }
-  .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:14px 20px; min-width:120px; }
-  .card .num { font-size:26px; font-weight:600; }
-  .card .label { font-size:12px; color:var(--muted); margin-top:4px; }
+  body { background:var(--bg); color:var(--text); font-family:"Segoe UI",system-ui,sans-serif; padding:20px; }
+  h1 { font-size:19px; margin-bottom:14px; display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  h1 span { color:var(--muted); font-size:13px; font-weight:normal; }
+  .token-box { margin-left:auto; display:flex; gap:6px; align-items:center; font-size:12px; color:var(--muted); }
+  .token-box input { background:var(--card); border:1px solid var(--border); color:var(--text); border-radius:6px; padding:4px 8px; width:170px; }
+  .tabs { display:flex; gap:8px; margin-bottom:14px; flex-wrap:wrap; }
+  .tabs button { background:var(--card); border:1px solid var(--border); color:var(--muted); border-radius:8px;
+                 padding:7px 18px; cursor:pointer; font-size:13px; }
+  .tabs button.active { color:var(--accent); border-color:var(--accent); background:rgba(56,189,248,.08); }
+  .cards { display:flex; gap:12px; margin-bottom:16px; flex-wrap:wrap; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:12px 18px; min-width:110px; }
+  .card .num { font-size:24px; font-weight:600; }
+  .card .label { font-size:12px; color:var(--muted); margin-top:2px; }
   .card.ok .num { color:var(--ok); } .card.err .num { color:var(--err); } .card.run .num { color:var(--run); }
   .card.warn .num { color:#eab308; }
   table { width:100%; border-collapse:collapse; background:var(--card); border-radius:10px; overflow:hidden; }
-  th,td { text-align:left; padding:10px 14px; border-bottom:1px solid var(--border); font-size:13px; }
-  th { color:var(--muted); font-weight:500; background:rgba(255,255,255,.03); }
+  th,td { text-align:left; padding:8px 12px; border-bottom:1px solid var(--border); font-size:12.5px; }
+  th { color:var(--muted); font-weight:500; background:rgba(255,255,255,.03); white-space:nowrap; }
   tr:hover td { background:rgba(255,255,255,.04); cursor:pointer; }
-  .tag { padding:2px 10px; border-radius:999px; font-size:12px; }
+  .tag { padding:2px 10px; border-radius:999px; font-size:11.5px; white-space:nowrap; }
   .tag.success,.tag.exec_done,.tag.config_done { background:rgba(34,197,94,.15); color:var(--ok); }
   .tag.failed { background:rgba(239,68,68,.15); color:var(--err); }
   .tag.running,.tag.executing,.tag.validating { background:rgba(245,158,11,.15); color:var(--run); }
   .tag.pending,.tag.pending_approval { background:rgba(234,179,8,.15); color:#eab308; }
-  .btn-approve,.btn-reject { padding:3px 12px; border:none; border-radius:6px; cursor:pointer; font-size:12px; margin-right:6px; }
+  .tag.cancelled { background:rgba(148,163,184,.15); color:var(--muted); }
+  .btn { padding:3px 12px; border:none; border-radius:6px; cursor:pointer; font-size:12px; margin-right:5px; white-space:nowrap; }
   .btn-approve { background:rgba(34,197,94,.2); color:var(--ok); }
   .btn-reject { background:rgba(239,68,68,.2); color:var(--err); }
-  .query { max-width:380px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  #logModal { display:none; position:fixed; inset:0; background:rgba(0,0,0,.6); z-index:10; }
-  #logModal .panel { background:#0b1220; border:1px solid var(--border); border-radius:12px; max-width:760px;
-                     margin:8vh auto; max-height:80vh; overflow:auto; padding:20px; }
-  #logModal h3 { margin-bottom:12px; font-size:15px; }
-  #logModal pre { font-size:12px; line-height:1.6; color:#cbd5e1; white-space:pre-wrap; word-break:break-all; }
-  #logModal .close { float:right; cursor:pointer; color:var(--muted); }
+  .btn-action { background:rgba(56,189,248,.15); color:var(--accent); }
+  .btn-danger { background:rgba(239,68,68,.15); color:var(--err); }
   .empty { text-align:center; color:var(--muted); padding:30px; }
+  .tree-row td:first-child { padding-left:8px; }
+  .tree-child td:first-child { padding-left:36px; position:relative; }
+  .tree-child td:first-child::before { content:"└─"; position:absolute; left:14px; color:var(--muted); }
+  #modal { display:none; position:fixed; inset:0; background:rgba(0,0,0,.65); z-index:10; }
+  #modal .panel { background:#0b1220; border:1px solid var(--border); border-radius:12px; max-width:860px;
+                  margin:5vh auto; max-height:90vh; overflow:auto; padding:22px; }
+  #modal h3 { margin-bottom:10px; font-size:16px; }
+  #modal .close { float:right; cursor:pointer; color:var(--muted); font-size:20px; }
+  #modal pre { font-size:12px; line-height:1.6; color:#cbd5e1; white-space:pre-wrap; word-break:break-all; }
+  .section-title { font-size:13px; color:var(--muted); margin:16px 0 8px; }
+  .timeline { border-left:2px solid var(--border); padding-left:16px; }
+  .tl-item { position:relative; padding:6px 0; }
+  .tl-item::before { content:""; position:absolute; left:-21px; top:12px; width:8px; height:8px; border-radius:50%;
+                     background:var(--accent); }
+  .tl-item .t { color:var(--muted); font-size:11.5px; margin-right:8px; white-space:nowrap; }
+  .tl-item .d { color:var(--accent); font-size:11.5px; }
+  .actions-bar { margin-top:14px; }
+  .health-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:12px; }
+  .health-item { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:14px; }
+  .health-item .name { font-size:14px; font-weight:600; }
+  .health-item .st { font-size:12px; margin-top:6px; }
+  .health-item.ok .st { color:var(--ok); } .health-item.bad .st { color:var(--err); }
+  .audit-detail { color:var(--muted); font-size:11.5px; word-break:break-all; }
+  .refresh-note { color:var(--muted); font-size:12px; }
 </style>
 </head>
 <body>
-  <h1>数据集成 Agent 监控<span id="refreshed">加载中…</span></h1>
-  <div class="cards" id="cards"></div>
-  <table>
-    <thead><tr><th>任务 ID</th><th>指令</th><th>状态</th><th>创建时间</th><th>耗时</th><th>错误</th><th>操作</th></tr></thead>
-    <tbody id="rows"></tbody>
-  </table>
+  <h1>数据集成 Agent 全链路监控
+    <span id="refreshed">加载中…</span>
+    <span class="token-box">Token <input type="password" id="apiToken" placeholder="API_TOKEN（可选）"></span>
+  </h1>
 
-  <div id="logModal"><div class="panel">
-    <span class="close" onclick="document.getElementById('logModal').style.display='none'">✕</span>
-    <h3 id="logTitle">任务日志</h3>
-    <pre id="logBody">加载中…</pre>
-  </div></div>
+  <div class="tabs">
+    <button data-tab="tasks" class="active">任务</button>
+    <button data-tab="pipelines">管道</button>
+    <button data-tab="audit">审计</button>
+    <button data-tab="health">组件健康</button>
+  </div>
+
+  <div class="cards" id="cards"></div>
+
+  <div id="tab-tasks">
+    <table>
+      <thead><tr>
+        <th>任务 ID</th><th>指令</th><th>链路</th><th>状态</th>
+        <th>创建时间</th><th>耗时</th><th>错误</th><th>操作</th>
+      </tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+
+  <div id="tab-pipelines" style="display:none">
+    <table>
+      <thead><tr><th>管道 / 任务</th><th>状态</th><th>源 → 目标</th><th>创建时间</th><th>错误</th></tr></thead>
+      <tbody id="pipelineRows"></tbody>
+    </table>
+  </div>
+
+  <div id="tab-audit" style="display:none">
+    <table>
+      <thead><tr><th>时间</th><th>任务 ID</th><th>动作</th><th>操作人</th><th>详情</th></tr></thead>
+      <tbody id="auditRows"></tbody>
+    </table>
+  </div>
+
+  <div id="tab-health" style="display:none">
+    <div class="actions-bar"><button class="btn btn-action" onclick="loadHealth()">刷新健康检查</button></div>
+    <div class="health-grid" id="healthGrid" style="margin-top:12px"></div>
+  </div>
+
+  <div id="modal">
+    <div class="panel">
+      <span class="close" onclick="closeModal()">✕</span>
+      <h3 id="detailTitle">任务详情</h3>
+      <div id="detailBody"></div>
+      <div class="actions-bar" id="detailActions"></div>
+    </div>
+  </div>
 
 <script>
-async function load() {
-  const resp = await fetch('/tasks?limit=50');
-  const data = await resp.json();
-  const tasks = data.tasks || [];
-  renderCards(tasks);
-  renderRows(tasks);
-  document.getElementById('refreshed').textContent =
-    '更新于 ' + new Date().toLocaleTimeString();
+const $ = id => document.getElementById(id);
+const TOKEN_KEY = 'dataagent_api_token';
+
+function token() { return $('apiToken').value || localStorage.getItem(TOKEN_KEY) || ''; }
+function headers() { const t = token(); return t ? {'X-API-Token': t} : {}; }
+function escapeHtml(s) {
+  return (s == null ? '' : String(s)).replace(/[&<>"']/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+async function api(url, opts) {
+  const r = await fetch(url, Object.assign({headers: headers()}, opts || {}));
+  if (r.status === 401) { alert('未授权：请在右上角填入 API_TOKEN'); throw new Error('unauthorized'); }
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) { throw new Error(data.detail || ('HTTP ' + r.status)); }
+  return data;
+}
+
+function statusText(s) {
+  return {pending_approval:'待审批', success:'成功', failed:'失败', cancelled:'已取消',
+          running:'运行中', executing:'执行中', validating:'校验中', config_done:'配置完成',
+          exec_done:'执行完成', pending:'排队'}[s] || s;
+}
+function durationSec(a, b) {
+  if (!a || !b) return '—';
+  return ((new Date(b) - new Date(a)) / 1000).toFixed(1) + 's';
+}
+function fmtTime(t) { return (t || '').slice(0, 19).replace('T', ' '); }
+
+function taskActions(t, withRow = true) {
+  let b = '';
+  if (t.status === 'pending_approval') {
+    b += `<button class="btn btn-approve" onclick="event.stopPropagation();doApprove('${t.task_id}')">通过</button>`;
+    b += `<button class="btn btn-reject" onclick="event.stopPropagation();doReject('${t.task_id}')">拒绝</button>`;
+  }
+  if (t.status === 'failed' || t.status === 'cancelled') {
+    b += `<button class="btn btn-action" onclick="event.stopPropagation();doRetry('${t.task_id}')">重试</button>`;
+    if (t.status === 'failed') {
+      b += `<button class="btn btn-action" onclick="event.stopPropagation();doDiagnose('${t.task_id}')">运维诊断</button>`;
+    }
+  }
+  if (withRow) b += `<button class="btn btn-action" onclick="event.stopPropagation();showDetail('${t.task_id}')">详情</button>`;
+  return b || '—';
 }
 
 function renderCards(tasks) {
   const count = s => tasks.filter(t => t.status === s).length;
-  const cards = [
-    { label: '总数', num: tasks.length, cls: '' },
-    { label: '待审批', num: count('pending_approval'), cls: 'warn' },
-    { label: '成功', num: count('success'), cls: 'ok' },
-    { label: '失败', num: count('failed'), cls: 'err' },
-    { label: '运行中', num: tasks.length - count('success') - count('failed') - count('cancelled') - count('pending_approval'), cls: 'run' },
-  ];
-  document.getElementById('cards').innerHTML = cards.map(c =>
-    `<div class="card ${c.cls}"><div class="num">${c.num}</div><div class="label">${c.label}</div></div>`
-  ).join('');
+  const running = tasks.filter(t => !['success','failed','cancelled','pending_approval'].includes(t.status)).length;
+  $('cards').innerHTML = [
+    {label:'总数', num:tasks.length, cls:''},
+    {label:'待审批', num:count('pending_approval'), cls:'warn'},
+    {label:'运行中', num:running, cls:'run'},
+    {label:'成功', num:count('success'), cls:'ok'},
+    {label:'失败', num:count('failed'), cls:'err'},
+  ].map(c => `<div class="card ${c.cls}"><div class="num">${c.num}</div><div class="label">${c.label}</div></div>`).join('');
 }
 
-function renderRows(tasks) {
-  const tbody = document.getElementById('rows');
-  if (!tasks.length) {
-    tbody.innerHTML = '<tr><td colspan="7" class="empty">暂无任务</td></tr>';
-    return;
-  }
+function renderTasks(tasks) {
+  const tbody = $('rows');
+  if (!tasks.length) { tbody.innerHTML = '<tr><td colspan="8" class="empty">暂无任务</td></tr>'; return; }
   tbody.innerHTML = tasks.map(t => {
-    const dur = t.completed_at && t.created_at ?
-      ((new Date(t.completed_at) - new Date(t.created_at)) / 1000).toFixed(1) + 's' : '—';
-    const approveBtn = t.status === 'pending_approval' ? `
-      <button class="btn-approve" onclick="event.stopPropagation(); approve('${t.task_id}')">通过</button>
-      <button class="btn-reject" onclick="event.stopPropagation(); reject('${t.task_id}')">拒绝</button>` : '';
-    return `<tr onclick="showLog('${t.task_id}')">
+    const link = (t.source_table && t.target_table) ? `${escapeHtml(t.source_table)} → ${escapeHtml(t.target_table)}` : '—';
+    return `<tr onclick="showDetail('${t.task_id}')">
       <td>${t.task_id}</td>
-      <td class="query" title="${escapeHtml(t.user_query || '')}">${escapeHtml(t.user_query || '')}</td>
-      <td><span class="tag ${t.status}">${t.status}</span></td>
-      <td>${(t.created_at || '').slice(0, 19).replace('T', ' ')}</td>
-      <td>${dur}</td>
+      <td class="query" title="${escapeHtml(t.user_query)}">${escapeHtml(t.user_query).slice(0, 60)}</td>
+      <td title="${escapeHtml(link)}">${link}</td>
+      <td><span class="tag ${t.status}">${statusText(t.status)}</span></td>
+      <td>${fmtTime(t.created_at)}</td>
+      <td>${durationSec(t.created_at, t.completed_at)}</td>
       <td style="color:var(--err)">${escapeHtml(t.error || '')}</td>
-      <td>${approveBtn}</td>
+      <td style="white-space:nowrap">${taskActions(t)}</td>
     </tr>`;
   }).join('');
 }
 
-async function approve(taskId) {
-  if (!confirm('确认执行该任务？')) return;
-  const resp = await fetch('/tasks/' + taskId + '/approve', { method: 'POST' });
-  const data = await resp.json();
-  alert(resp.ok ? '已通过并执行: ' + (data.status || '') : '审批失败: ' + (data.detail || resp.status));
-  load();
-}
-
-async function reject(taskId) {
-  if (!confirm('确认拒绝执行该任务？')) return;
-  const resp = await fetch('/tasks/' + taskId + '/reject', { method: 'POST' });
-  const data = await resp.json();
-  alert(resp.ok ? '已拒绝执行' : '拒绝失败: ' + (data.detail || resp.status));
-  load();
-}
-
-async function showLog(taskId) {
-  const modal = document.getElementById('logModal');
-  document.getElementById('logTitle').textContent = '任务 ' + taskId + ' 日志';
-  modal.style.display = 'block';
-  try {
-    const resp = await fetch('/tasks/' + taskId + '/logs');
-    const data = await resp.json();
-    document.getElementById('logBody').textContent =
-      (data.logs || []).map(l => `[${l.level}] ${l.created_at.slice(0,19).replace('T',' ')} ${l.message}`).join('\n')
-      || '（无日志）';
-  } catch (e) {
-    document.getElementById('logBody').textContent = '获取日志失败: ' + e;
+function renderPipelines(tasks) {
+  const tbody = $('pipelineRows');
+  if (!tasks.length) { tbody.innerHTML = '<tr><td colspan="5" class="empty">暂无任务</td></tr>'; return; }
+  const byId = Object.fromEntries(tasks.map(t => [t.task_id, t]));
+  const children = id => tasks.filter(t => t.parent_task_id === id);
+  let html = '';
+  for (const t of tasks) {
+    if (t.parent_task_id) continue;  // 子任务在父任务下展示
+    const kids = children(t.task_id);
+    const link = (t.source_table && t.target_table) ? `${escapeHtml(t.source_table)} → ${escapeHtml(t.target_table)}` : '—';
+    const pipe = t.pipeline_id ? `<span class="tag">管道 ${t.pipeline_id}</span> ` : '';
+    html += `<tr onclick="showDetail('${t.task_id}')">
+      <td>${pipe}<b>${t.task_id}</b> ${t.pipeline_id ? '' : ''}</td>
+      <td><span class="tag ${t.status}">${statusText(t.status)}</span></td>
+      <td>${link}</td><td>${fmtTime(t.created_at)}</td><td>${escapeHtml(t.error || '')}</td></tr>`;
+    for (const k of kids) {
+      const klink = (k.source_table && k.target_table) ? `${escapeHtml(k.source_table)} → ${escapeHtml(k.target_table)}` : '—';
+      html += `<tr class="tree-child" onclick="showDetail('${k.task_id}')">
+        <td>${k.task_id}</td>
+        <td><span class="tag ${k.status}">${statusText(k.status)}</span></td>
+        <td>${klink}</td><td>${fmtTime(k.created_at)}</td><td>${escapeHtml(k.error || '')}</td></tr>`;
+    }
   }
+  tbody.innerHTML = html;
 }
 
-function escapeHtml(s) {
-  return (s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function renderAudit(logs) {
+  const tbody = $('auditRows');
+  if (!logs.length) { tbody.innerHTML = '<tr><td colspan="5" class="empty">暂无审计记录</td></tr>'; return; }
+  tbody.innerHTML = logs.map(l => `<tr>
+    <td>${fmtTime(l.created_at)}</td>
+    <td>${l.task_id || '—'}</td>
+    <td>${escapeHtml(l.action)}</td>
+    <td>${escapeHtml(l.operator)}</td>
+    <td class="audit-detail">${escapeHtml(l.detail || '')}</td>
+  </tr>`).join('');
 }
+
+function renderHealth(h) {
+  const grid = $('healthGrid');
+  grid.innerHTML = Object.entries(h.results || {}).map(([name, r]) => {
+    const ok = r.ok;
+    return `<div class="health-item ${ok ? 'ok' : 'bad'}">
+      <div class="name">${escapeHtml(name)}</div>
+      <div class="st">${ok ? '✅ 正常' : '❌ 异常'} · ${r.latency_ms}ms</div>
+      <div class="st" style="color:var(--muted)">${escapeHtml(r.error || r.detail || '')}</div>
+    </div>`;
+  }).join('') || '<div class="empty">无数据</div>';
+}
+
+async function load() {
+  try {
+    const data = await api('/tasks/detail?limit=200');
+    renderCards(data.tasks || []);
+    renderTasks(data.tasks || []);
+    renderPipelines(data.tasks || []);
+    $('refreshed').textContent = '更新于 ' + new Date().toLocaleTimeString();
+  } catch (e) { $('refreshed').textContent = '加载失败: ' + e.message; }
+}
+
+async function loadAudit() {
+  try {
+    const data = await api('/audit?limit=200');
+    renderAudit(data.logs || []);
+  } catch (e) { $('auditRows').innerHTML = `<tr><td colspan="5" class="empty">${escapeHtml(e.message)}</td></tr>`; }
+}
+
+async function loadHealth() {
+  const grid = $('healthGrid');
+  grid.innerHTML = '<div class="empty">检查中…</div>';
+  try {
+    const data = await api('/health/components');
+    renderHealth(data);
+  } catch (e) { grid.innerHTML = `<div class="empty">${escapeHtml(e.message)}</div>`; }
+}
+
+function buildTimeline(logs, task) {
+  const stages = [];
+  const markers = [
+    ['ConfigAgent 开始', '配置生成'], ['ConfigAgent 完成', '配置完成'],
+    ['等待人工审批', '等待审批'], ['人工审批通过', '审批通过'],
+    ['ExecutionAgent 开始', '执行同步'], ['ExecutionAgent 完成', '执行完成'],
+    ['ValidationAgent 开始', '数据校验'], ['任务完成', '任务完成'],
+  ];
+  for (const l of logs) {
+    for (const [kw, label] of markers) {
+      if ((l.message || '').includes(kw)) {
+        stages.push({label, time: l.created_at, msg: l.message.slice(0, 60)});
+        break;
+      }
+    }
+  }
+  if (!stages.length) return '<div class="empty">（无阶段日志）</div>';
+  return '<div class="timeline">' + stages.map((s, i) => {
+    const dur = i + 1 < stages.length ? durationSec(s.time, stages[i + 1].time) : durationSec(s.time, task.completed_at);
+    return `<div class="tl-item"><span class="t">${fmtTime(s.time)}</span>${escapeHtml(s.label)}
+      <span class="d">${dur}</span><div class="audit-detail">${escapeHtml(s.msg)}</div></div>`;
+  }).join('') + '</div>';
+}
+
+async function showDetail(taskId) {
+  try {
+    const [task, logs, audit] = await Promise.all([
+      api('/tasks/' + taskId),
+      api('/tasks/' + taskId + '/logs'),
+      api('/audit?task_id=' + taskId),
+    ]);
+    $('detailTitle').textContent = '任务 ' + taskId + ' 详情';
+    const tl = buildTimeline(logs.logs || [], task);
+    const audits = (audit.logs || []).map(l =>
+      `<div class="tl-item"><span class="t">${fmtTime(l.created_at)}</span>${escapeHtml(l.action)}
+       <span class="d">${escapeHtml(l.operator)}</span><div class="audit-detail">${escapeHtml(l.detail || '')}</div></div>`
+    ).join('');
+    $('detailBody').innerHTML = `
+      <div>指令：<b>${escapeHtml(task.user_query)}</b></div>
+      <div style="margin-top:6px">状态：<span class="tag ${task.status}">${statusText(task.status)}</span>
+        创建 ${fmtTime(task.created_at)} · 完成 ${fmtTime(task.completed_at) || '—'} · 耗时 ${durationSec(task.created_at, task.completed_at)}</div>
+      <div class="section-title">阶段时间线</div>${tl}
+      <div class="section-title">审计记录</div>
+      ${audits || '<div class="empty">（无审计）</div>'}
+      <div class="section-title">错误信息</div>
+      <pre>${escapeHtml(task.error || '（无）')}</pre>
+      <div class="audit-detail">AI 链路追踪见 LangSmith 项目 dataagent（task_id=${taskId} 对应 thread_id）</div>`;
+    $('detailActions').innerHTML = taskActions(task, false);
+    $('modal').style.display = 'block';
+  } catch (e) { alert('加载详情失败: ' + e.message); }
+}
+function closeModal() { $('modal').style.display = 'none'; }
+
+async function doApprove(id) { if (!confirm('确认执行该任务？')) return;
+  try { const r = await api('/tasks/' + id + '/approve', {method:'POST'}); alert('已通过并执行: ' + (r.status || '')); } catch(e) { alert(e.message); } load(); }
+async function doReject(id) { if (!confirm('确认拒绝执行该任务？')) return;
+  try { await api('/tasks/' + id + '/reject', {method:'POST'}); alert('已拒绝执行'); } catch(e) { alert(e.message); } load(); }
+async function doRetry(id) { if (!confirm('确认重试该任务？')) return;
+  try { const r = await api('/tasks/' + id + '/retry', {method:'POST'}); alert('已提交重试: ' + r.task_id); } catch(e) { alert(e.message); } load(); }
+async function doDiagnose(id) {
+  alert('运维诊断执行中（约 1-3 分钟），完成后请刷新查看诊断结果');
+  try { await api('/ops/diagnose', {method:'POST', headers:Object.assign({'Content-Type':'application/json'}, headers()), body: JSON.stringify({task_id: id})}); } catch(e) { alert(e.message); }
+  showDetail(id); }
+
+document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.tabs button').forEach(x => x.classList.remove('active'));
+  b.classList.add('active');
+  ['tasks','pipelines','audit','health'].forEach(t => $('tab-' + t).style.display = t === b.dataset.tab ? '' : 'none');
+  if (b.dataset.tab === 'audit') loadAudit();
+  if (b.dataset.tab === 'health') loadHealth();
+});
+$('apiToken').value = localStorage.getItem(TOKEN_KEY) || '';
+$('apiToken').onchange = e => localStorage.setItem(TOKEN_KEY, e.target.value);
+$('modal').onclick = e => { if (e.target === $('modal')) closeModal(); };
 
 load();
 setInterval(load, 10000);

@@ -249,6 +249,12 @@ async def list_tasks(limit: int = 20):
     tm = get_task_manager()
     return {"tasks": tm.get_task_history(limit)}
 
+@app.get("/tasks/detail")
+async def list_tasks_detail(limit: int = 100):
+    """dashboard 全链路视图：含 pipeline/父任务/源目标表等字段。"""
+    tm = get_task_manager()
+    return {"tasks": tm.get_task_history_full(min(limit, 500))}
+
 @app.get("/tasks/{task_id}")
 async def get_task(task_id: str):
     tm = get_task_manager()
@@ -338,6 +344,13 @@ async def reject_task(task_id: str, request: Request):
 @app.get("/health")
 async def health():
     return {"status": "ok", "store": config.STATE_STORE_TYPE}
+
+
+@app.get("/health/components")
+async def health_components():
+    """组件连通性检查（dashboard 健康面板用，只读短超时）。"""
+    from src.tools.ops_tool import check_component_health
+    return await asyncio.to_thread(check_component_health)
 
 
 @app.get("/metrics", include_in_schema=False)

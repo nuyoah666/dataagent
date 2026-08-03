@@ -120,8 +120,9 @@ def test_dashboard_page():
     with TestClient(api.app) as client:
         r = client.get("/ui")
         assert r.status_code == 200
-        assert "数据集成 Agent 监控" in r.text
-        assert "logModal" in r.text
+        assert "全链路监控" in r.text
+        assert "showDetail" in r.text
+        assert "组件健康" in r.text
 
 
 def test_root():

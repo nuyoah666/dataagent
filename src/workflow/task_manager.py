@@ -295,6 +295,18 @@ class TaskManager:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    def get_task_history_full(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """获取任务全量字段（dashboard 管道/阶段视图用）。"""
+        conn = _get_conn()
+        rows = conn.execute(
+            """SELECT task_id, user_query, status, pipeline_id, parent_task_id,
+                      source_table, target_table, error, current_step,
+                      created_at, completed_at
+               FROM tasks ORDER BY created_at DESC LIMIT ?""",
+            (limit,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
     def count_by_status(self) -> Dict[str, int]:
         """按状态统计任务数（供 /metrics 使用）。"""
         conn = _get_conn()
