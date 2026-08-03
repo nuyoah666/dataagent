@@ -125,6 +125,43 @@ def test_dashboard_page():
         assert "组件健康" in r.text
 
 
+def test_chat_page():
+    with TestClient(api.app) as client:
+        r = client.get("/chat")
+        assert r.status_code == 200
+        assert "数仓多 Agent 协作平台" in r.text
+        assert "chat/submit" in r.text
+        assert "pollTask" in r.text
+
+
+def test_chat_submit_async_flow(fake_agents):
+    """/chat/submit 立即返回 task_id，后台线程完成整个工作流。"""
+    import time
+    with TestClient(api.app) as client:
+        r = client.post("/chat/submit", json={"query": "把 MySQL 的 t1 表同步到 ES"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["task_type"] == "data_integration"
+        task_id = body["task_id"]
+
+        # 轮询等待后台完成（假 Agent 很快）
+        status = None
+        for _ in range(50):
+            status = client.get(f"/tasks/{task_id}").json().get("status")
+            if status in ("success", "failed", "cancelled"):
+                break
+            time.sleep(0.2)
+        assert status == "success"
+
+
+def test_chat_submit_invalid_query():
+    with TestClient(api.app) as client:
+        r = client.post("/chat/submit", json={"query": ""})
+        assert r.status_code == 422
+        r2 = client.post("/chat/submit", json={"query": "完全无法识别的xxxxx"})
+        assert r2.status_code == 422
+
+
 def test_root():
     with TestClient(api.app) as client:
         r = client.get("/")

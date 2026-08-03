@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from src.config import config
 from src.utils.tracing import init_tracing
-from src.workflow import AgentWorkflow, get_task_manager
+from src.workflow import AgentWorkflow, get_task_manager, TaskStatus
 from src.intent_router import get_router
 
 _workflows: dict = {}
@@ -24,7 +24,7 @@ _workflow_lock = threading.Lock()
 _task_semaphore = threading.Semaphore(config.MAX_CONCURRENT_TASKS)
 
 # 免鉴权路径：健康检查/监控页/指标（监控网段内可信）
-_AUTH_EXEMPT = {"/", "/health", "/ui", "/metrics", "/docs", "/openapi.json"}
+_AUTH_EXEMPT = {"/", "/health", "/ui", "/chat", "/metrics", "/docs", "/openapi.json"}
 
 
 def _run_with_slot(fn, *args, **kwargs):
@@ -80,6 +80,13 @@ async def api_token_auth(request: Request, call_next):
 async def dashboard():
     """轻量监控页面。"""
     html_path = Path(__file__).parent / "ui" / "dashboard.html"
+    return HTMLResponse(html_path.read_text(encoding="utf-8"))
+
+
+@app.get("/chat", response_class=HTMLResponse, include_in_schema=False)
+async def chat_page():
+    """用户交互页：自然语言指令 -> 任务实时进度 -> 审批/结果。"""
+    html_path = Path(__file__).parent / "ui" / "chat.html"
     return HTMLResponse(html_path.read_text(encoding="utf-8"))
 
 
@@ -146,6 +153,18 @@ class OpsDiagnoseRequest(BaseModel):
         query = (self.query or "诊断任务失败原因").strip()[:500]
         return task_id, query
 
+
+class ChatSubmitRequest(BaseModel):
+    query: str = ""
+
+    def validate_request(self):
+        query = (self.query or "").strip()
+        if not query:
+            raise HTTPException(status_code=422, detail="query 不能为空")
+        if len(query) > 2000:
+            raise HTTPException(status_code=422, detail="query 过长（最多 2000 字符）")
+        return query
+
 @app.get("/")
 async def root():
     return {"service": "数仓多 Agent 协作平台", "version": "1.0.0", "status": "running"}
@@ -183,6 +202,42 @@ async def submit_sync(req: SyncRequest):
         import logging
         logging.getLogger(__name__).exception("同步请求处理失败")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/chat/submit")
+async def chat_submit(req: ChatSubmitRequest):
+    """异步提交自然语言指令：立即返回 task_id，后台执行，前端轮询进度。"""
+    query = req.validate_request()
+    routed = get_router().route(query)
+    if not routed.task_type:
+        raise HTTPException(status_code=422, detail=routed.message or "无法识别任务类型")
+
+    tm = get_task_manager()
+    task_id = tm.create_task(query)
+    tm.update_task(task_id, current_step="submitted")
+    tm.log(task_id, "INFO", f"已提交（{routed.task_type}，来源={routed.source}）")
+
+    def _run_background():
+        try:
+            wf = get_workflow(routed.task_type)
+            with _task_semaphore:
+                wf.run(
+                    query,
+                    thread_id=task_id,
+                    precreated_task_id=task_id,
+                )
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).exception("后台任务执行异常")
+            tm.complete_task(task_id, TaskStatus.FAILED, error=str(e))
+
+    threading.Thread(target=_run_background, daemon=True).start()
+    return {
+        "task_id": task_id,
+        "task_type": routed.task_type,
+        "status": "submitted",
+        "message": f"已提交，识别为 {routed.task_type}",
+    }
 
 @app.post("/route", response_model=RouteResponse)
 async def route_query(req: SyncRequest):

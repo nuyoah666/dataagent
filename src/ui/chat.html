@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>数仓多 Agent 协作平台 · 交互</title>
+<style>
+  :root { --bg:#0f172a; --card:#1e293b; --border:#334155; --text:#e2e8f0; --muted:#94a3b8;
+          --ok:#22c55e; --err:#ef4444; --run:#f59e0b; --accent:#38bdf8; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:var(--bg); color:var(--text); font-family:"Segoe UI",system-ui,sans-serif;
+         display:flex; flex-direction:column; height:100vh; }
+  header { padding:14px 22px; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:14px; }
+  header h1 { font-size:17px; }
+  header .links { margin-left:auto; display:flex; gap:14px; }
+  header a { color:var(--accent); text-decoration:none; font-size:13px; }
+  header .token-box { display:flex; gap:6px; align-items:center; font-size:12px; color:var(--muted); }
+  header input { background:var(--card); border:1px solid var(--border); color:var(--text);
+                 border-radius:6px; padding:4px 8px; width:160px; }
+  #conv { flex:1; overflow-y:auto; padding:20px 22px; display:flex; flex-direction:column; gap:14px; }
+  .msg { max-width:760px; width:fit-content; border-radius:12px; padding:10px 14px; font-size:13.5px; line-height:1.6; }
+  .msg.user { align-self:flex-end; background:rgba(56,189,248,.15); border:1px solid rgba(56,189,248,.3); }
+  .msg.assistant { align-self:flex-start; background:var(--card); border:1px solid var(--border); min-width:320px; }
+  .msg .meta { font-size:11.5px; color:var(--muted); margin-bottom:6px; }
+  .tag { padding:2px 10px; border-radius:999px; font-size:11.5px; }
+  .tag.success { background:rgba(34,197,94,.15); color:var(--ok); }
+  .tag.failed { background:rgba(239,68,68,.15); color:var(--err); }
+  .tag.pending_approval { background:rgba(234,179,8,.15); color:#eab308; }
+  .tag.running,.tag.executing,.tag.validating,.tag.config_done,.tag.exec_done { background:rgba(245,158,11,.15); color:var(--run); }
+  .tag.cancelled { background:rgba(148,163,184,.15); color:var(--muted); }
+  .stage { font-size:12px; color:var(--muted); margin-top:6px; }
+  .stage .done { color:var(--ok); }
+  .stage .cur { color:var(--run); font-weight:600; }
+  .stage .line { padding:1px 0; }
+  .btns { margin-top:10px; display:flex; gap:8px; flex-wrap:wrap; }
+  .btn { padding:5px 14px; border:none; border-radius:7px; cursor:pointer; font-size:12.5px; }
+  .btn-approve { background:rgba(34,197,94,.2); color:var(--ok); }
+  .btn-reject { background:rgba(239,68,68,.2); color:var(--err); }
+  .btn-action { background:rgba(56,189,248,.15); color:var(--accent); }
+  .error { color:var(--err); font-size:12.5px; margin-top:6px; white-space:pre-wrap; }
+  .ok-text { color:var(--ok); font-size:12.5px; margin-top:6px; white-space:pre-wrap; }
+  footer { border-top:1px solid var(--border); padding:12px 22px; }
+  .chips { display:flex; gap:8px; margin-bottom:10px; flex-wrap:wrap; }
+  .chip { font-size:12px; color:var(--muted); background:var(--card); border:1px solid var(--border);
+          border-radius:999px; padding:4px 12px; cursor:pointer; }
+  .chip:hover { color:var(--accent); border-color:var(--accent); }
+  .input-row { display:flex; gap:10px; }
+  .input-row input { flex:1; background:var(--card); border:1px solid var(--border); color:var(--text);
+                     border-radius:10px; padding:12px 16px; font-size:14px; }
+  .input-row button { background:var(--accent); color:#0b1220; border:none; border-radius:10px;
+                      padding:0 22px; font-size:14px; font-weight:600; cursor:pointer; }
+  .input-row button:disabled { opacity:.5; cursor:not-allowed; }
+  .spinner { display:inline-block; width:12px; height:12px; border:2px solid var(--border);
+             border-top-color:var(--accent); border-radius:50%; animation:spin .8s linear infinite; vertical-align:-1px; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+</style>
+</head>
+<body>
+  <header>
+    <h1>数仓多 Agent 协作平台</h1>
+    <span class="token-box">Token <input type="password" id="apiToken" placeholder="API_TOKEN（可选）"></span>
+    <span class="links">
+      <a href="/ui" target="_blank">全链路监控 ↗</a>
+    </span>
+  </header>
+
+  <div id="conv"></div>
+
+  <footer>
+    <div class="chips" id="chips"></div>
+    <div class="input-row">
+      <input id="query" placeholder="输入自然语言指令，例如：把 MySQL 的 src_user 表同步到 ES 的 src_user_index"
+             autocomplete="off" onkeydown="if(event.key==='Enter') send()">
+      <button id="sendBtn" onclick="send()">发送</button>
+    </div>
+  </footer>
+
+<script>
+const $ = id => document.getElementById(id);
+const TOKEN_KEY = 'dataagent_api_token';
+const EXAMPLES = [
+  '把 MySQL 的 src_user 表同步到 ES 的 src_user_index',
+  '把 ods_user 加工到 dwd_user',
+  '把 MySQL 的 src_user 表增量同步到 ES',
+  '诊断最近失败的任务',
+];
+
+function token() { return $('apiToken').value || localStorage.getItem(TOKEN_KEY) || ''; }
+function headers() { const t = token(); return t ? {'X-API-Token': t} : {}; }
+function escapeHtml(s) {
+  return (s == null ? '' : String(s)).replace(/[&<>"']/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+async function api(url, opts) {
+  const r = await fetch(url, Object.assign({headers: headers()}, opts || {}));
+  if (r.status === 401) { alert('未授权：请在右上角填入 API_TOKEN'); throw new Error('unauthorized'); }
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.detail || ('HTTP ' + r.status));
+  return data;
+}
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const TERMINAL = ['success', 'failed', 'cancelled'];
+const STAGE_LABEL = {
+  submitted:'已提交', pending:'排队中', running:'处理中', config_done:'配置完成',
+  pending_approval:'待审批', executing:'执行中', exec_done:'执行完成',
+  validating:'校验中', success:'成功', failed:'失败', cancelled:'已取消',
+  approved:'审批通过', config:'配置生成', done:'完成',
+};
+
+function addMsg(html, cls) {
+  const div = document.createElement('div');
+  div.className = 'msg ' + cls;
+  div.innerHTML = html;
+  $('conv').appendChild(div);
+  $('conv').scrollTop = $('conv').scrollHeight;
+  return div;
+}
+
+async function send() {
+  const query = $('query').value.trim();
+  if (!query) return;
+  $('query').value = '';
+  $('sendBtn').disabled = true;
+  addMsg(escapeHtml(query).replace(/\n/g,'<br>'), 'user');
+  try {
+    const r = await api('/chat/submit', {method:'POST', headers:Object.assign({'Content-Type':'application/json'}, headers()), body: JSON.stringify({query})});
+    const card = addMsg(`
+      <div class="meta">任务 ${r.task_id} · 识别为 <b>${escapeHtml(r.task_type)}</b></div>
+      <div id="card-${r.task_id}"><span class="spinner"></span> 处理中…</div>`, 'assistant');
+    pollTask(r.task_id, card);
+  } catch (e) {
+    addMsg('❌ ' + escapeHtml(e.message), 'assistant');
+  }
+  $('sendBtn').disabled = false;
+}
+
+async function pollTask(taskId, card) {
+  const box = () => $('card-' + taskId);
+  while (box()) {
+    try {
+      const [t, logs] = await Promise.all([
+        api('/tasks/' + taskId),
+        api('/tasks/' + taskId + '/logs'),
+      ]);
+      box().innerHTML = renderTask(t, logs.logs || []);
+      if (TERMINAL.includes(t.status) || t.status === 'pending_approval') return;
+    } catch (e) { /* 轮询失败继续 */ }
+    await sleep(2000);
+  }
+}
+
+function renderTask(t, logs) {
+  const stages = [];
+  const markers = [
+    ['已提交', 'submitted'], ['ConfigAgent 开始', 'config'], ['ConfigAgent 完成', 'config_done'],
+    ['等待人工审批', 'pending_approval'], ['人工审批通过', 'approved'],
+    ['ExecutionAgent 开始', 'executing'], ['ExecutionAgent 完成', 'exec_done'],
+    ['ValidationAgent 开始', 'validating'], ['任务完成', 'done'],
+  ];
+  for (const l of logs) {
+    for (const [kw, key] of markers) {
+      if ((l.message || '').includes(kw)) { stages.push(key); break; }
+    }
+  }
+  const cur = t.status;
+  const order = ['submitted','pending','running','config_done','pending_approval','approved','executing','exec_done','validating','done'];
+  const stageHtml = order.filter(s => stages.includes(s) || s === cur).map(s => {
+    const isCur = s === cur;
+    return `<div class="line ${isCur ? 'cur' : 'done'}">${isCur ? '◉' : '✓'} ${STAGE_LABEL[s] || s}</div>`;
+  }).join('');
+
+  let body = `<span class="tag ${t.status}">${STAGE_LABEL[t.status] || t.status}</span>`;
+  if (t.status === 'pending_approval') {
+    body += `<div class="btns">
+      <button class="btn btn-approve" onclick="act('${t.task_id}','approve')">✅ 通过并执行</button>
+      <button class="btn btn-reject" onclick="act('${t.task_id}','reject')">❌ 拒绝</button>
+      <a class="btn btn-action" style="text-decoration:none" href="/ui" target="_blank">查看配置</a>
+    </div>`;
+  }
+  if (t.status === 'failed') {
+    body += `<div class="error">${escapeHtml(t.error || '执行失败')}</div>
+      <div class="btns">
+        <button class="btn btn-action" onclick="act('${t.task_id}','retry')">重试</button>
+        <button class="btn btn-action" onclick="diagnose('${t.task_id}')">运维诊断</button>
+      </div>`;
+  }
+  if (t.status === 'success') {
+    const v = t.validation_result || {};
+    body += `<div class="ok-text">✅ ${escapeHtml(v.summary || '任务成功')}</div>`;
+  }
+  if (t.status === 'cancelled') body += `<div class="error">任务已取消</div>`;
+  if (!TERMINAL.includes(t.status) && t.status !== 'pending_approval') {
+    body = `<span class="spinner"></span> 处理中…<div class="stage">${stageHtml}</div>` + body;
+  } else if (stageHtml) {
+    body += `<div class="stage">${stageHtml}</div>`;
+  }
+  return body;
+}
+
+async function act(taskId, action) {
+  if (!confirm('确认' + ({approve:'通过执行', reject:'拒绝', retry:'重试'}[action]) + '该任务？')) return;
+  const box = $('card-' + taskId);
+  if (box) box.innerHTML = '<span class="spinner"></span> 处理中…';
+  try {
+    const r = await api('/tasks/' + taskId + '/' + action, {method:'POST'});
+    if (action === 'retry' && r.task_id) {
+      const card = addMsg(`
+        <div class="meta">重试任务 ${r.task_id} · 已提交</div>
+        <div id="card-${r.task_id}"><span class="spinner"></span> 处理中…</div>`, 'assistant');
+      pollTask(r.task_id, card);
+    } else {
+      pollTask(taskId);  // 审批/拒绝后恢复轮询，展示执行或最终状态
+    }
+  } catch (e) { alert(e.message); }
+}
+
+async function diagnose(taskId) {
+  const card = addMsg('<div class="meta">运维诊断中（约 1-3 分钟）</div><span class="spinner"></span> 正在检索事故知识库并生成诊断…', 'assistant');
+  try {
+    const r = await api('/ops/diagnose', {method:'POST', headers:Object.assign({'Content-Type':'application/json'}, headers()), body: JSON.stringify({task_id: taskId})});
+    card.innerHTML = `<div class="meta">运维诊断完成</div>
+      <b>根因：</b>${escapeHtml((r.diagnosis||{}).root_cause || '—')}<br>
+      <b>处置建议：</b>${escapeHtml(((r.diagnosis||{}).solution_steps||[]).join('；') || '—')}<br>
+      <b>事故沉淀：</b>${escapeHtml((r.record||{}).summary || '—')}`;
+  } catch (e) { alert('诊断失败: ' + e.message); }
+}
+
+$('apiToken').value = localStorage.getItem(TOKEN_KEY) || '';
+$('apiToken').onchange = e => localStorage.setItem(TOKEN_KEY, e.target.value);
+$('chips').innerHTML = EXAMPLES.map(e => `<span class="chip" onclick="$('query').value='${escapeHtml(e)}';$('query').focus()">${escapeHtml(e)}</span>`).join('');
+addMsg('👋 你好！输入自然语言指令即可驱动数仓 Agent 协作：<b>数据集成</b>（同步/增量）、<b>ETL 开发</b>（加工）、<b>运维</b>（诊断/重试）。也可以点下面的示例。', 'assistant');
+</script>
+</body>
+</html>

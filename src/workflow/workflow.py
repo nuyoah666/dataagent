@@ -212,12 +212,17 @@ class AgentWorkflow:
         pipeline_id: str = None,
         table_override: str = None,
         diagnose_task_id: str = None,
+        precreated_task_id: str = None,
     ) -> Dict[str, Any]:
         """执行完整工作流。"""
         # 创建任务记录
-        task_id = self.task_mgr.create_task(
-            user_query, pipeline_id=pipeline_id, parent_task_id=parent_task_id,
-        )
+        if precreated_task_id:
+            # 异步提交场景：任务已由 API 预创建（前端可立即轮询）
+            task_id = precreated_task_id
+        else:
+            task_id = self.task_mgr.create_task(
+                user_query, pipeline_id=pipeline_id, parent_task_id=parent_task_id,
+            )
         # 默认用 task_id 作为 checkpoint 线程，避免多个任务复用同一线程导致状态串扰
         thread_id = thread_id or task_id
         logger.info(
