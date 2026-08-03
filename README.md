@@ -1,6 +1,7 @@
-# 数据集成多 Agent 协作系统
+# 数仓多 Agent 协作平台
 
-基于 LangChain + LangGraph 构建的智能化数据集成系统，通过自然语言指令自动生成 DataX 配置、执行同步任务并进行数据校验。
+基于 LangChain + LangGraph 构建的智能化数仓多 Agent 协作平台，
+通过自然语言指令完成数据集成、ETL 加工、运维诊断等数仓工作流。
 
 ![CI](https://img.shields.io/github/actions/workflow/status/YOUR_GITHUB_USERNAME/dataagent/ci.yml?branch=main&label=CI)
 

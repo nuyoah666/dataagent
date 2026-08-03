@@ -1,4 +1,4 @@
-"""数据集成系统主程序。"""
+"""数仓多 Agent 协作平台主程序。"""
 import sys
 from pathlib import Path
 
@@ -18,7 +18,7 @@ def main():
     logger = get_logger(__name__)
     init_tracing()
 
-    logger.info("数据集成系统启动")
+    logger.info("数仓多 Agent 协作平台启动")
     config.ensure_directories()
 
     # 支持命令行传入同步指令：python -m src.main "把 MySQL 的 user 表同步到 ES"

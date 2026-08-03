@@ -129,7 +129,7 @@ def test_root():
     with TestClient(api.app) as client:
         r = client.get("/")
         assert r.status_code == 200
-        assert r.json()["service"] == "数据集成 Agent"
+        assert r.json()["service"] == "数仓多 Agent 协作平台"
 
 
 def test_sync_empty_query_rejected():

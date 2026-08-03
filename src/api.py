@@ -1,4 +1,4 @@
-"""FastAPI Web 服务。"""
+"""FastAPI Web 服务（数仓多 Agent 协作平台）。"""
 import sys
 import re
 import asyncio
@@ -53,7 +53,7 @@ async def lifespan(app):
     await asyncio.to_thread(get_workflow, "data_integration")
     yield
 
-app = FastAPI(title="数据集成 Agent", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="数仓多 Agent 协作平台", version="1.0.0", lifespan=lifespan)
 
 
 app.add_middleware(
@@ -148,7 +148,7 @@ class OpsDiagnoseRequest(BaseModel):
 
 @app.get("/")
 async def root():
-    return {"service": "数据集成 Agent", "version": "1.0.0", "status": "running"}
+    return {"service": "数仓多 Agent 协作平台", "version": "1.0.0", "status": "running"}
 
 @app.post("/sync", response_model=SyncResponse)
 async def submit_sync(req: SyncRequest):

@@ -1,7 +1,7 @@
 [project]
 name = "dataagent"
 version = "1.0.0"
-description = "基于 LangChain + LangGraph 的数仓多 Agent 协作系统（数据集成 / ETL / 运维）"
+description = "基于 LangChain + LangGraph 的数仓多 Agent 协作平台（数据集成 / ETL / 运维 / 分析）"
 requires-python = ">=3.11"
 
 [tool.pytest.ini_options]
