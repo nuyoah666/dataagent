@@ -49,6 +49,12 @@ def get_workflow(task_type: str = "data_integration"):
 async def lifespan(app):
     init_tracing()
     config.ensure_directories()
+    # 服务重启后清理执行中/未完成的孤儿任务（待审批保留）
+    try:
+        get_task_manager().mark_interrupted_tasks()
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("启动清理中断任务失败")
     # 预热工作流，避免首个请求慢
     await asyncio.to_thread(get_workflow, "data_integration")
     yield
@@ -80,21 +86,30 @@ async def api_token_auth(request: Request, call_next):
 async def dashboard():
     """轻量监控页面。"""
     html_path = Path(__file__).parent / "ui" / "dashboard.html"
-    return HTMLResponse(html_path.read_text(encoding="utf-8"))
+    return HTMLResponse(
+        html_path.read_text(encoding="utf-8"),
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
+    )
 
 
 @app.get("/ui/wizard", response_class=HTMLResponse, include_in_schema=False)
 async def wizard_page():
     """独立数据同步向导页。"""
     html_path = Path(__file__).parent / "ui" / "wizard.html"
-    return HTMLResponse(html_path.read_text(encoding="utf-8"))
+    return HTMLResponse(
+        html_path.read_text(encoding="utf-8"),
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
+    )
 
 
 @app.get("/chat", response_class=HTMLResponse, include_in_schema=False)
 async def chat_page():
     """用户交互页：自然语言指令 -> 任务实时进度 -> 审批/结果。"""
     html_path = Path(__file__).parent / "ui" / "chat.html"
-    return HTMLResponse(html_path.read_text(encoding="utf-8"))
+    return HTMLResponse(
+        html_path.read_text(encoding="utf-8"),
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
+    )
 
 
 class SyncRequest(BaseModel):

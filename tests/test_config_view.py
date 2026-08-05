@@ -3,6 +3,7 @@ from fastapi.testclient import TestClient
 
 from src import api
 from src.tools.config_view import build_config_view
+from src.tools.config_processor import normalize_jdbc_url
 from src.workflow.task_manager import get_task_manager, TaskStatus
 
 
@@ -299,3 +300,35 @@ def test_enrich_uses_intent_engine_type(monkeypatch):
     out = api_mod._enrich_mapping_with_schemas(view, task)
     assert out["target"]["db_type"] == "starrocks"
     assert out["source"]["db_type"] == "mysql"
+
+
+def test_jdbc_url_has_public_key_param():
+    """MySQL 8 caching_sha2_password 需要 allowPublicKeyRetrieval=true。"""
+    url = normalize_jdbc_url("", "mysql", "127.0.0.1", 3306, "datax_test")
+    assert "allowPublicKeyRetrieval=true" in url
+    assert "useSSL=false" in url
+    # 已有 query 时追加缺失参数，不重复
+    url2 = normalize_jdbc_url(
+        "jdbc:mysql://127.0.0.1:3306/datax_test?useSSL=false", "mysql",
+        "127.0.0.1", 3306, "datax_test",
+    )
+    assert "allowPublicKeyRetrieval=true" in url2
+    assert url2.count("useSSL=false") == 1
+
+
+def test_mark_interrupted_tasks():
+    tm = get_task_manager()
+    running_id = tm.create_task("运行中任务", task_type="data_integration")
+    tm.update_task(running_id, status=TaskStatus.EXECUTING.value)
+    approval_id = tm.create_task("待审批任务", task_type="data_integration")
+    tm.update_task(approval_id, status=TaskStatus.PENDING_APPROVAL.value)
+    success_id = tm.create_task("成功任务", task_type="data_integration")
+    tm.update_task(success_id, status=TaskStatus.SUCCESS.value)
+
+    cleaned = tm.mark_interrupted_tasks()
+    assert cleaned >= 1
+    assert tm.get_task(running_id)["status"] == TaskStatus.FAILED.value
+    assert "服务重启" in tm.get_task(running_id)["error"]
+    # 待审批与终态任务保留
+    assert tm.get_task(approval_id)["status"] == TaskStatus.PENDING_APPROVAL.value
+    assert tm.get_task(success_id)["status"] == TaskStatus.SUCCESS.value

@@ -273,6 +273,44 @@ class TaskManager:
         self.log(task_id, "INFO" if status == TaskStatus.SUCCESS else "ERROR",
                  f"任务完成: {status.value}" + (f" - {error}" if error else ""))
 
+    def mark_interrupted_tasks(self) -> int:
+        """服务启动时清理孤儿任务：执行中的任务标记为 failed。
+
+        服务重启会杀掉执行线程（DataX 子进程仍可能残留），任务状态会永久卡在
+        非终态；启动时统一清理，保证监控页状态可收敛。待审批任务保留
+        （配置仍在，用户可继续审批或拒绝）。
+        """
+        interrupted = [
+            TaskStatus.PENDING.value,
+            TaskStatus.RUNNING.value,
+            TaskStatus.CONFIG_DONE.value,
+            TaskStatus.EXECUTING.value,
+            TaskStatus.EXEC_DONE.value,
+            TaskStatus.VALIDATING.value,
+        ]
+        placeholders = ",".join("?" * len(interrupted))
+        conn = _get_conn()
+        with _db_lock:
+            rows = conn.execute(
+                f"SELECT task_id FROM tasks WHERE status IN ({placeholders})",
+                interrupted,
+            ).fetchall()
+            now = datetime.now().isoformat()
+            for row in rows:
+                conn.execute(
+                    "UPDATE tasks SET status = ?, error = ?, updated_at = ?, "
+                    "completed_at = ? WHERE task_id = ?",
+                    (
+                        TaskStatus.FAILED.value,
+                        "服务重启，任务执行中断",
+                        now, now, row["task_id"],
+                    ),
+                )
+            conn.commit()
+        if rows:
+            logger.warning(f"[TaskManager] 启动清理 {len(rows)} 个中断任务")
+        return len(rows)
+
     def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
         """获取任务信息。"""
         conn = _get_conn()

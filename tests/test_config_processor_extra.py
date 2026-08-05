@@ -45,7 +45,8 @@ class TestJdbcUrl:
             "jdbc:mysql://127.0.0.1:3306//datax_test",
             "mysql", "127.0.0.1", 3306, "datax_test",
         )
-        assert url == "jdbc:mysql://127.0.0.1:3306/datax_test?useSSL=false&serverTimezone=UTC"
+        assert url == ("jdbc:mysql://127.0.0.1:3306/datax_test"
+                       "?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC")
 
     def test_url_without_db_path(self):
         url = normalize_jdbc_url(
@@ -59,7 +60,9 @@ class TestJdbcUrl:
             "jdbc:mysql://127.0.0.1:3306//datax_test?useSSL=true",
             "mysql", "127.0.0.1", 3306, "datax_test",
         )
-        assert url == "jdbc:mysql://127.0.0.1:3306/datax_test?useSSL=true"
+        # 保留已有 useSSL，追加缺失的公钥检索与时区参数
+        assert url == ("jdbc:mysql://127.0.0.1:3306/datax_test"
+                       "?useSSL=true&allowPublicKeyRetrieval=true&serverTimezone=UTC")
 
     def test_rebuilds_when_not_jdbc_prefix(self):
         url = normalize_jdbc_url(
@@ -95,7 +98,8 @@ class TestPluginNameCase:
         assert content["reader"]["name"] == "mysqlreader"
         assert content["writer"]["name"] == "elasticsearchwriter"
         jdbc = content["reader"]["parameter"]["connection"][0]["jdbcUrl"]
-        assert jdbc == ["jdbc:mysql://127.0.0.1:3306/datax_test?useSSL=false&serverTimezone=UTC"]
+        assert jdbc == ["jdbc:mysql://127.0.0.1:3306/datax_test"
+                        "?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC"]
         valid, errors = validate_datax_config(out)
         assert valid, errors
 

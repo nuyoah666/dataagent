@@ -224,8 +224,25 @@ def normalize_jdbc_url(url: str, db_type: str, host: str, port: int, database: s
             if m:
                 query = m.group(3) or ""
                 url = f"jdbc:mysql://{host}:{port}/{database}{query}"
+        # MySQL 8 caching_sha2_password：必须 allowPublicKeyRetrieval=true
+        # （DataX 自带 Connector/J 版本较老，缺失时直接连接失败）
+        required_params = {
+            "useSSL": "false",
+            "allowPublicKeyRetrieval": "true",
+            "serverTimezone": "UTC",
+        }
         if "?" not in url:
-            url += "?useSSL=false&serverTimezone=UTC"
+            url += "?" + "&".join(f"{k}={v}" for k, v in required_params.items())
+        else:
+            query = url.split("?", 1)[1]
+            present = dict(
+                pair.split("=", 1) for pair in query.split("&") if "=" in pair
+            )
+            additions = [
+                f"{k}={v}" for k, v in required_params.items() if k not in present
+            ]
+            if additions:
+                url += "&" + "&".join(additions)
     elif db_type == "mongodb":
         url = f"mongodb://{host}:{port}"
     return url
