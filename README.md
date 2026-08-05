@@ -120,6 +120,47 @@ pytest
 全部测试离线可跑（mock DataX、打桩数据库连接），无需真实数据库/ES/LLM，
 CI（GitHub Actions）在 Ubuntu / Windows 双平台自动执行。
 
+## MCP Server（模型上下文协议）
+
+把平台能力暴露为标准 MCP 工具，任何支持 MCP 的客户端
+（Claude Desktop、Cursor、自建 Agent 等）都能直接调用：
+
+```bash
+python -m src.mcp_server                                    # STDIO（默认，推荐桌面客户端）
+python -m src.mcp_server --transport sse --port 9000        # SSE over HTTP
+```
+
+工具清单：
+
+| 工具 | 说明 | 同步/异步 |
+|------|------|-----------|
+| `submit_task(query)` | 自然语言提交集成/ETL/运维/分析任务（写任务进人工审批） | 异步返回 task_id |
+| `get_task(task_id)` / `list_tasks` | 任务状态与结果查询 | 同步 |
+| `approve_task` / `reject_task` | 人工审批门禁（写任务必须确认后才执行） | 同步 |
+| `analyze(query)` | 语义层只读分析，返回结果行 + LLM 中文总结 | 同步 |
+| `list_catalog()` | 语义层已注册指标/维度清单 | 同步 |
+| `submit_etl(...)` | 确定性 ODS→DWD 透传（按参数构造指令，审批后执行） | 异步 |
+| `diagnose_task(task_id)` | 运维诊断：根因 + 知识库检索 + 处置 + 自动沉淀 | 同步 |
+| `search_knowledge(query)` | 运维事故知识库检索 | 同步 |
+| `list_datasources()` / `discover_tables()` | 数据源与跨库表发现 | 同步 |
+
+Claude Desktop 配置示例（`claude_desktop_config.json`）：
+
+```json
+{
+  "mcpServers": {
+    "dataagent": {
+      "command": "F:\\Python\\python3.11\\python.exe",
+      "args": ["-m", "src.mcp_server"],
+      "cwd": "F:\\dataagent"
+    }
+  }
+}
+```
+
+设计要点：只读能力（分析/知识库/数据源）同步返回；写能力（集成/ETL）异步提交
+并强制走人工审批门禁，审批通过前不落库执行，保证"上线前人工确认"的原则。
+
 ### 6. 运维诊断示例
 
 ```bash
