@@ -134,6 +134,32 @@
   .route-side .route-detail { font-size:12px; color:var(--muted); margin-top:3px; word-break:break-all; }
   .route-arrow { display:flex; align-items:center; padding:0 16px; color:var(--accent); font-size:18px; }
   .query-cell .route-mini { display:block; color:var(--muted); font-size:11.5px; margin-top:3px; }
+  .detail-overview { background:var(--bg); border:1px solid var(--border); border-radius:10px;
+                     padding:14px 16px; margin-bottom:14px; }
+  .detail-query { font-size:14px; font-weight:600; margin-bottom:10px; }
+  .cfg-tabs { display:flex; gap:6px; margin:14px 0 10px; flex-wrap:wrap; }
+  .cfg-tabs button { background:var(--bg); border:1px solid var(--border); color:var(--muted);
+                     border-radius:8px; padding:6px 14px; cursor:pointer; font-size:12.5px; }
+  .cfg-tabs button.active { color:var(--accent); border-color:var(--accent); background:rgba(56,189,248,.08); }
+  .cfg-pane { display:none; }
+  .cfg-pane.active { display:block; }
+  .mapping-table { width:100%; border-collapse:collapse; font-size:12.5px; }
+  .mapping-table td { padding:7px 10px; border-bottom:1px solid var(--border); }
+  .mapping-table tr:last-child td { border-bottom:none; }
+  .mapping-table .src { text-align:right; color:var(--text); }
+  .mapping-table .src .t { color:var(--muted); font-size:11px; margin-left:6px; }
+  .mapping-table .mid { text-align:center; color:var(--accent); width:56px; white-space:nowrap; }
+  .mapping-table .dst { color:var(--text); }
+  .mapping-table .dst .t { color:var(--muted); font-size:11px; margin-left:6px; }
+  .where-box { background:var(--bg); border:1px solid var(--border); border-radius:8px;
+               padding:10px 14px; font-family:Consolas,monospace; font-size:12.5px;
+               color:var(--text); word-break:break-all; }
+  .cfg-edit { width:100%; min-height:260px; background:var(--bg); border:1px solid var(--border);
+              color:var(--text); border-radius:8px; padding:12px; font-family:Consolas,monospace;
+              font-size:12px; resize:vertical; white-space:pre; }
+  .cfg-edit:focus { outline:2px solid rgba(56,189,248,.35); border-color:var(--accent); }
+  .cfg-actions { display:flex; gap:8px; margin-top:10px; justify-content:flex-end; }
+  .muted-flag { color:var(--muted); font-size:11.5px; }
   .form-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px 14px; margin-top:12px; }
   .form-grid label { display:flex; flex-direction:column; gap:4px; font-size:12px; color:var(--muted); }
   .form-grid .full { grid-column:1 / -1; }
@@ -713,11 +739,97 @@ function syncSection(task) {
     </div>`;
 }
 
+function renderMapping(view) {
+  const rows = (view.field_mapping || []).map(m => `
+    <tr>
+      <td class="src">${escapeHtml(m.source || '—')}${m.source_type ? `<span class="t">${escapeHtml(m.source_type)}</span>` : ''}</td>
+      <td class="mid">──▶</td>
+      <td class="dst">${escapeHtml(m.target || '—')}${m.target_type ? `<span class="t">${escapeHtml(m.target_type)}</span>` : ''}</td>
+    </tr>`).join('');
+  return `<table class="mapping-table">${rows}</table>`;
+}
+
+function renderConfigSection(cfg) {
+  const view = cfg.view || {};
+  const tabs = [];
+  if ((view.field_mapping || []).length) tabs.push(['mapping', '字段映射']);
+  if (view.where) tabs.push(['where', '增量条件']);
+  if (cfg.datax_config) tabs.push(['json', 'DataX JSON']);
+  if (cfg.etl_sql) tabs.push(['sql', 'ETL SQL']);
+  if (!tabs.length) return '';
+
+  const tabBtns = tabs.map(([key, label], i) =>
+    `<button class="${i === 0 ? 'active' : ''}" data-cfg="${key}" onclick="switchCfgTab(this)">${label}</button>`).join('');
+  const panes = [];
+  if (tabs.some(t => t[0] === 'mapping')) {
+    panes.push(`<div class="cfg-pane ${tabs[0][0] === 'mapping' ? 'active' : ''}" id="cfg-mapping">${renderMapping(view)}</div>`);
+  }
+  if (tabs.some(t => t[0] === 'where')) {
+    panes.push(`<div class="cfg-pane ${tabs[0][0] === 'where' ? 'active' : ''}" id="cfg-where">
+      <div class="where-box">${escapeHtml(view.where)}</div>
+      <div class="muted-flag" style="margin-top:6px">增量同步按此条件过滤源端数据</div></div>`);
+  }
+  if (tabs.some(t => t[0] === 'json')) {
+    const editable = cfg.editable;
+    panes.push(`<div class="cfg-pane ${tabs[0][0] === 'json' ? 'active' : ''}" id="cfg-json">
+      ${editable
+        ? `<textarea class="cfg-edit" id="cfgEditJson" spellcheck="false">${escapeHtml(JSON.stringify(cfg.datax_config, null, 2))}</textarea>
+           <div class="cfg-actions"><button class="btn btn-action" onclick="saveConfig()">保存配置</button></div>`
+        : `<pre class="audit-detail" style="white-space:pre-wrap">${escapeHtml(JSON.stringify(cfg.datax_config, null, 2))}</pre>`}
+    </div>`);
+  }
+  if (tabs.some(t => t[0] === 'sql')) {
+    const editable = cfg.editable;
+    panes.push(`<div class="cfg-pane ${tabs[0][0] === 'sql' ? 'active' : ''}" id="cfg-sql">
+      ${editable
+        ? `<textarea class="cfg-edit" id="cfgEditSql" spellcheck="false">${escapeHtml(cfg.etl_sql || '')}</textarea>
+           <div class="cfg-actions"><button class="btn btn-action" onclick="saveConfigSql()">保存 ETL SQL</button></div>`
+        : `<pre class="audit-detail" style="white-space:pre-wrap">${escapeHtml(cfg.etl_sql || '')}</pre>`}
+    </div>`);
+  }
+  return `
+    <div class="section-title">同步配置${cfg.editable ? ' <span class="tag" style="background:rgba(234,179,8,.15);color:var(--warn)">可编辑</span>' : ''}</div>
+    <div class="cfg-tabs">${tabBtns}</div>
+    ${panes.join('')}`;
+}
+
+function switchCfgTab(btn) {
+  document.querySelectorAll('.cfg-tabs button').forEach(x => x.classList.remove('active'));
+  btn.classList.add('active');
+  const key = btn.dataset.cfg;
+  document.querySelectorAll('.cfg-pane').forEach(x => x.classList.remove('active'));
+  const pane = $('cfg-' + key);
+  if (pane) pane.classList.add('active');
+}
+
+let _detailTaskId = '';
+
+async function saveConfig() {
+  const taskId = _detailTaskId;
+  try {
+    const parsed = JSON.parse($('cfgEditJson').value);
+    await api('/tasks/' + taskId + '/config', {method:'PUT', headers:Object.assign({'Content-Type':'application/json'}, headers()), body: JSON.stringify({datax_config: parsed})});
+    alert('配置已保存，审批时将使用最新配置');
+    showDetail(taskId);
+  } catch (e) { alert('保存失败: ' + e.message); }
+}
+
+async function saveConfigSql() {
+  const taskId = _detailTaskId;
+  try {
+    await api('/tasks/' + taskId + '/config', {method:'PUT', headers:Object.assign({'Content-Type':'application/json'}, headers()), body: JSON.stringify({etl_sql: $('cfgEditSql').value})});
+    alert('ETL SQL 已保存，审批时将使用最新配置');
+    showDetail(taskId);
+  } catch (e) { alert('保存失败: ' + e.message); }
+}
+
 async function showDetail(taskId) {
   try {
-    const [task, logs, audit] = await Promise.all([
-      api('/tasks/' + taskId), api('/tasks/' + taskId + '/logs'), api('/audit?task_id=' + taskId),
+    const [task, logs, audit, cfg] = await Promise.all([
+      api('/tasks/' + taskId), api('/tasks/' + taskId + '/logs'),
+      api('/audit?task_id=' + taskId), api('/tasks/' + taskId + '/config'),
     ]);
+    _detailTaskId = taskId;
     $('detailTitle').textContent = '任务 ' + taskId + ' 详情';
     const tl = buildTimeline(logs.logs || [], task);
     const audits = (audit.logs || []).map(l =>
@@ -759,7 +871,10 @@ async function showDetail(taskId) {
       ${task.validation_result ? `<div style="margin-top:4px">校验：${escapeHtml(task.validation_result.summary || '')}</div>` : ''}
       <pre class="audit-detail" style="white-space:pre-wrap">${escapeHtml(task.etl_sql)}</pre>` : '';
     $('detailBody').innerHTML = `
-      <div>指令：<b>${escapeHtml(task.user_query)}</b></div>
+      <div class="detail-overview">
+        <div class="detail-query">${escapeHtml(task.user_query)}</div>
+        ${syncSection(task)}
+      </div>
       <div class="detail-meta">
         <span>类型：<span class="tag type">${type}</span></span>
         <span>状态：<span class="tag ${task.status}">${statusText(task.status)}</span></span>
@@ -767,8 +882,8 @@ async function showDetail(taskId) {
         <span>完成：${fmtTime(task.completed_at) || '—'}</span>
         <span>耗时：${durationSec(task.created_at, task.completed_at)}</span>
       </div>
+      ${renderConfigSection(cfg)}
       <div class="section-title">阶段时间线</div>${tl}
-      ${syncSection(task)}
       ${diag}${opsAct}${opsRec}${anal}${etl}
       <div class="section-title">审计记录</div>${audits || '<div class="empty">（无审计）</div>'}
       <div class="section-title">错误信息</div><pre>${escapeHtml(task.error || '（无）')}</pre>

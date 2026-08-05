@@ -375,25 +375,24 @@ class AgentWorkflow:
     def _restore_pending_state(self, task: dict) -> Optional[dict]:
         """恢复待审批任务的执行状态。
 
-        优先从 LangGraph checkpoint 还原（含真实凭据、完整的 DataX 配置，
-        即人工确认的那份配置）；checkpoint 不可用时降级为任务记录 +
-        重新注入本地凭据（任务记录落库时密码已脱敏为 ***）。
+        优先从任务记录重建（支持审批前人工编辑后的最新配置，密码由
+        _refill_config_credentials 回填）；任务记录缺配置时降级为
+        LangGraph checkpoint（备份，含 config 阶段完整状态）。
         """
-        state = None
-        if self.checkpointer is not None:
-            try:
-                tup = self.checkpointer.get_tuple({
-                    "configurable": {"thread_id": task.get("task_id", "")},
-                })
-                if tup is not None:
-                    values = dict((tup.checkpoint or {}).get("channel_values", {}))
-                    if values.get("datax_config") or values.get("etl_sql"):
-                        state = values
-            except Exception as e:
-                logger.warning(f"审批状态恢复(checkpoint)失败，降级任务记录: {e}")
-
-        if state is None:
-            state = self._state_from_task_record(task)
+        state = self._state_from_task_record(task)
+        if not (state.get("datax_config") or state.get("etl_sql")):
+            # 任务记录缺配置（老任务）时回退 checkpoint
+            if self.checkpointer is not None:
+                try:
+                    tup = self.checkpointer.get_tuple({
+                        "configurable": {"thread_id": task.get("task_id", "")},
+                    })
+                    if tup is not None:
+                        values = dict((tup.checkpoint or {}).get("channel_values", {}))
+                        if values.get("datax_config") or values.get("etl_sql"):
+                            state = values
+                except Exception as e:
+                    logger.warning(f"审批状态恢复(checkpoint)失败: {e}")
 
         if not (state.get("datax_config") or state.get("etl_sql")):
             return None

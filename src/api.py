@@ -512,6 +512,78 @@ async def reject_task(task_id: str, request: Request):
     return {"task_id": task_id, "status": result.get("status"), "message": "已拒绝执行"}
 
 
+class ConfigUpdateRequest(BaseModel):
+    """配置编辑请求：二选一（DataX 配置 或 ETL SQL）。"""
+
+    datax_config: Optional[dict] = None
+    etl_sql: Optional[str] = None
+
+
+@app.get("/tasks/{task_id}/config")
+async def get_task_config(task_id: str):
+    """返回任务配置视图（字段映射 / where / 连接信息 / 原始 JSON）。"""
+    from src.tools.config_view import build_config_view
+
+    tm = get_task_manager()
+    task = tm.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    editable = task.get("status") in (
+        TaskStatus.PENDING_APPROVAL.value,
+        TaskStatus.CONFIG_DONE.value,
+    )
+    return {
+        "task_id": task_id,
+        "editable": editable,
+        "task_type": task.get("task_type"),
+        "status": task.get("status"),
+        "view": build_config_view(task.get("datax_config")),
+        "datax_config": task.get("datax_config"),
+        "etl_sql": task.get("etl_sql"),
+    }
+
+
+@app.put("/tasks/{task_id}/config")
+async def update_task_config(task_id: str, req: ConfigUpdateRequest, request: Request):
+    """编辑待审批任务的配置（DataX 配置 或 ETL SQL），审批时使用最新配置。"""
+    from src.tools.config_view import build_config_view
+    from src.tools.sql_validator import validate_etl_sql
+
+    tm = get_task_manager()
+    task = tm.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if task.get("status") != TaskStatus.PENDING_APPROVAL.value:
+        raise HTTPException(status_code=409, detail="仅待审批任务可编辑配置")
+    if req.datax_config is None and req.etl_sql is None:
+        raise HTTPException(status_code=422, detail="请提供 datax_config 或 etl_sql")
+
+    if req.etl_sql is not None:
+        ok, reason = validate_etl_sql(req.etl_sql)
+        if not ok:
+            raise HTTPException(status_code=422, detail=f"ETL SQL 校验不通过: {reason}")
+    if req.datax_config is not None:
+        content = ((req.datax_config.get("job") or {}).get("content")) or []
+        if not content or not (content[0].get("reader") and content[0].get("writer")):
+            raise HTTPException(status_code=422, detail="DataX 配置缺少 reader/writer")
+
+    operator = request.headers.get("X-Operator", "system")[:50]
+    tm.update_task(
+        task_id,
+        datax_config=req.datax_config if req.datax_config is not None else task.get("datax_config"),
+        etl_sql=req.etl_sql if req.etl_sql is not None else task.get("etl_sql"),
+    )
+    tm.audit(task_id, "config_edit", operator=operator, detail="人工编辑任务配置")
+    updated = tm.get_task(task_id)
+    return {
+        "success": True,
+        "task_id": task_id,
+        "view": build_config_view(updated.get("datax_config")),
+        "datax_config": updated.get("datax_config"),
+        "etl_sql": updated.get("etl_sql"),
+    }
+
+
 # ---------- 数据源注册表 ----------
 
 

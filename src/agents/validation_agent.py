@@ -8,6 +8,7 @@ from typing import Dict, Any
 
 from ..state import DataIntegrationState
 from ..tools import validate_data_quality, DatabaseConfig
+from ..tools.config_view import extract_side
 from ..config import config
 from .base import BaseAgent, register_agent
 
@@ -25,6 +26,7 @@ class ValidationAgent(BaseAgent):
             intent = state.get("parsed_intent", {})
             if not intent:
                 intent = self._extract_intent(state.get("user_query", ""))
+            intent = self._sync_intent_with_config(intent, state)
 
             # 构建源端 / 目标端数据库配置
             source_cfg = self._build_db_config(intent, side="source")
@@ -80,6 +82,35 @@ class ValidationAgent(BaseAgent):
             }
 
     # ---- 辅助 ----
+
+    @staticmethod
+    def _sync_intent_with_config(intent: Dict[str, Any], state: Dict[str, Any]) -> Dict[str, Any]:
+        """校验用真实执行的目标/源：编辑后的配置可能与 intent 不一致。
+
+        例如人工把 DataX 目标索引从 idx_a 改成 idx_b，parsed_intent 仍是 idx_a，
+        校验必须跟随实际配置，否则会查不存在的表/索引而误报失败。
+        """
+        datax_config = state.get("datax_config")
+        if not isinstance(datax_config, dict):
+            return intent
+        try:
+            src_side = extract_side(datax_config, "reader")
+            dst_side = extract_side(datax_config, "writer")
+            updated = dict(intent)
+            if src_side.get("table"):
+                updated["source_table"] = src_side["table"]
+                if src_side.get("database"):
+                    updated["source_database"] = src_side["database"]
+            if dst_side.get("table"):
+                updated["target_table"] = dst_side["table"]
+                if dst_side.get("database"):
+                    updated["target_database"] = dst_side["database"]
+            if dst_side.get("db_type"):
+                updated["target_db_type"] = dst_side["db_type"]
+            return updated
+        except Exception as e:
+            logger.warning(f"从 DataX 配置同步校验意图失败（沿用 intent）: {e}")
+            return intent
 
     @staticmethod
     def _build_db_config(intent: Dict[str, Any], side: str) -> DatabaseConfig:
