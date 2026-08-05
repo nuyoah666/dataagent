@@ -93,6 +93,15 @@ class Config:
     # ---- DataX 执行超时（秒），防止任务挂死 ----
     DATAX_TIMEOUT: int = int(os.getenv("DATAX_TIMEOUT", "3600"))
 
+    # ---- 数据分析 Agent ----
+    # 执行后是否用 LLM 生成中文总结（只读查询无副作用）
+    ANALYSIS_SUMMARIZE: bool = os.getenv("ANALYSIS_SUMMARIZE", "true").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+    # 只读查询超时（秒）与最大返回行数（防御失控查询）
+    ANALYSIS_QUERY_TIMEOUT: int = int(os.getenv("ANALYSIS_QUERY_TIMEOUT", "30"))
+    ANALYSIS_MAX_ROWS: int = int(os.getenv("ANALYSIS_MAX_ROWS", "1000"))
+
     # ---- Web API ----
     API_HOST: str = os.getenv("API_HOST", "0.0.0.0")
     API_PORT: int = int(os.getenv("API_PORT", "8000"))

@@ -1,0 +1,54 @@
+# 轻量语义层目录：指标/维度 -> 物理表/字段/聚合口径
+#
+# 约定：
+#   - 优先注册 DWD/DWS 层已标准化表（ETL 透传产物），保证口径统一
+#   - 指标名/维度名为 LLM 与用户可见的"语义名"，显示名支持中文别名
+#   - 物理字段必须真实存在，SQL 由代码拼装，杜绝 LLM 臆造
+
+version: 1
+default_database: datax_test
+default_engine: starrocks
+
+tables:
+  - table: dwd_user_sr
+    alias: 用户明细
+    description: 用户 DWD 明细（id/name/dt）
+    metrics:
+      - name: user_count
+        display: 用户数
+        column: id
+        agg: count
+        description: 用户总数（按 id 计数）
+      - name: name_count
+        display: 用户名数量
+        column: name
+        agg: count_distinct
+        description: 去重后的用户名数量
+    dimensions:
+      - name: dt
+        display: 日期
+        column: dt
+        type: date
+      - name: name
+        display: 用户名
+        column: name
+        type: string
+
+  - table: src_user_sr
+    alias: 源用户
+    description: 同步源用户表
+    metrics:
+      - name: user_count
+        display: 用户数
+        column: id
+        agg: count
+        description: 用户总数
+    dimensions:
+      - name: dt
+        display: 日期
+        column: dt
+        type: date
+      - name: name
+        display: 用户名
+        column: name
+        type: string

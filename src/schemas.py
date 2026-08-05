@@ -124,3 +124,24 @@ class ETLPlan(BaseModel):
 
 class ETLOutput(ETLIntent, ETLPlan):
     """ETL 配置生成完整结果（意图 + SQL）。"""
+
+
+class AnalysisFilter(BaseModel):
+    """分析过滤条件（语义层维度 + 操作符 + 值）。"""
+
+    dimension: str = Field(description="维度名（语义层注册）")
+    op: str = Field(default="=", description="= | != | > | >= | < | <= | LIKE | IN")
+    value: str = Field(description="过滤值；IN 用逗号分隔")
+
+
+class AnalysisQuery(BaseModel):
+    """数据分析语义查询（LLM 输出，不直接生成 SQL）。"""
+
+    metrics: List[str] = Field(default_factory=list, description="指标名列表（语义层注册）")
+    dimensions: List[str] = Field(default_factory=list, description="维度名列表（语义层注册）")
+    filters: List[AnalysisFilter] = Field(default_factory=list)
+    granularity: str = Field(default="", description="时间粒度 day | month | year")
+    limit: int = Field(default=1000, ge=1, le=5000)
+    order_by: Optional[str] = Field(default=None, description="排序字段（指标或维度名）")
+    order_desc: bool = Field(default=True)
+    database: str = Field(default="", description="StarRocks 库名，缺省用语义层默认")
