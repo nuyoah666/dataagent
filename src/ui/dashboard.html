@@ -126,6 +126,14 @@
   .audit-detail { color:var(--muted); font-size:11.5px; word-break:break-all; }
   .refresh-note { color:var(--muted); font-size:12px; }
   .detail-meta { display:flex; gap:16px; flex-wrap:wrap; color:var(--muted); font-size:12.5px; margin-top:6px; }
+  .route-card { display:flex; align-items:stretch; gap:0; background:var(--bg); border:1px solid var(--border);
+                border-radius:10px; padding:12px 14px; margin-top:6px; }
+  .route-side { flex:1; min-width:0; }
+  .route-side .route-label { font-size:11px; color:var(--muted); margin-bottom:4px; }
+  .route-side .route-name { font-size:13.5px; font-weight:600; }
+  .route-side .route-detail { font-size:12px; color:var(--muted); margin-top:3px; word-break:break-all; }
+  .route-arrow { display:flex; align-items:center; padding:0 16px; color:var(--accent); font-size:18px; }
+  .query-cell .route-mini { display:block; color:var(--muted); font-size:11.5px; margin-top:3px; }
   .form-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px 14px; margin-top:12px; }
   .form-grid label { display:flex; flex-direction:column; gap:4px; font-size:12px; color:var(--muted); }
   .form-grid .full { grid-column:1 / -1; }
@@ -406,12 +414,13 @@ function renderTasks(tasks) {
   const tbody = $('rows');
   if (!tasks.length) { tbody.innerHTML = '<tr><td colspan="9" class="empty">暂无任务</td></tr>'; return; }
   tbody.innerHTML = tasks.map(t => {
-    const link = (t.source_table && t.target_table) ? `${escapeHtml(t.source_table)} → ${escapeHtml(t.target_table)}` : '—';
     const type = TYPE_LABELS[t.task_type] || escapeHtml(t.task_type || '—');
+    const route = syncRoute(t);
     return `<tr onclick="showDetail('${t.task_id}')">
       <td>${t.task_id}</td>
       <td><span class="tag type">${type}</span></td>
-      <td class="query-cell" title="${escapeHtml(t.user_query)}">${escapeHtml(t.user_query)}</td>
+      <td class="query-cell" title="${escapeHtml(t.user_query)}">${escapeHtml(t.user_query)}
+        ${route ? `<span class="route-mini">↔ ${escapeHtml(route)}</span>` : ''}</td>
       <td><span class="tag ${t.status}">${statusText(t.status)}</span></td>
       <td>${fmtTime(t.created_at)}</td>
       <td>${fmtTime(t.completed_at) || '—'}</td>
@@ -658,6 +667,52 @@ function buildTimeline(logs, task) {
   }).join('') + '</div>';
 }
 
+function dbTypeLabel(t) {
+  return {mysql:'MySQL', mongodb:'MongoDB', elasticsearch:'Elasticsearch', starrocks:'StarRocks'}[t] || t || '';
+}
+
+function syncRoute(t) {
+  const pi = t.parsed_intent || {};
+  const srcT = pi.source_table || t.source_table || '';
+  const dstT = pi.target_table || t.target_table || '';
+  if (!srcT && !dstT) return '';
+  const src = [dbTypeLabel(pi.source_db_type), pi.source_database, srcT].filter(Boolean).join('.');
+  const dst = [dbTypeLabel(pi.target_db_type), pi.target_database, dstT].filter(Boolean).join('.');
+  return [src, dst].filter(Boolean).join(' → ');
+}
+
+function syncSection(task) {
+  const pi = task.parsed_intent || {};
+  if (!pi.source_db_type && !pi.target_db_type) return '';
+  const srcHost = [pi.source_host, pi.source_port].filter(v => v != null && v !== '').join(':');
+  const dstHost = [pi.target_host, pi.target_port].filter(v => v != null && v !== '').join(':');
+  const srcName = pi.source_name || dbTypeLabel(pi.source_db_type) || '源端';
+  const dstName = pi.target_name || dbTypeLabel(pi.target_db_type) || '目标端';
+  const srcDetail = [
+    dbTypeLabel(pi.source_db_type) || '',
+    srcHost, [pi.source_database, pi.source_table].filter(Boolean).join('.'),
+  ].filter(Boolean).join(' · ');
+  const dstDetail = [
+    dbTypeLabel(pi.target_db_type) || '',
+    dstHost, [pi.target_database, pi.target_table].filter(Boolean).join('.'),
+  ].filter(Boolean).join(' · ');
+  return `
+    <div class="section-title">同步链路</div>
+    <div class="route-card">
+      <div class="route-side">
+        <div class="route-label">源端</div>
+        <div class="route-name">${escapeHtml(srcName)}</div>
+        <div class="route-detail">${escapeHtml(srcDetail) || '—'}</div>
+      </div>
+      <div class="route-arrow">→</div>
+      <div class="route-side">
+        <div class="route-label">目标端</div>
+        <div class="route-name">${escapeHtml(dstName)}</div>
+        <div class="route-detail">${escapeHtml(dstDetail) || '—'}</div>
+      </div>
+    </div>`;
+}
+
 async function showDetail(taskId) {
   try {
     const [task, logs, audit] = await Promise.all([
@@ -713,6 +768,7 @@ async function showDetail(taskId) {
         <span>耗时：${durationSec(task.created_at, task.completed_at)}</span>
       </div>
       <div class="section-title">阶段时间线</div>${tl}
+      ${syncSection(task)}
       ${diag}${opsAct}${opsRec}${anal}${etl}
       <div class="section-title">审计记录</div>${audits || '<div class="empty">（无审计）</div>'}
       <div class="section-title">错误信息</div><pre>${escapeHtml(task.error || '（无）')}</pre>
