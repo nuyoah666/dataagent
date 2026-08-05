@@ -353,3 +353,111 @@ def test_api_natural_language_routes_to_ops(api_ops_env):
     assert result.task_type == "data_ops"
     result2 = get_router().route("排查一下今天的故障")
     assert result2.task_type == "data_ops"
+
+
+# ---- 数据分析与 ETL 链路回归 ----
+
+
+def _patch_analysis_ok(monkeypatch):
+    """分析链路外部依赖打桩：语义层目录 + LLM + 只读连接。"""
+    from src.semantic.catalog import SemanticCatalog, SemanticTable
+    from src.agents import analysis_agent as ana
+
+    cat = SemanticCatalog(
+        [
+            SemanticTable({
+                "table": "dwd_user_sr",
+                "alias": "用户明细",
+                "metrics": [
+                    {"name": "user_count", "display": "用户数", "column": "id", "agg": "count"},
+                ],
+                "dimensions": [
+                    {"name": "dt", "display": "日期", "column": "dt", "type": "date"},
+                ],
+            })
+        ],
+        default_database="datax_test",
+        default_engine="starrocks",
+    )
+    monkeypatch.setattr(ana, "get_catalog", lambda: cat)
+    monkeypatch.setattr(ana, "llm_json", lambda *a, **k: {
+        "metrics": ["user_count"], "dimensions": ["dt"], "filters": [],
+        "granularity": "", "limit": 100, "order_by": "", "order_desc": True,
+    })
+    monkeypatch.setattr(ana.config, "ANALYSIS_SUMMARIZE", False)
+
+    class FakeCursor:
+        description = [("dt", None), ("user_count", None)]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def execute(self, sql):
+            self._sql = sql
+
+        def fetchall(self):
+            return [("2026-08-05", 5)]
+
+    class FakeConn:
+        def cursor(self):
+            return FakeCursor()
+
+        def close(self):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr("pymysql.connect", lambda **k: FakeConn())
+
+
+def test_analysis_workflow_success(monkeypatch):
+    _patch_analysis_ok(monkeypatch)
+    wf = AgentWorkflow(use_checkpointer=True, task_type="data_analysis")
+    result = wf.run("分析用户数按日期")
+    assert result["execution_status"]["success"] is True
+    assert result["analysis_result"]["row_count"] == 1
+    assert result["validation_result"]["success"] is True
+    # 只读任务不应进入人工审批门禁
+    assert result.get("awaiting_approval") is None
+    assert result["current_step"] == "validation_complete"
+
+
+def test_analysis_unknown_metric_rejected(monkeypatch):
+    from src.agents import analysis_agent as ana
+
+    _patch_analysis_ok(monkeypatch)
+    monkeypatch.setattr(ana, "llm_json", lambda *a, **k: {
+        "metrics": ["salary"], "dimensions": [], "filters": [],
+        "granularity": "", "limit": 100,
+    })
+    wf = AgentWorkflow(use_checkpointer=True, task_type="data_analysis")
+    result = wf.run("分析工资")
+    assert result["current_step"] == "config_error"
+    assert "未注册" in (result.get("error") or "")
+
+
+def test_etl_workflow_success(monkeypatch):
+    """ETL 纯透传全链路（config->execution->validation），零 LLM。"""
+    from src.agents import etl_agent as etl_mod
+    from tests.test_etl_agent import FakeStarrocks
+
+    conn = FakeStarrocks(tables=["ods_user", "dwd_user"], partitions=None)
+    monkeypatch.setattr("pymysql.connect", lambda **k: conn)
+    monkeypatch.setattr(etl_mod.config, "STARROCKS_ADMIN_USERNAME", "")
+
+    def _boom(*a, **k):
+        raise AssertionError("纯透传不应调用 LLM")
+
+    monkeypatch.setattr(etl_mod, "llm_json", _boom)
+    wf = AgentWorkflow(use_checkpointer=True, task_type="etl_development")
+    result = wf.run("把 ods_user 透传到 dwd_user")
+    assert result["current_step"] == "validation_complete"
+    assert result["execution_status"]["success"] is True
+    assert result["validation_result"]["success"] is True
