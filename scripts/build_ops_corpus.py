@@ -2,11 +2,11 @@
 
 读取事故记录存储（data/ops_incidents/incidents.jsonl，每行一条），
 规范化成「现象/影响/根因/解决 + 中英关键词」的结构化双语条目，
-输出 MyRag 可直接灌库的 JSONL 语料（每行 {source, heading, text}）。
+输出 src/rag 可直接灌库的 JSONL 语料（每行 {source, heading, text}）。
 
 设计意图（运维 Agent 的工作记忆）：
   - 运维 Agent 在排查/修复过程中通过 add_ops_incident() 动态写入记录；
-  - 本脚本把记录转成语料，MyRag 增量灌库后立即可检索；
+  - 本脚本把记录转成语料，src/rag 增量灌库后立即可检索；
   - 记录被删除后重新构建语料 → lifecycle 自动清理对应索引数据。
 
 用法：
@@ -25,8 +25,12 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_STORE = Path(r"F:\dataagent\data\ops_incidents\incidents.jsonl")
-DEFAULT_OUT = Path(r"F:\PycharmProjects\pyspark\MyRag\data\ops_incidents\corpus")
+DEFAULT_STORE = (
+    Path(__file__).resolve().parent.parent / "data" / "ops_incidents" / "incidents.jsonl"
+)
+DEFAULT_OUT = (
+    Path(__file__).resolve().parent.parent / "data" / "ops_incidents" / "corpus"
+)
 
 REQUIRED_FIELDS = ("incident_id", "title", "symptom")
 FIELD_LABELS = {

@@ -119,8 +119,8 @@ curl -X POST http://localhost:8000/ops/diagnose \
 1. 复制 `.env.example` 为 `.env` 并填入本机配置（`.env` 已被 `.gitignore` 排除）
 2. 确认没有真实密钥入库：`rg "sk-|tp-|lsv2_" . --glob "!.env"`
 3. 修改 README 顶部 CI 徽章中的用户名，推送后徽章自动生效
-4. 事故知识库种子（`data/ops_incidents/incidents.jsonl`）与 MyRag 语料
-   为个人实战数据，可按需保留或清空后重新沉淀
+4. 事故知识库种子（`data/ops_incidents/incidents.jsonl`）为个人实战数据，
+   可按需保留或清空后重新沉淀
 
 ## 生产部署注意事项
 
@@ -295,19 +295,26 @@ Agent 配置阶段会检索 DataX 官方文档 + 本项目踩坑经验，用于�
   （中文说明 + 英文参数名/JSON 键 + 配置样例，解决中文 embedding 匹配英文配置的问题）
 - **踩坑经验**：`datax_experience/*`（mongo address 数组、mysqlwriter jdbcUrl、
   ES 类型映射、StarRocks 两种写入方式、增量同步水位等），与官方文档互补
-- **collection 隔离**：灌库到 MyRag 独立索引 `idx_datax_docs`，
-  与周报（`rag`）等其它知识库互不污染；MyRag 侧新增
-  `config/collections/datax_docs.json`，`indexing.dedup_enabled=false`
+- **自包含**：RAG 核心已内嵌为 `src/rag/` 子包（检索 + 灌库），
+  不依赖任何外部 RAG 项目；密钥统一由 `.env` 注入
+- **collection 隔离**：灌库到独立 ES 索引 `idx_datax_docs`，
+  与其它知识库互不污染；collection 配置见
+  `src/rag/config/collections/datax_docs.json`，`indexing.dedup_enabled=false`
   （官方文档段落高度同构，语义去重会误删有效片段）
-- **检索零 LLM 依赖**：`src/tools/rag_tool.py` 走 BM25 + 向量 + RRF 纯召回，
-  显式传原始 query 跳过 LLM 改写，快且可离线；Agent 侧自带 LLM 可自行改写
-- **一键灌库**：
+- **模板优先、RAG 兜底**：已知插件对（`get_template` 命中）不查文档，
+  快乐路径零 RAG 依赖；仅模板缺失或配置校验失败时才检索
+  （`RAG_DOCS_ENABLED` 可整体关闭）
+- **检索零 LLM 依赖**：纯召回（BM25 + 向量 + RRF），显式传原始 query
+  跳过 LLM 改写，快且可离线；datax_docs 为纯 BM25（语料已含英文关键词行，
+  中文 query 匹配英文 JSON 键足够），ops_incident 保留向量召回
+- **一键灌库**（首次使用先把 DataX 官方仓库 clone 到 `data/datax_docs/DataX`，
+  或用 `--repo <路径>` 指定）：
   ```bash
   python scripts/ingest_datax_docs.py              # 全量重建
   python scripts/ingest_datax_docs.py --no-rebuild # 增量追加（内容哈希去重）
   ```
 - 环境变量 `RAG_COLLECTION`（默认 `datax_docs`）可切换知识库；
-  collection 不存在时自动降级为 MyRag 默认索引，不阻断 Agent
+  collection 不存在时自动降级为默认索引，不阻断 Agent
 
 ## 运维事故知识库（Ops Incident KB）
 
@@ -383,8 +390,8 @@ src/
 - `MYSQL_*`：MySQL 连接配置
 - `MONGODB_*`：MongoDB 连接配置
 - `ES_*`：Elasticsearch 连接配置
-- `RAG_PROJECT_PATH`：现有 RAG 项目路径
 - `RAG_COLLECTION`：RAG 知识库 collection（默认 `datax_docs`）
+- `SILICONFLOW_API_KEY`：可选，启用 RAG API 精排（留空则用 RRF 融合）
 - `OPS_INCIDENT_STORE`：运维事故存储路径（默认 `data/ops_incidents/incidents.jsonl`）
 
 ### 数据库支持

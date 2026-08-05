@@ -2,7 +2,7 @@
 
 从 DataX 官方仓库（GitHub / Gitee 镜像）读取插件 `doc/*.md` 与顶层文档，
 清洗成「中文说明 + 英文参数/错误码关键词 + JSON 配置样例」的结构化条目，
-输出 MyRag 可直接灌库的 JSONL 语料（每行 {source, heading, text}）。
+输出 src/rag 可直接灌库的 JSONL 语料（每行 {source, heading, text}）。
 
 双语策略（解决「中文 embedding vs 英文 JSON 配置」的匹配问题）：
   1. 保留文档中的英文参数名与 JSON 样例原文（直接参与向量化）；
@@ -29,10 +29,12 @@ from pathlib import Path
 # 常量
 # ---------------------------------------------------------------------------
 
-DEFAULT_REPO = Path(
-    r"C:\Users\Administrator\Documents\Codex\2026-08-03\new-chat\work\datax_docs\DataX"
+DEFAULT_REPO = (
+    Path(__file__).resolve().parent.parent / "data" / "datax_docs" / "DataX"
 )
-DEFAULT_OUT = Path(r"F:\PycharmProjects\pyspark\MyRag\data\datax_docs\corpus")
+DEFAULT_OUT = (
+    Path(__file__).resolve().parent.parent / "data" / "datax_docs" / "corpus"
+)
 
 # 与本项目（数据集成 Agent）相关的核心插件；其余插件文档保持不动
 PLUGINS = [

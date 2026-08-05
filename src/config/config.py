@@ -9,6 +9,9 @@ from dotenv import load_dotenv
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 load_dotenv(_PROJECT_ROOT / ".env")
 
+# 项目根目录（供工具/脚本解析相对路径，保证仓库可移植）
+PROJECT_ROOT = _PROJECT_ROOT
+
 
 class Config:
     """系统配置。"""
@@ -53,17 +56,20 @@ class Config:
         "database": os.getenv("STARROCKS_DATABASE", "datax_test"),
     }
 
-    # ---- RAG 项目 ----
-    RAG_PROJECT_PATH: str = os.getenv(
-        "RAG_PROJECT_PATH", r"F:\PycharmProjects\pyspark\MyRag"
-    )
-
     # ---- LLM (MiMo) ----
     LLM_API_KEY: str = os.getenv("LLM_API_KEY", "")
     LLM_BASE_URL: str = os.getenv(
         "LLM_BASE_URL", "https://token-plan-cn.xiaomimimo.com/v1"
     )
     LLM_MODEL: str = os.getenv("LLM_MODEL", "mimo-v2.5-pro")
+    # ---- RAG ----
+    RAG_COLLECTION: str = os.getenv("RAG_COLLECTION", "datax_docs")
+    # 数据集成 Agent 是否启用 DataX 文档检索（模板命中自动跳过，仅在模板缺失/校验失败时兜底）
+    RAG_DOCS_ENABLED: bool = os.getenv("RAG_DOCS_ENABLED", "true").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+    # 精排（可选）：配置后启用 SiliconFlow API rerank
+    SILICONFLOW_API_KEY: str = os.getenv("SILICONFLOW_API_KEY", "")
 
     # ---- 按 Agent 模型覆盖（可选）----
     # 缺省为空 => 对应 Agent 使用全局 LLM_MODEL；

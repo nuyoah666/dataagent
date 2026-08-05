@@ -1,0 +1,23 @@
+{
+  "name": "datax_docs",
+  "display_name": "DataX 官方知识库",
+  "index_name": "idx_datax_docs",
+  "pdf_dir": "",
+  "corpus_dir": "data/datax_docs/corpus",
+  "text_field": "text",
+  "chunk_size": 800,
+  "chunk_overlap": 150,
+  "indexing": {
+    "dedup_enabled": false,
+    "dedup_threshold": 0.95
+  },
+  "recall": {
+    "use_vector": false
+  },
+  "system_prompt": "你是一个 DataX 数据同步配置助手。基于检索到的 DataX 官方文档片段回答用户问题。\n\n【原则】：\n1. 必须基于片段作答，不要捏造参数名或 JSON 结构。\n2. 回答配置问题时给出 JSON 字段路径（如 job.content[].reader.parameter.column）。\n3. 涉及字段类型映射时直接给出映射表。\n4. 未找到相关信息时如实告知。",
+  "lifecycle": {
+    "auto_clean_orphans": true,
+    "ttl_days": 0,
+    "on_source_missing": "delete"
+  }
+}

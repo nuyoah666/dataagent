@@ -1,0 +1,23 @@
+{
+  "name": "ops_incident",
+  "display_name": "运维事故知识库",
+  "index_name": "idx_ops_incident",
+  "pdf_dir": "",
+  "corpus_dir": "data/ops_incidents/corpus",
+  "text_field": "text",
+  "chunk_size": 800,
+  "chunk_overlap": 150,
+  "indexing": {
+    "dedup_enabled": false,
+    "dedup_threshold": 0.95
+  },
+  "recall": {
+    "use_vector": true
+  },
+  "system_prompt": "你是一个数仓运维诊断助手。基于检索到的运维事故记录回答用户问题。\n\n【原则】：\n1. 必须基于事故记录作答，优先给出记录中的根因与解决方法。\n2. 回答格式：现象 → 影响 → 根因 → 解决，便于复现排查。\n3. 若检索结果不相关，如实告知，不要编造事故。\n4. 记录中的关键词（如组件名、报错关键字）用于辅助定位。",
+  "lifecycle": {
+    "auto_clean_orphans": true,
+    "ttl_days": 0,
+    "on_source_missing": "delete"
+  }
+}

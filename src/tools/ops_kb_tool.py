@@ -6,7 +6,7 @@
 写入链路：
   add_ops_incident() -> 事故存储 incidents.jsonl（源事实）
                      -> build_ops_corpus 生成语料
-                     -> MyRag 增量灌库（可选 auto_ingest，默认关闭）
+                     -> src/rag 增量灌库（可选 auto_ingest，默认关闭）
 检索链路：
   search_ops_knowledge() -> RAGTool(ops_incident) 纯召回（BM25+向量+RRF）
 """
@@ -20,13 +20,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from ..config import config
+from ..config import PROJECT_ROOT
 from ..utils.tracing import trace_step
 from .rag_tool import get_rag_tool, RAGTool
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_STORE = Path(r"F:\dataagent\data\ops_incidents\incidents.jsonl")
+DEFAULT_STORE = PROJECT_ROOT / "data" / "ops_incidents" / "incidents.jsonl"
 
 REQUIRED_FIELDS = ("incident_id", "title", "symptom")
 ALLOWED_FIELDS = {
@@ -44,8 +44,7 @@ def _store_path() -> Path:
 
 
 def _corpus_dir() -> Path:
-    rag_root = Path(config.RAG_PROJECT_PATH)
-    return rag_root / "data" / "ops_incidents" / "corpus"
+    return PROJECT_ROOT / "data" / "ops_incidents" / "corpus"
 
 
 def _load_records(store: Path) -> list[dict]:
@@ -171,7 +170,7 @@ def ingest_ops_knowledge(
     rebuild: bool = False,
     sources: Optional[list[str]] = None,
 ) -> Dict[str, Any]:
-    """增量/全量灌库 ops_incident 索引（进程内调用 MyRag，无子进程）。"""
+    """增量/全量灌库 ops_incident 索引（进程内调用 src/rag，无子进程）。"""
     try:
         tool: RAGTool = get_rag_tool("ops_incident")
         if not tool._ensure_init():

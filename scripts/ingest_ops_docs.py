@@ -1,4 +1,4 @@
-"""运维事故知识库一键灌库：事故存储 → 语料 → MyRag ops_incident 索引。
+"""运维事故知识库一键灌库：事故存储 → 语料 → src/rag ops_incident 索引。
 
 用法：
   python scripts/ingest_ops_docs.py              # 增量（只处理新增/变更记录）

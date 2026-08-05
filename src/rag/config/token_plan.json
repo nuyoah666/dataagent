@@ -1,0 +1,47 @@
+{
+  "mimo": {
+    "api_key": "",
+    "base_url": "https://token-plan-cn.xiaomimimo.com/v1",
+    "model": "mimo-v2.5-pro",
+    "enable_thinking": false,
+    "temperature": 0.1
+  },
+  "rag": {
+    "backend": "elasticsearch",
+    "fallback_to_memory": true
+  },
+  "embedding": {
+    "model": "BAAI/bge-small-zh-v1.5",
+    "dims": 512
+  },
+  "pdf": {
+    "dir": "data/pdf",
+    "chunk_size": 600,
+    "chunk_overlap": 120
+  },
+  "corpus": {
+    "dir": "data/rag/corpus",
+    "text_field": "text"
+  },
+  "recall": {
+    "bm25_top_k": 10,
+    "cos_top_k": 10,
+    "rrf_k": 60,
+    "final_top_n": 8
+  },
+  "siliconflow": {
+    "api_key": ""
+  },
+  "reranker": {
+    "enabled": true,
+    "mode": "api",
+    "model": "BAAI/bge-reranker-v2-m3",
+    "api_url": "https://api.siliconflow.cn/v1/rerank",
+    "rerank_top_n": 25,
+    "final_top_n": 8
+  },
+  "elasticsearch": {
+    "hosts": ["http://localhost:9200"],
+    "index_name": "rag"
+  }
+}

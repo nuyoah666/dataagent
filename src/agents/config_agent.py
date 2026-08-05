@@ -13,6 +13,7 @@ from ..tools import (
     search_datax_docs, get_table_schema, DatabaseConfig,
     process_config, normalize_intent,
 )
+from ..tools.config_processor import get_template
 from ..utils import llm_circuit_breaker, rag_circuit_breaker
 from ..utils.llm import get_agent_llm, llm_json, LLMJsonError
 from ..config import config
@@ -70,15 +71,27 @@ class ConfigAgent(BaseAgent):
         schema_result = self._get_source_schema(intent)
         logger.info(f"表结构: success={schema_result.get('success')}")
 
-        # 5. RAG 检索（带熔断）
-        rag_context = self._search_docs(intent)
-        logger.info(f"RAG 上下文: {len(rag_context) if rag_context else 0} 字符")
+        # 5. RAG 检索（按需触发：模板已覆盖的插件对不查文档，快乐路径零 RAG 依赖）
+        rag_context = self._search_docs(intent) if self._should_search_docs(intent) else ""
+        logger.info(
+            f"RAG 文档上下文: {len(rag_context)} 字符"
+            if rag_context else "模板命中，跳过 RAG 文档检索"
+        )
 
         # 6. LLM 生成配置（带熔断）
         llm_config = self._llm_generate_config(intent, schema_result, rag_context)
 
         # 7. 配置后处理 Pipeline（标准化 + 校验 + 模板兜底）
         result = process_config(intent, schema_result, llm_config)
+        if not result["success"] and not rag_context and config.RAG_DOCS_ENABLED:
+            # 罕见：模板路径校验失败时用文档兜底重试一次
+            logger.warning(
+                "模板路径校验失败，启用 RAG 文档兜底重新生成: %s",
+                (result.get("errors") or ["未知"])[:1],
+            )
+            rag_context = self._search_docs(intent)
+            llm_config = self._llm_generate_config(intent, schema_result, rag_context)
+            result = process_config(intent, schema_result, llm_config)
         logger.info(f"配置后处理: success={result['success']}, source={result['source']}")
 
         return {
@@ -164,6 +177,14 @@ class ConfigAgent(BaseAgent):
             return {"success": False, "error": str(e)}
 
     # ---- RAG 检索（带熔断） ----
+
+    def _should_search_docs(self, intent: Dict[str, Any]) -> bool:
+        """是否查 DataX 文档：模板未覆盖的插件对才需要（大厂"模板优先、RAG 兜底"）。"""
+        if not config.RAG_DOCS_ENABLED:
+            return False
+        src = intent.get("source_db_type", "")
+        tgt = intent.get("target_db_type", "")
+        return get_template(src, tgt) is None
 
     def _search_docs(self, intent: Dict[str, Any]) -> str:
         try:

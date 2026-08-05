@@ -45,12 +45,14 @@ cp .env.example .env
 
 - **DataX 配置**：`DATAX_HOME` 指向 DataX 安装目录
 - **数据库配置**：MySQL、MongoDB、Elasticsearch 的连接信息
-- **RAG 配置**：`RAG_PROJECT_PATH` 指向现有 RAG 项目路径
+- **RAG 配置**：`RAG_COLLECTION` 选择知识库（默认 `datax_docs`）；
+  可选 `SILICONFLOW_API_KEY` 启用 API 精排
 - **日志配置**：`LOG_LEVEL` 和 `LOG_FILE`
 
-### 5. 配置现有 RAG 系统
+### 5. 初始化 RAG 知识库（可选）
 
-确保现有 RAG 系统（`F:\PycharmProjects\pyspark\MyRag`）已正确配置并运行。
+RAG 核心已内置为 `src/rag/` 子包，无需外部项目。首次使用前执行
+`python scripts/ingest_datax_docs.py` 灌库（依赖本地 ES 与 embedding 模型缓存）。
 
 ### 6. 测试连接
 

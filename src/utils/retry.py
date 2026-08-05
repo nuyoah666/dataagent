@@ -1,66 +1,17 @@
-"""重试与熔断机制。
+"""熔断机制。
 
 参考：阿里 DataWorks 的任务重试策略
-- 指数退避重试
-- 连续失败熔断
-- LLM 降级策略
+- 连续失败熔断（LLM / DataX / RAG 三个全局实例）
 """
 import time
 import logging
 import threading
-from typing import Callable, Optional
-from functools import wraps
 
 logger = logging.getLogger(__name__)
 
 
 # ================================================================== #
-#  1. 指数退避重试装饰器
-# ================================================================== #
-
-def retry_with_backoff(
-    max_retries: int = 3,
-    base_delay: float = 1.0,
-    max_delay: float = 30.0,
-    exceptions: tuple = (Exception,),
-    on_retry: Optional[Callable] = None,
-):
-    """指数退避重试装饰器。
-
-    Args:
-        max_retries: 最大重试次数
-        base_delay: 基础延迟（秒）
-        max_delay: 最大延迟（秒）
-        exceptions: 需要重试的异常类型
-        on_retry: 重试时的回调函数(attempt, exception)
-    """
-    def decorator(func):
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            last_exception = None
-            for attempt in range(max_retries + 1):
-                try:
-                    return func(*args, **kwargs)
-                except exceptions as e:
-                    last_exception = e
-                    if attempt < max_retries:
-                        delay = min(base_delay * (2 ** attempt), max_delay)
-                        logger.warning(
-                            f"[重试] {func.__name__} 第 {attempt + 1}/{max_retries} 次重试, "
-                            f"等待 {delay:.1f}s, 错误: {e}"
-                        )
-                        if on_retry:
-                            on_retry(attempt + 1, e)
-                        time.sleep(delay)
-                    else:
-                        logger.error(f"[重试] {func.__name__} 已达最大重试次数 {max_retries}")
-            raise last_exception
-        return wrapper
-    return decorator
-
-
-# ================================================================== #
-#  2. 熔断器
+#  1. 熔断器
 # ================================================================== #
 
 class CircuitBreaker:
@@ -170,7 +121,7 @@ class CircuitBreakerOpenError(Exception):
 
 
 # ================================================================== #
-#  3. 全局熔断器实例
+#  2. 全局熔断器实例
 # ================================================================== #
 
 # LLM 熔断器：连续 3 次失败后熔断，30 秒后恢复
