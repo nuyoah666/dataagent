@@ -216,6 +216,38 @@ def test_diagnosis_web_triggered_by_explicit_request(monkeypatch):
     assert state["ops_diagnosis"]["source"] == "llm+web"
 
 
+def test_ops_results_persisted_to_task_record(monkeypatch):
+    """运维诊断/处置/沉淀结果应落库，供 /ui 任务详情展示。"""
+    from src.workflow import AgentWorkflow
+
+    tm = get_task_manager()
+    task_id = _failed_task(tm)
+    monkeypatch.setattr(
+        "src.agents.ops_agent.search_ops_knowledge",
+        lambda q, top_n=5: _fake_rag(),
+    )
+    monkeypatch.setattr("src.agents.ops_agent.llm_json", lambda *a, **k: _fake_llm())
+    monkeypatch.setattr(
+        "src.agents.ops_agent.check_component_health",
+        lambda components=None: {"healthy": True, "results": {}},
+    )
+    monkeypatch.setattr(
+        "src.agents.ops_agent.add_ops_incident",
+        lambda rec, auto_ingest=False: {
+            "success": True, "incident_id": "sig1234567",
+            "action": "created", "version": 1,
+        },
+    )
+
+    r = AgentWorkflow(use_checkpointer=True, task_type="data_ops").run(
+        f"诊断任务 {task_id}", diagnose_task_id=task_id,
+    )
+    record = get_task_manager().get_task(r["_task_id"])
+    assert record["ops_diagnosis"]["root_cause"] == "网络不通"
+    assert record["ops_actions"]["health"]["healthy"] is True
+    assert record["ops_record_result"]["success"] is True
+
+
 # ---- OpsRemediationAgent ----
 
 

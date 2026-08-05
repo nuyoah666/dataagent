@@ -83,6 +83,10 @@ def _init_tables(conn: sqlite3.Connection):
             last_value TEXT,
             pipeline_id TEXT,
             parent_task_id TEXT,
+            etl_sql TEXT,
+            ops_diagnosis TEXT,
+            ops_actions TEXT,
+            ops_record_result TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             completed_at TEXT
@@ -129,6 +133,9 @@ def _migrate_tables(conn: sqlite3.Connection):
         ("pipeline_id", "TEXT"),
         ("parent_task_id", "TEXT"),
         ("etl_sql", "TEXT"),
+        ("ops_diagnosis", "TEXT"),
+        ("ops_actions", "TEXT"),
+        ("ops_record_result", "TEXT"),
     ):
         if name not in cols:
             conn.execute(f"ALTER TABLE tasks ADD COLUMN {name} {ddl}")
@@ -209,7 +216,11 @@ class TaskManager:
         kwargs["updated_at"] = datetime.now().isoformat()
 
         # JSON 序列化复杂字段
-        for key in ["parsed_intent", "source_schema", "execution_status", "validation_result", "datax_config"]:
+        for key in [
+            "parsed_intent", "source_schema", "execution_status",
+            "validation_result", "datax_config",
+            "ops_diagnosis", "ops_actions", "ops_record_result",
+        ]:
             if key in kwargs and isinstance(kwargs[key], (dict, list)):
                 # 敏感信息（数据库密码、密钥等）落库前脱敏
                 kwargs[key] = json.dumps(redact_secrets(kwargs[key]), ensure_ascii=False)
@@ -337,7 +348,11 @@ class TaskManager:
     @staticmethod
     def _deserialize_row(result: Dict[str, Any]) -> Dict[str, Any]:
         """反序列化 JSON 字段。"""
-        for key in ["parsed_intent", "source_schema", "execution_status", "validation_result", "datax_config"]:
+        for key in [
+            "parsed_intent", "source_schema", "execution_status",
+            "validation_result", "datax_config",
+            "ops_diagnosis", "ops_actions", "ops_record_result",
+        ]:
             if result.get(key):
                 try:
                     result[key] = json.loads(result[key])

@@ -261,6 +261,15 @@ class AgentWorkflow:
                     self.task_mgr.complete_task(
                         task_id, TaskStatus.FAILED, error=final.get("error")
                     )
+            # 运维任务：把诊断/处置/沉淀结果持久化到任务记录，供 UI 详情展示
+            if self.task_type == "data_ops":
+                ops_fields = {
+                    "ops_diagnosis": final.get("ops_diagnosis"),
+                    "ops_actions": final.get("ops_actions"),
+                    "ops_record_result": final.get("ops_record_result"),
+                }
+                if any(v is not None for v in ops_fields.values()):
+                    self.task_mgr.update_task(task_id, **ops_fields)
             # 增量任务成功后更新水位
             if (
                 (final.get("validation_result") or {}).get("success")

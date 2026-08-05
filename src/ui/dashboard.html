@@ -306,11 +306,35 @@ async function showDetail(taskId) {
       `<div class="tl-item"><span class="t">${fmtTime(l.created_at)}</span>${escapeHtml(l.action)}
        <span class="d">${escapeHtml(l.operator)}</span><div class="audit-detail">${escapeHtml(l.detail || '')}</div></div>`
     ).join('');
+    const diag = task.ops_diagnosis ? `
+      <div class="section-title">运维诊断</div>
+      <div>根因：<b>${escapeHtml(task.ops_diagnosis.root_cause || '')}</b></div>
+      <div style="margin-top:4px">影响：${escapeHtml(task.ops_diagnosis.impact || '')}</div>
+      <div>置信度：${task.ops_diagnosis.confidence ?? ''}（来源：${escapeHtml(task.ops_diagnosis.source || '')}）</div>
+      <div style="margin-top:4px">处置步骤：
+        <ol>${(task.ops_diagnosis.solution_steps || []).map(s => `<li>${escapeHtml(s)}</li>`).join('')}</ol>
+      </div>
+      ${(task.ops_diagnosis.related_links || []).length ? `<div>参考链接：${task.ops_diagnosis.related_links.map(l =>
+        `<a href="${escapeHtml(l.url)}" target="_blank" rel="noopener">${escapeHtml(l.title || l.url)}</a>`).join(' · ')}</div>` : ''}` : '';
+    const opsAct = task.ops_actions ? `
+      <div class="section-title">处置动作</div>
+      ${task.ops_actions.health ? `<div>组件健康：${task.ops_actions.health.healthy ? '✅' : '❌'} ${
+        Object.entries(task.ops_actions.health.results || {}).map(([k, v]) =>
+          `${k}:${v.ok ? '✅' : '❌'}`).join(' ')}</div>` : ''}
+      ${(task.ops_actions.actions || []).map(a =>
+        `<div>· ${escapeHtml(a.action)}：${escapeHtml(JSON.stringify(a.result || {}).slice(0, 300))}</div>`).join('')}
+    ` : '';
+    const opsRec = task.ops_record_result ? `
+      <div class="section-title">事故沉淀</div>
+      <div>${escapeHtml(task.ops_record_result.summary || '')}</div>` : '';
     $('detailBody').innerHTML = `
       <div>指令：<b>${escapeHtml(task.user_query)}</b></div>
       <div style="margin-top:6px">状态：<span class="tag ${task.status}">${statusText(task.status)}</span>
         创建 ${fmtTime(task.created_at)} · 完成 ${fmtTime(task.completed_at) || '—'} · 耗时 ${durationSec(task.created_at, task.completed_at)}</div>
       <div class="section-title">阶段时间线</div>${tl}
+      ${diag}
+      ${opsAct}
+      ${opsRec}
       <div class="section-title">审计记录</div>
       ${audits || '<div class="empty">（无审计）</div>'}
       <div class="section-title">错误信息</div>
@@ -329,9 +353,13 @@ async function doReject(id) { if (!confirm('确认拒绝执行该任务？')) re
 async function doRetry(id) { if (!confirm('确认重试该任务？')) return;
   try { const r = await api('/tasks/' + id + '/retry', {method:'POST'}); alert('已提交重试: ' + r.task_id); } catch(e) { alert(e.message); } load(); }
 async function doDiagnose(id) {
-  alert('运维诊断执行中（约 1-3 分钟），完成后请刷新查看诊断结果');
-  try { await api('/ops/diagnose', {method:'POST', headers:Object.assign({'Content-Type':'application/json'}, headers()), body: JSON.stringify({task_id: id})}); } catch(e) { alert(e.message); }
-  showDetail(id); }
+  alert('运维诊断执行中（约 1-3 分钟），完成后自动打开诊断详情');
+  try {
+    const r = await api('/ops/diagnose', {method:'POST', headers:Object.assign({'Content-Type':'application/json'}, headers()), body: JSON.stringify({task_id: id})});
+    load();
+    if (r && r.task_id) showDetail(r.task_id);
+  } catch(e) { alert(e.message); }
+}
 
 document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
   document.querySelectorAll('.tabs button').forEach(x => x.classList.remove('active'));
