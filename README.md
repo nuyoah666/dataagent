@@ -3,7 +3,7 @@
 基于 LangChain + LangGraph 构建的智能化数仓多 Agent 协作平台，
 通过自然语言指令完成数据集成、ETL 加工、运维诊断等数仓工作流。
 
-![CI](https://img.shields.io/github/actions/workflow/status/YOUR_GITHUB_USERNAME/dataagent/ci.yml?branch=main&label=CI)
+![CI](https://img.shields.io/github/actions/workflow/status/nuyoah69/dataagent/ci.yml?branch=main&label=CI)
 
 ## 核心特性
 
@@ -351,7 +351,8 @@ Agent 配置阶段会检索 DataX 官方文档 + 本项目踩坑经验，用于�
   `{root_cause, impact, solution_steps, related_incidents, related_links, confidence}`；
   本地知识库命中不足或用户显式要求（"搜索/查一下"）时触发 **Web 搜索兜底**
   （`WEB_SEARCH_PROVIDER`：duckduckgo/tavily），结果带引用注入诊断，
-  发送前自动脱敏 + 熔断 + 超时降级；LLM/RAG 不可用时规则兜底，链路不中断
+  发送前自动脱敏 + 熔断 + 超时降级；duckduckgo 为非官方端点（免费但可能限流，
+  空结果自动重试一次），生产建议 Tavily；LLM/RAG 不可用时规则兜底，链路不中断
 - **处置**：组件健康检查（MySQL/MongoDB/ES/StarRocks/DataX，只读短超时）；
   指令含"重试"时实际重试、含"清理"时终止 DataX 进程树，否则只给建议（安全第一）
 - **沉淀**：自动生成事故记录（`OPS_AUTO_RECORD=false` 可关闭），

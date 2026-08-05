@@ -39,12 +39,12 @@ class TestETLIntent:
 
 
 class _FakeLLM:
-    """模拟 LLM：invoke 返回固定 content。"""
+    """模拟 LLM：invoke 返回固定 content（与 llm_json 直接调用 invoke 对齐）。"""
 
     def __init__(self, content: str):
         self._content = content
 
-    def __call__(self, inputs):
+    def invoke(self, messages):
         return SimpleNamespace(content=self._content)
 
 

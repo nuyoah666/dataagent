@@ -77,13 +77,13 @@ def llm_json(
 
 
 def _invoke_json(system: str, human: str, llm: Any) -> Dict[str, Any]:
-    from langchain_core.prompts import ChatPromptTemplate
+    from langchain_core.messages import HumanMessage, SystemMessage
 
     runnable = llm if llm is not None else get_llm()
-    result = (
-        ChatPromptTemplate.from_messages([("system", system), ("human", human)])
-        | runnable
-    ).invoke({})
+    # 注意：必须传纯消息对象而非 ("system", text) 元组——
+    # 元组会被 ChatPromptTemplate 当作模板解析，提示词里的 JSON 大括号
+    # （如 {"source_db_type": ...}）会被误识别为模板变量导致调用失败。
+    result = runnable.invoke([SystemMessage(content=system), HumanMessage(content=human)])
     content = getattr(result, "content", str(result))
     m = re.search(r"\{.*\}", content, re.DOTALL)
     if not m:

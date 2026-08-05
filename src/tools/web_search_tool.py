@@ -13,6 +13,7 @@
 import html as html_mod
 import logging
 import re
+import time
 
 import requests
 
@@ -64,7 +65,16 @@ def search_web(query: str, top_n: int = 5, timeout: int = 10) -> dict:
 
 
 def _duckduckgo(query: str, top_n: int, timeout: int) -> list[dict]:
-    """DuckDuckGo HTML 端点（无 key，免费；结果结构可能随上游变化）。"""
+    """DuckDuckGo HTML 端点（无 key，免费；偶发限流/反爬返回空页，重试一次）。"""
+    results = _ddg_search(query, top_n, timeout)
+    if not results:
+        logger.warning("DDG 首次检索为空（可能限流），1.5s 后重试一次")
+        time.sleep(1.5)
+        results = _ddg_search(query, top_n, timeout)
+    return results
+
+
+def _ddg_search(query: str, top_n: int, timeout: int) -> list[dict]:
     resp = requests.get(
         "https://html.duckduckgo.com/html/",
         params={"q": query},
