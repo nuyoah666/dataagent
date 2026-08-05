@@ -3,6 +3,7 @@
 读取事故记录存储（data/ops_incidents/incidents.jsonl，每行一条），
 规范化成「现象/影响/根因/解决 + 中英关键词」的结构化双语条目，
 输出 src/rag 可直接灌库的 JSONL 语料（每行 {source, heading, text}）。
+版本化：同一 incident_id 多版本时**只输出最新版**，避免旧方案污染检索。
 
 设计意图（运维 Agent 的工作记忆）：
   - 运维 Agent 在排查/修复过程中通过 add_ops_incident() 动态写入记录；
@@ -43,6 +44,7 @@ FIELD_LABELS = {
     "root_cause": "根因",
     "solution": "解决",
     "source": "来源",
+    "related_links": "相关链接",
 }
 
 # 常见英文噪音词（不进入关键词行）
@@ -73,6 +75,17 @@ def load_incidents(store: Path) -> list[dict]:
     return records
 
 
+def _latest_records(records: list[dict]) -> dict:
+    """按 incident_id 取最新版本（版本号优先，缺省按出现顺序取最后）。"""
+    latest: dict[str, dict] = {}
+    for rec in records:
+        iid = rec["incident_id"]
+        cur = latest.get(iid)
+        if cur is None or int(rec.get("version", 1)) > int(cur.get("version", 1)):
+            latest[iid] = rec
+    return latest
+
+
 def _english_tokens(text: str) -> list[str]:
     tokens = re.findall(r"[A-Za-z][A-Za-z0-9_.\-]{2,}", text or "")
     return [t for t in tokens if t.lower() not in _NOISE]
@@ -98,10 +111,15 @@ def incident_to_text(rec: dict) -> str:
     for k in ("component", "severity", "status", "occurred_at"):
         if rec.get(k):
             meta.append(f"{FIELD_LABELS[k]}：{rec[k]}")
+    if rec.get("version") or rec.get("updated_at"):
+        version_txt = f"v{rec.get('version', 1)}"
+        if rec.get("updated_at"):
+            version_txt += f"（更新于 {rec['updated_at']}）"
+        meta.append(f"版本：{version_txt}")
     if meta:
         parts.append("【" + "】".join(meta) + "】")
 
-    for k in ("symptom", "impact", "root_cause", "solution", "source"):
+    for k in ("symptom", "impact", "root_cause", "solution", "source", "related_links"):
         if rec.get(k):
             parts.append(f"【{FIELD_LABELS[k]}】{rec[k]}")
 
@@ -121,7 +139,9 @@ def incident_to_text(rec: dict) -> str:
 
 def build_corpus(store: Path, out: Path) -> dict:
     out.mkdir(parents=True, exist_ok=True)
-    records = load_incidents(store)
+    all_records = load_incidents(store)
+    # 只取每个 incident_id 的最新版本（旧版本保留在账本，但不再进入检索）
+    records = list(_latest_records(all_records).values())
     entries = [
         {
             "source": f"ops_incident/{rec['incident_id']}",
@@ -142,6 +162,7 @@ def build_corpus(store: Path, out: Path) -> dict:
         "built_at": datetime.now().isoformat(timespec="seconds"),
         "incidents": len(records),
         "entries": len(entries),
+        "total_versions": len(all_records),
     }
     (out / "MANIFEST.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8",

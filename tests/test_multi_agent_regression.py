@@ -5,6 +5,7 @@
 校验系统在大量边界条件下的鲁棒性与稳定性。
 """
 
+import hashlib
 import json
 from types import SimpleNamespace
 
@@ -103,7 +104,6 @@ def _fake_rag():
 def ops_mocks(monkeypatch, tmp_path):
     """运维 Agent 的外部依赖全部打桩，事故写入落到 tmp 存储。"""
     store = tmp_path / "ops_incidents" / "incidents.jsonl"
-    monkeypatch.setattr("src.agents.ops_agent._store_path", lambda: store)
     monkeypatch.setattr(
         "src.agents.ops_agent.search_ops_knowledge",
         lambda q, top_n=5: _fake_rag(),
@@ -117,14 +117,26 @@ def ops_mocks(monkeypatch, tmp_path):
         },
     )
     captured = {}
+    written = {}
 
     def _fake_add(record, auto_ingest=False):
         captured["record"] = record
-        # 模拟真实行为：记录写入存储（去重逻辑依赖存储中的历史记录）
+        # 模拟真实行为：问题签名稳定 + 内容未变化时 noop（版本化去重）
+        iid = "sig" + hashlib.md5(
+            f"{record.get('component', '')}|{record.get('title', '')}".encode()
+        ).hexdigest()[:7]
+        snapshot = (
+            record.get("status"), record.get("symptom"),
+            record.get("impact"), record.get("root_cause"),
+            record.get("solution"), json.dumps(record.get("related_links") or []),
+        )
+        if written.get(iid) == snapshot:
+            return {"success": True, "incident_id": iid, "action": "noop", "version": 1}
+        written[iid] = snapshot
         store.parent.mkdir(parents=True, exist_ok=True)
         with open(store, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
-        return {"success": True, "incident_id": record["incident_id"]}
+        return {"success": True, "incident_id": iid, "action": "created", "version": 1}
 
     monkeypatch.setattr("src.agents.ops_agent.add_ops_incident", _fake_add)
     return captured
@@ -169,7 +181,7 @@ def test_failed_integration_then_ops_diagnose_and_record(
     assert r2["ops_actions"]["health"]["healthy"] is True
     assert r2["ops_record_result"]["success"] is True
     # 事故已沉淀
-    assert ops_mocks["record"]["title"].startswith(failed_id)
+    assert "故障" in ops_mocks["record"]["title"]
     assert ops_mocks["record"]["symptom"].startswith(f"任务 {failed_id} 失败")
 
 
@@ -213,8 +225,6 @@ def test_ops_survives_rag_and_llm_down(monkeypatch, tmp_path):
     wf = AgentWorkflow(use_checkpointer=True, task_type="data_integration")
     failed_id = wf.run("把 MySQL 的 t1 表同步到 ES")["_task_id"]
 
-    store = tmp_path / "incidents.jsonl"
-    monkeypatch.setattr("src.agents.ops_agent._store_path", lambda: store)
     monkeypatch.setattr(
         "src.agents.ops_agent.search_ops_knowledge",
         lambda q, top_n=5: {"success": False, "error": "ES 不可用", "results": []},
@@ -231,7 +241,9 @@ def test_ops_survives_rag_and_llm_down(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(
         "src.agents.ops_agent.add_ops_incident",
-        lambda rec, auto_ingest=False: {"success": True, "incident_id": rec["incident_id"]},
+        lambda rec, auto_ingest=False: {
+            "success": True, "incident_id": "sig1234567", "action": "created", "version": 1,
+        },
     )
 
     ops = AgentWorkflow(use_checkpointer=True, task_type="data_ops")
@@ -271,7 +283,7 @@ def test_ops_repeated_diagnosis_dedups_incident(monkeypatch, ops_mocks):
     r2 = ops.run(f"诊断任务 {failed_id} 再查一次", diagnose_task_id=failed_id)
     assert r2["current_step"] == "validation_complete"
     assert r2["ops_record_result"]["incident_id"] is None
-    assert ops_mocks["record"]["incident_id"] == first_id  # 未被覆盖
+    assert "incident_id" not in ops_mocks["record"]  # 版本化签名由知识库工具生成
 
 
 # ---- 3. API 层协作 ----
@@ -284,7 +296,6 @@ def api_ops_env(monkeypatch, tmp_path):
     monkeypatch.setitem(steps, "config", _OkConfig)
     monkeypatch.setitem(steps, "execution", _OkExec)
     monkeypatch.setitem(steps, "validation", _OkValidation)
-    monkeypatch.setattr("src.agents.ops_agent._store_path", lambda: tmp_path / "incidents.jsonl")
     monkeypatch.setattr("src.agents.ops_agent.search_ops_knowledge", lambda q, top_n=5: _fake_rag())
     monkeypatch.setattr("src.agents.ops_agent.llm_json", lambda *a, **k: _fake_llm())
     monkeypatch.setattr(
@@ -293,7 +304,9 @@ def api_ops_env(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(
         "src.agents.ops_agent.add_ops_incident",
-        lambda rec, auto_ingest=False: {"success": True, "incident_id": rec["incident_id"]},
+        lambda rec, auto_ingest=False: {
+            "success": True, "incident_id": "sig1234567", "action": "created", "version": 1,
+        },
     )
     api._workflows.clear()
     yield

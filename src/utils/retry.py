@@ -144,3 +144,10 @@ rag_circuit_breaker = CircuitBreaker(
     recovery_timeout=120.0,
     name="rag",
 )
+
+# Web 搜索熔断器：连续 3 次失败后熔断，60 秒后恢复
+web_circuit_breaker = CircuitBreaker(
+    failure_threshold=3,
+    recovery_timeout=60.0,
+    name="web",
+)

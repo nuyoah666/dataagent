@@ -148,6 +148,74 @@ def test_diagnosis_rag_down_still_works(monkeypatch):
     assert state["ops_diagnosis"]["rag_hits"] == []
 
 
+def test_diagnosis_web_fallback_when_kb_miss(monkeypatch):
+    from src.config import config
+
+    tm = get_task_manager()
+    task_id = _failed_task(tm)
+    monkeypatch.setattr(
+        "src.agents.ops_agent.search_ops_knowledge",
+        lambda q, top_n=5: {"success": True, "results": [], "context_str": ""},
+    )
+    captured = {}
+
+    def _llm(system, human, llm=None, breaker=None):
+        captured["human"] = human
+        return _fake_llm(
+            '{"root_cause":"网络不通","impact":"同步失败",'
+            '"solution_steps":["检查网络"],"related_incidents":[],'
+            '"related_links":[{"title":"SO","url":"https://example.com/a"}],'
+            '"confidence":0.6}'
+        )
+
+    monkeypatch.setattr("src.agents.ops_agent.llm_json", _llm)
+    monkeypatch.setattr(
+        "src.agents.ops_agent.search_web",
+        lambda q, top_n=5: {
+            "success": True,
+            "results": [
+                {"title": "StackOverflow", "url": "https://example.com/a", "snippet": "方案"},
+            ],
+        },
+    )
+    monkeypatch.setattr(config, "WEB_SEARCH_PROVIDER", "duckduckgo")
+
+    state = OpsDiagnosisAgent().run(_base_state(task_id))
+    d = state["ops_diagnosis"]
+    assert d["source"] == "llm+web"
+    assert d["related_links"][0]["url"] == "https://example.com/a"
+    assert "网络检索结果" in captured["human"]
+
+
+def test_diagnosis_web_triggered_by_explicit_request(monkeypatch):
+    from src.config import config
+
+    tm = get_task_manager()
+    task_id = _failed_task(tm)
+    monkeypatch.setattr(
+        "src.agents.ops_agent.search_ops_knowledge",
+        lambda q, top_n=5: {
+            "success": True,
+            "context_str": "ctx",
+            "results": [
+                {"index": 1, "content": "历史事故", "source": "ops_incident/incident-001", "score": 0.9},
+            ],
+        },
+    )
+    monkeypatch.setattr("src.agents.ops_agent.llm_json", lambda *a, **k: _fake_llm())
+    monkeypatch.setattr(
+        "src.agents.ops_agent.search_web",
+        lambda q, top_n=5: {"success": True, "results": [{"title": "T", "url": "https://e.com", "snippet": "s"}]},
+    )
+    monkeypatch.setattr(config, "WEB_SEARCH_PROVIDER", "tavily")
+
+    state = OpsDiagnosisAgent().run({
+        **_base_state(task_id),
+        "user_query": f"诊断任务 {task_id}，帮我搜索一下网上方案",
+    })
+    assert state["ops_diagnosis"]["source"] == "llm+web"
+
+
 # ---- OpsRemediationAgent ----
 
 
@@ -209,10 +277,9 @@ def test_record_creates_incident(monkeypatch, tmp_path):
 
     def _fake_add(record, auto_ingest=False):
         captured["record"] = record
-        return {"success": True, "incident_id": record["incident_id"]}
+        return {"success": True, "incident_id": "sig1234567", "action": "created", "version": 1}
 
     monkeypatch.setattr("src.agents.ops_agent.add_ops_incident", _fake_add)
-    monkeypatch.setattr("src.agents.ops_agent._store_path", lambda: tmp_path / "incidents.jsonl")
 
     state = OpsRecordAgent().run({
         **_base_state(task_id),
@@ -223,37 +290,32 @@ def test_record_creates_incident(monkeypatch, tmp_path):
         "ops_actions": {"health": {"healthy": False, "results": {}}},
     })
     assert state["current_step"] == "validation_complete"
-    assert state["ops_record_result"]["incident_id"].startswith("incident-")
+    assert state["ops_record_result"]["incident_id"] == "sig1234567"
     rec = captured["record"]
-    assert rec["title"].startswith(task_id)
+    assert "ELASTICSEARCH 故障" in rec["title"]  # 组件级问题标题（不含 task_id）
+    assert "网络不通" in rec["title"]
     assert rec["severity"] == "high"  # 健康检查未通过 -> high
     assert rec["root_cause"] == "网络不通"
+    assert "incident_id" not in rec  # 版本化签名由知识库工具自动生成
 
 
-def test_record_dedup_open_incident(monkeypatch, tmp_path):
+def test_record_noop_when_content_unchanged(monkeypatch):
     tm = get_task_manager()
     task_id = _failed_task(tm)
     calls = []
-    store = tmp_path / "incidents.jsonl"
-    store.write_text(
-        json.dumps({
-            "incident_id": "incident-dup", "title": f"{task_id} 失败诊断: 网络不通",
-            "status": "open",
-        }, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setattr("src.agents.ops_agent._store_path", lambda: store)
     monkeypatch.setattr(
         "src.agents.ops_agent.add_ops_incident",
-        lambda rec, auto_ingest=False: calls.append(rec) or {"success": True, "incident_id": "x"},
+        lambda rec, auto_ingest=False: calls.append(rec)
+        or {"success": True, "incident_id": "sig1234567", "action": "noop", "version": 1},
     )
     state = OpsRecordAgent().run({
         **_base_state(task_id),
         "ops_diagnosis": {"root_cause": "网络不通", "impact": "", "solution_steps": []},
         "ops_actions": {},
     })
-    assert state["ops_record_result"]["incident_id"] is None  # 去重跳过
-    assert calls == []
+    assert state["ops_record_result"]["incident_id"] is None  # 内容未变化 -> noop 跳过
+    assert len(calls) == 1
+    assert "跳过" in state["ops_record_result"]["summary"]
 
 
 def test_record_disabled_by_env(monkeypatch):

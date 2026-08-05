@@ -51,9 +51,9 @@ def _fake_llm(monkeypatch, intent_json, sql_json):
     state = {"calls": 0}
 
     def _stub(system, human, llm=None, breaker=None):
-        # 调用顺序固定：先意图解析，后 SQL 生成
+        # 按 system prompt 分发：SQL 生成 vs 意图解析（规则优先后调用顺序不固定）
         state["calls"] += 1
-        content = sql_json if state["calls"] >= 2 else intent_json
+        content = sql_json if "可执行的加工 SQL" in system else intent_json
         return json.loads(content)
 
     monkeypatch.setattr(etl_mod, "llm_json", _stub)

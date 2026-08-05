@@ -348,15 +348,19 @@ Agent 配置阶段会检索 DataX 官方文档 + 本项目踩坑经验，用于�
 对失败/取消的任务做故障诊断，并把诊断结果沉淀为事故知识（知识库自动增长闭环）：
 
 - **诊断**：收集任务错误 + 日志尾部 → 检索 `ops_incident` 事故库 → LLM 生成
-  `{root_cause, impact, solution_steps, related_incidents, confidence}`，
-  LLM/RAG 不可用时自动降级为规则兜底，链路不中断
+  `{root_cause, impact, solution_steps, related_incidents, related_links, confidence}`；
+  本地知识库命中不足或用户显式要求（"搜索/查一下"）时触发 **Web 搜索兜底**
+  （`WEB_SEARCH_PROVIDER`：duckduckgo/tavily），结果带引用注入诊断，
+  发送前自动脱敏 + 熔断 + 超时降级；LLM/RAG 不可用时规则兜底，链路不中断
 - **处置**：组件健康检查（MySQL/MongoDB/ES/StarRocks/DataX，只读短超时）；
   指令含"重试"时实际重试、含"清理"时终止 DataX 进程树，否则只给建议（安全第一）
 - **沉淀**：自动生成事故记录（`OPS_AUTO_RECORD=false` 可关闭），
-  同标题未解决事故自动去重；记录写入后增量灌库立即可检索
+  **版本化**：同一问题（组件+归一化标题签名）内容变化时升版追加，账本 append-only，
+  检索索引只投影最新版，旧方案不会污染诊断；记录写入后增量灌库立即可检索
 - **API**：`POST /ops/diagnose {"task_id": "..."}` 或自然语言
   `python -m src.main "诊断任务 <task_id>"` / `"帮我排查故障"`
-- 已注册工具：`check_component_health` / `retry_failed_task` / `kill_datax_process_tree`
+- 已注册工具：`check_component_health` / `retry_failed_task` /
+  `kill_datax_process_tree` / `web_search`
 - 进程树终止（Windows `taskkill /T` / POSIX `killpg`）保证取消/超时/清理不残留 Java 子进程
 
 ## 路线图

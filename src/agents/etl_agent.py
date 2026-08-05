@@ -90,6 +90,11 @@ class ETLConfigAgent(BaseAgent):
     # ---- 内部实现 ----
 
     def _parse_intent(self, user_query: str) -> dict:
+        # 规则优先：ETL 意图只有 4 个结构化字段，规则能解析就不调 LLM
+        # （与意图路由器"规则优先、LLM 兜底"同一哲学）
+        rule_intent = self._rule_intent(user_query)
+        if rule_intent.get("source_table") and rule_intent.get("target_table"):
+            return rule_intent
         try:
             data = llm_json(
                 "你是数仓 ETL 专家。解析加工指令，返回 JSON（仅 JSON）：\n"
@@ -103,15 +108,16 @@ class ETLConfigAgent(BaseAgent):
             return ETLIntent.model_validate(data).model_dump()
         except LLMJsonError as e:
             logger.warning(f"ETL 意图解析失败: {e}")
-        return self._fallback_intent(user_query)
+        return rule_intent
 
     @staticmethod
-    def _fallback_intent(text: str) -> dict:
+    def _rule_intent(text: str) -> dict:
+        """规则解析：把/将 X 加工/清洗到 Y + 加工类型关键词。"""
         intent = {
             "source_table": "", "target_table": "", "database": "",
             "transform_type": "clean",
         }
-        m = re.search(r"把\s*(\w+)\s*加工到\s*(\w+)", text)
+        m = re.search(r"(?:把|将)\s*(\w+)\s*(?:加工|清洗|汇总|聚合|同步)到\s*(\w+)", text)
         if m:
             intent["source_table"] = m.group(1)
             intent["target_table"] = m.group(2)
@@ -119,6 +125,8 @@ class ETLConfigAgent(BaseAgent):
             intent["transform_type"] = "aggregate"
         elif "宽表" in text:
             intent["transform_type"] = "wide_table"
+        elif "清洗" in text:
+            intent["transform_type"] = "clean"
         return intent
 
     def _get_source_schema(self, intent: dict) -> dict:

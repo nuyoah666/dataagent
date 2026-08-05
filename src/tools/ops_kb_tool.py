@@ -1,16 +1,22 @@
-"""运维事故知识库工具。
+"""运维事故知识库工具（版本化）。
 
 面向未来的运维 Agent：排查/修复过程中把问题、影响、解决动态写入
 事故知识库（ops_incident collection），下次遇到同类问题可检索复用。
 
+版本模型（三层各司其职）：
+  - incidents.jsonl        : 事实账本，append-only，每次更新追加一行新版本
+  - incident_id + version  : 稳定逻辑主键（问题签名哈希）+ 自增版本号
+  - ES 索引                : 只投影最新版（语料构建只吐最新版，避免旧方案污染检索）
+
 写入链路：
-  add_ops_incident() -> 事故存储 incidents.jsonl（源事实）
-                     -> build_ops_corpus 生成语料
+  add_ops_incident() -> 事故存储 incidents.jsonl（追加新版本）
+                     -> build_ops_corpus 生成最新版语料
                      -> src/rag 增量灌库（可选 auto_ingest，默认关闭）
 检索链路：
   search_ops_knowledge() -> RAGTool(ops_incident) 纯召回（BM25+向量+RRF）
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -28,10 +34,12 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_STORE = PROJECT_ROOT / "data" / "ops_incidents" / "incidents.jsonl"
 
-REQUIRED_FIELDS = ("incident_id", "title", "symptom")
+REQUIRED_FIELDS = ("title", "symptom")
 ALLOWED_FIELDS = {
     "incident_id", "title", "component", "severity", "status", "occurred_at",
     "symptom", "impact", "root_cause", "solution", "keywords", "source",
+    "version", "updated_at", "supersedes_version", "change_summary",
+    "related_links",
 }
 SEVERITIES = {"low", "medium", "high", "critical"}
 STATUSES = {"open", "investigating", "resolved", "recurred"}
@@ -66,6 +74,36 @@ def _load_records(store: Path) -> list[dict]:
     return records
 
 
+def _latest_records(records: list[dict]) -> dict:
+    """按 incident_id 取最新版本（版本号优先，缺省按出现顺序取最后）。"""
+    latest: dict[str, dict] = {}
+    for rec in records:
+        iid = rec["incident_id"]
+        cur = latest.get(iid)
+        if cur is None or int(rec.get("version", 1)) > int(cur.get("version", 1)):
+            latest[iid] = rec
+    return latest
+
+
+def _problem_signature(record: dict) -> str:
+    """问题签名：组件 + 归一化标题的哈希，同源问题跨任务稳定。"""
+    title = re.sub(r"[\W_]+", "", str(record.get("title", "")).lower())
+    component = str(record.get("component", "")).strip().lower()
+    return hashlib.md5(f"{component}|{title}".encode()).hexdigest()[:10]
+
+
+def _content_snapshot(rec: dict) -> tuple:
+    """内容快照：用于判断"更新"是否真的发生（避免无意义升版）。"""
+    return (
+        str(rec.get("status", "")),
+        str(rec.get("symptom", "")),
+        str(rec.get("impact", "")),
+        str(rec.get("root_cause", "")),
+        str(rec.get("solution", "")),
+        json.dumps(rec.get("related_links") or [], ensure_ascii=False, sort_keys=True),
+    )
+
+
 def _save_records(store: Path, records: list[dict]) -> None:
     store.parent.mkdir(parents=True, exist_ok=True)
     tmp = store.with_suffix(".jsonl.tmp")
@@ -83,10 +121,14 @@ def _normalize(record: dict) -> tuple[dict, Optional[str]]:
     if missing:
         return {}, f"缺少必填字段: {', '.join(missing)}"
 
-    iid = str(rec["incident_id"]).strip()
-    if not re.fullmatch(r"[\w-]+", iid):
-        return {}, f"非法 incident_id: {iid!r}（只允许字母数字下划线连字符）"
-    rec["incident_id"] = iid
+    if rec.get("incident_id"):
+        iid = str(rec["incident_id"]).strip()
+        if not re.fullmatch(r"[\w-]+", iid):
+            return {}, f"非法 incident_id: {iid!r}（只允许字母数字下划线连字符）"
+        rec["incident_id"] = iid
+    else:
+        # 未指定时按问题签名自动生成（跨任务/跨版本稳定）
+        rec["incident_id"] = _problem_signature(rec)
     rec["title"] = str(rec["title"]).strip()
 
     if rec.get("severity"):
@@ -101,6 +143,22 @@ def _normalize(record: dict) -> tuple[dict, Optional[str]]:
         rec["status"] = st
     if not rec.get("occurred_at"):
         rec["occurred_at"] = datetime.now().isoformat(timespec="seconds")
+    if rec.get("version") is not None:
+        try:
+            rec["version"] = int(rec["version"])
+        except (TypeError, ValueError):
+            return {}, "version 必须是整数"
+    if rec.get("related_links") is not None:
+        links = rec["related_links"]
+        if not isinstance(links, list) or not all(
+            isinstance(l, dict) and isinstance(l.get("url"), str)
+            for l in links
+        ):
+            return {}, "related_links 必须是 [{'title','url'}] 列表"
+        rec["related_links"] = [
+            {"title": str(l.get("title", ""))[:200], "url": l["url"][:500]}
+            for l in links if l.get("url")
+        ][:10]
     if rec.get("keywords") is not None:
         if not isinstance(rec["keywords"], list) or not all(
             isinstance(k, str) for k in rec["keywords"]
@@ -115,15 +173,17 @@ def add_ops_incident(
     record: Dict[str, Any],
     auto_ingest: bool = False,
 ) -> Dict[str, Any]:
-    """写入/更新一条运维事故记录（按 incident_id upsert）。
+    """写入/更新一条运维事故记录（版本化：同 incident_id 内容变化才升版追加）。
 
     Args:
-        record: 事故记录，必填 incident_id/title/symptom，
-                可选 component/severity/status/impact/root_cause/solution/keywords
+        record: 事故记录，必填 title/symptom（incident_id 缺省按问题签名生成），
+                可选 component/severity/status/impact/root_cause/solution/
+                keywords/related_links
         auto_ingest: 是否立即增量灌库（默认 False，由运维 Agent 决定）
 
     Returns:
-        {success, incident_id, action: created|updated, ingested, warning?}
+        {success, incident_id, version, action: created|updated|noop,
+         ingested, warning?}
     """
     rec, err = _normalize(record)
     if err:
@@ -133,11 +193,29 @@ def add_ops_incident(
     store = _store_path()
     with _lock:
         records = _load_records(store)
-        idx = next((i for i, r in enumerate(records) if r["incident_id"] == iid), None)
-        action = "updated" if idx is not None else "created"
-        if idx is not None:
-            records[idx] = rec
+        existing = [r for r in records if r["incident_id"] == iid]
+        if not existing:
+            rec["version"] = 1
+            rec.setdefault("updated_at", datetime.now().isoformat(timespec="seconds"))
+            action = "created"
+            records.append(rec)
         else:
+            latest = max(existing, key=lambda r: int(r.get("version", 1)))
+            if _content_snapshot(rec) == _content_snapshot(latest):
+                # 内容未变化：不升版、不追加（幂等）
+                return {
+                    "success": True, "incident_id": iid,
+                    "version": int(latest.get("version", 1)),
+                    "action": "noop", "ingested": False,
+                }
+            rec["version"] = int(latest.get("version", 1)) + 1
+            rec["supersedes_version"] = int(latest.get("version", 1))
+            rec.setdefault("updated_at", datetime.now().isoformat(timespec="seconds"))
+            rec.setdefault(
+                "change_summary",
+                "状态/内容更新（复发或根因修正）",
+            )
+            action = "updated"
             records.append(rec)
         _save_records(store, records)
 
@@ -161,6 +239,7 @@ def add_ops_incident(
     return {
         "success": True,
         "incident_id": iid,
+        "version": rec["version"],
         "action": action,
         "ingested": ingested,
     }

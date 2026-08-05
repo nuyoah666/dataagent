@@ -206,7 +206,6 @@ def test_ops_not_gated(monkeypatch):
         "src.agents.ops_agent.add_ops_incident",
         lambda rec, auto_ingest=False: {"success": True, "incident_id": "x"},
     )
-    monkeypatch.setattr("src.agents.ops_agent._store_path", lambda: __import__("pathlib").Path("C:/nonexistent"))
 
     wf = AgentWorkflow(use_checkpointer=True, task_type="data_ops")
     result = wf.run(f"诊断任务 {failed_id}", diagnose_task_id=failed_id)

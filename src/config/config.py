@@ -71,6 +71,11 @@ class Config:
     # 精排（可选）：配置后启用 SiliconFlow API rerank
     SILICONFLOW_API_KEY: str = os.getenv("SILICONFLOW_API_KEY", "")
 
+    # ---- Web 搜索（运维 Agent 第二层兜底，可选）----
+    # none | duckduckgo（免费无 key）| tavily（需 TAVILY_API_KEY）
+    WEB_SEARCH_PROVIDER: str = os.getenv("WEB_SEARCH_PROVIDER", "none")
+    TAVILY_API_KEY: str = os.getenv("TAVILY_API_KEY", "")
+
     # ---- 按 Agent 模型覆盖（可选）----
     # 缺省为空 => 对应 Agent 使用全局 LLM_MODEL；
     # 配置后仅该任务类型的 Agent 使用指定模型（如意图解析用便宜模型、运维诊断用强模型）
