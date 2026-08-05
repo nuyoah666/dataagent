@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -213,7 +213,7 @@ async def chat_submit(req: ChatSubmitRequest):
         raise HTTPException(status_code=422, detail=routed.message or "无法识别任务类型")
 
     tm = get_task_manager()
-    task_id = tm.create_task(query)
+    task_id = tm.create_task(query, task_type=routed.task_type)
     tm.update_task(task_id, current_step="submitted")
     tm.log(task_id, "INFO", f"已提交（{routed.task_type}，来源={routed.source}）")
 
@@ -305,8 +305,32 @@ async def list_tasks(limit: int = 20):
     return {"tasks": tm.get_task_history(limit)}
 
 @app.get("/tasks/detail")
-async def list_tasks_detail(limit: int = 100):
-    """dashboard 全链路视图：含 pipeline/父任务/源目标表等字段。"""
+async def list_tasks_detail(
+    status: Optional[str] = None,
+    task_type: Optional[str] = None,
+    query: Optional[str] = None,
+    from_: Optional[str] = Query(None, alias="from"),
+    to: Optional[str] = Query(None, alias="to"),
+    sort_by: str = "created_at",
+    order: str = "desc",
+    limit: int = 50,
+    offset: int = 0,
+):
+    """任务列表：筛选（状态/类型/关键字/时间）+ 排序 + 分页 + 全局统计。"""
+    tm = get_task_manager()
+    result = tm.query_tasks(
+        status=status, task_type=task_type, query=query,
+        created_from=from_, created_to=to,
+        sort_by=sort_by, order=order,
+        limit=min(limit, 200), offset=max(offset, 0),
+    )
+    result["counts"] = tm.count_status()
+    return result
+
+
+@app.get("/tasks/pipelines")
+async def list_tasks_pipelines(limit: int = 200):
+    """管道视图：最近任务全量字段（保留父子树完整，不走分页）。"""
     tm = get_task_manager()
     return {"tasks": tm.get_task_history_full(min(limit, 500))}
 

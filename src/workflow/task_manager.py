@@ -68,6 +68,7 @@ def _init_tables(conn: sqlite3.Connection):
             task_id TEXT PRIMARY KEY,
             user_query TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'pending',
+            task_type TEXT NOT NULL DEFAULT 'data_integration',
             parsed_intent TEXT,
             source_schema TEXT,
             rag_context TEXT,
@@ -133,6 +134,7 @@ def _migrate_tables(conn: sqlite3.Connection):
         ("pipeline_id", "TEXT"),
         ("parent_task_id", "TEXT"),
         ("etl_sql", "TEXT"),
+        ("task_type", "TEXT"),
         ("ops_diagnosis", "TEXT"),
         ("ops_actions", "TEXT"),
         ("ops_record_result", "TEXT"),
@@ -151,6 +153,7 @@ class TaskManager:
         user_query: str,
         pipeline_id: str = None,
         parent_task_id: str = None,
+        task_type: str = "data_integration",
     ) -> str:
         """创建新任务，返回 task_id。"""
         task_id = uuid.uuid4().hex[:12]
@@ -159,11 +162,11 @@ class TaskManager:
         with _db_lock:
             conn.execute(
                 """INSERT INTO tasks
-                   (task_id, user_query, status, pipeline_id, parent_task_id,
+                   (task_id, user_query, status, task_type, pipeline_id, parent_task_id,
                     created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                 (task_id, user_query, TaskStatus.PENDING.value,
-                 pipeline_id, parent_task_id, now, now),
+                 task_type, pipeline_id, parent_task_id, now, now),
             )
             conn.commit()
         logger.info(f"[TaskManager] 创建任务: {task_id}")
@@ -317,6 +320,86 @@ class TaskManager:
             (limit,),
         ).fetchall()
         return [dict(r) for r in rows]
+
+    def query_tasks(
+        self,
+        status: str = None,
+        task_type: str = None,
+        query: str = None,
+        created_from: str = None,
+        created_to: str = None,
+        sort_by: str = "created_at",
+        order: str = "desc",
+        limit: int = 50,
+        offset: int = 0,
+    ) -> Dict[str, Any]:
+        """筛选/排序/分页查询任务（参数化 SQL，返回 {tasks, total}）。"""
+        conn = _get_conn()
+        where: list[str] = []
+        params: list = []
+        if status and status != "all":
+            if status == "running":
+                ph = ",".join("?" * len(_TERMINAL_STATUSES))
+                where.append(f"status NOT IN ({ph}) AND status != ?")
+                params += list(_TERMINAL_STATUSES) + ["pending_approval"]
+            else:
+                where.append("status = ?")
+                params.append(status)
+        if task_type:
+            where.append("task_type = ?")
+            params.append(task_type)
+        if query:
+            like = f"%{query.strip()}%"
+            where.append(
+                "(user_query LIKE ? OR task_id LIKE ? "
+                "OR source_table LIKE ? OR target_table LIKE ?)"
+            )
+            params += [like, like, like, like]
+        if created_from:
+            where.append("created_at >= ?")
+            params.append(created_from)
+        if created_to:
+            where.append("created_at <= ?")
+            params.append(created_to)
+
+        where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+        order_col = {
+            "duration": "julianday(completed_at) - julianday(created_at)",
+            "status": "status",
+            "created_at": "created_at",
+        }.get(sort_by, "created_at")
+        order_dir = "ASC" if str(order).lower() == "asc" else "DESC"
+
+        total = conn.execute(
+            f"SELECT COUNT(*) FROM tasks{where_sql}", params,
+        ).fetchone()[0]
+        rows = conn.execute(
+            f"SELECT * FROM tasks{where_sql} "
+            f"ORDER BY {order_col} {order_dir}, task_id DESC LIMIT ? OFFSET ?",
+            params + [int(limit), int(offset)],
+        ).fetchall()
+        return {
+            "tasks": [self._deserialize_row(dict(r)) for r in rows],
+            "total": total,
+        }
+
+    def count_status(self) -> Dict[str, int]:
+        """全局任务统计（卡片用，未过滤）。"""
+        conn = _get_conn()
+        rows = conn.execute(
+            "SELECT status, COUNT(*) AS c FROM tasks GROUP BY status"
+        ).fetchall()
+        by = {r["status"]: r["c"] for r in rows}
+        return {
+            "total": sum(by.values()),
+            "pending_approval": by.get("pending_approval", 0),
+            "running": sum(
+                v for k, v in by.items()
+                if k not in _TERMINAL_STATUSES and k != "pending_approval"
+            ),
+            "success": by.get("success", 0),
+            "failed": by.get("failed", 0),
+        }
 
     def count_by_status(self) -> Dict[str, int]:
         """按状态统计任务数（供 /metrics 使用）。"""

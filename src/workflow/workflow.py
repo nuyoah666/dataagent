@@ -222,6 +222,7 @@ class AgentWorkflow:
         else:
             task_id = self.task_mgr.create_task(
                 user_query, pipeline_id=pipeline_id, parent_task_id=parent_task_id,
+                task_type=self.task_type,
             )
         # 默认用 task_id 作为 checkpoint 线程，避免多个任务复用同一线程导致状态串扰
         thread_id = thread_id or task_id
@@ -450,6 +451,7 @@ class AgentWorkflow:
         pipeline_task_id = self.task_mgr.create_task(
             f"[批量] {user_query}（表: {', '.join(tables)}）",
             pipeline_id=pipeline_id,
+            task_type=self.task_type,
         )
         self.task_mgr.update_task(
             pipeline_task_id, status=TaskStatus.RUNNING.value, current_step="pipeline",
