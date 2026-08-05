@@ -101,12 +101,23 @@ def extract_side(cfg: Dict[str, Any], role: str) -> Dict[str, Any]:
     }
 
 
-def extract_field_mapping(cfg: Dict[str, Any]) -> List[Dict[str, str]]:
-    """源/目标字段映射（按位置对齐）。"""
+def extract_field_mapping(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """源/目标字段映射（按位置对齐）。
+
+    返回 {"mapping": [...], "source_wildcard": bool}。
+    source_wildcard=True 表示源端使用全列通配（column="*"），
+    此时源列名需由调用方从源表 schema 补全。
+    """
     content = ((cfg.get("job") or {}).get("content")) or []
     item = content[0] if content else {}
-    reader_cols = normalize_columns(((item.get("reader") or {}).get("parameter") or {}).get("column"))
+    reader_raw = ((item.get("reader") or {}).get("parameter") or {}).get("column")
+    reader_cols = normalize_columns(reader_raw)
     writer_cols = normalize_columns(((item.get("writer") or {}).get("parameter") or {}).get("column"))
+    source_wildcard = (
+        not reader_raw
+        or reader_raw == "*"
+        or (isinstance(reader_raw, list) and reader_raw == ["*"])
+    )
 
     mappings = []
     for i in range(max(len(reader_cols), len(writer_cols))):
@@ -118,7 +129,48 @@ def extract_field_mapping(cfg: Dict[str, Any]) -> List[Dict[str, str]]:
             "target": dst.get("name", ""),
             "target_type": dst.get("type", ""),
         })
-    return mappings
+    return {"mapping": mappings, "source_wildcard": source_wildcard}
+
+
+def rebuild_mapping_with_schema(
+    mapping: List[Dict[str, str]],
+    source_columns: List[Dict[str, str]],
+) -> List[Dict[str, str]]:
+    """用源表真实列重建映射（优先按目标列名匹配，剩余按位置补）。
+
+    用于 DataX 源端为 column="*" 时，把通配符展开成真实列名，
+    并补上源端类型（来自 DESCRIBE/information_schema）。
+    """
+    by_name = {str(c.get("name", "")).lower(): c for c in source_columns}
+    matched_targets = set()
+    out: List[Dict[str, str]] = []
+    for m in mapping:
+        col = by_name.get(str(m.get("target", "")).lower())
+        if col:
+            matched_targets.add(str(col["name"]).lower())
+            out.append({
+                "source": str(col["name"]),
+                "source_type": str(col.get("type", "") or ""),
+                "target": m.get("target", ""),
+                "target_type": m.get("target_type", ""),
+            })
+        else:
+            out.append(dict(m))
+    # 名称未匹配的映射行，用未匹配的源列按位置补齐
+    spare = [
+        c for c in source_columns
+        if str(c.get("name", "")).lower() not in matched_targets
+    ]
+    idx = 0
+    for i, m in enumerate(out):
+        if not m.get("source") and idx < len(spare):
+            out[i] = {
+                **m,
+                "source": str(spare[idx]["name"]),
+                "source_type": str(spare[idx].get("type", "") or ""),
+            }
+            idx += 1
+    return out
 
 
 def extract_where(cfg: Dict[str, Any]) -> str:
@@ -148,9 +200,11 @@ def build_config_view(cfg: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """任务详情用的配置视图（无配置时返回空结构）。"""
     if not isinstance(cfg, dict):
         return {"available": False, "field_mapping": [], "where": "", "source": None, "target": None, "setting": None}
+    fm = extract_field_mapping(cfg)
     return {
         "available": True,
-        "field_mapping": extract_field_mapping(cfg),
+        "field_mapping": fm["mapping"],
+        "source_wildcard": fm["source_wildcard"],
         "where": extract_where(cfg),
         "source": extract_side(cfg, "reader"),
         "target": extract_side(cfg, "writer"),

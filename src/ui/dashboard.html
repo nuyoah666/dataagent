@@ -746,7 +746,9 @@ function renderMapping(view) {
       <td class="mid">──▶</td>
       <td class="dst">${escapeHtml(m.target || '—')}${m.target_type ? `<span class="t">${escapeHtml(m.target_type)}</span>` : ''}</td>
     </tr>`).join('');
-  return `<table class="mapping-table">${rows}</table>`;
+  const wildcardHint = view.source_wildcard && !(view.source_schema || []).length;
+  return `<table class="mapping-table">${rows}</table>
+    ${wildcardHint ? `<div class="muted-flag" style="margin-top:8px">⚠ 源端为全列通配（*），已按位置与目标列对齐；需要精确映射请在 DataX JSON 中指定源列</div>` : ''}`;
 }
 
 function renderConfigSection(cfg) {

@@ -105,6 +105,54 @@ class TestConfigView:
         assert mapping[0]["source"] == "*"
         assert [m["target"] for m in mapping] == ["id", "name", "dt"]
 
+    def test_wildcard_marked(self):
+        cfg = {
+            "job": {"content": [{
+                "reader": {"name": "mysqlreader", "parameter": {"column": ["*"]}},
+                "writer": {"name": "elasticsearchwriter", "parameter": {"column": [{"name": "id", "type": "long"}]}},
+            }]},
+        }
+        view = build_config_view(cfg)
+        assert view["source_wildcard"] is True
+
+    def test_rebuild_mapping_with_schema(self):
+        from src.tools.config_view import rebuild_mapping_with_schema
+
+        mapping = [
+            {"source": "*", "source_type": "", "target": "id", "target_type": "long"},
+            {"source": "", "source_type": "", "target": "name", "target_type": "keyword"},
+            {"source": "", "source_type": "", "target": "dt", "target_type": "keyword"},
+        ]
+        schema = [
+            {"name": "id", "type": "bigint"},
+            {"name": "name", "type": "varchar(50)"},
+            {"name": "dt", "type": "date"},
+        ]
+        rebuilt = rebuild_mapping_with_schema(mapping, schema)
+        assert rebuilt[0] == {
+            "source": "id", "source_type": "bigint",
+            "target": "id", "target_type": "long",
+        }
+        assert rebuilt[1]["source"] == "name"
+        assert rebuilt[1]["source_type"] == "varchar(50)"
+        assert rebuilt[2]["source"] == "dt"
+
+    def test_rebuild_name_mismatch_falls_back_positional(self):
+        from src.tools.config_view import rebuild_mapping_with_schema
+
+        mapping = [
+            {"source": "*", "source_type": "", "target": "user_id", "target_type": "long"},
+            {"source": "", "source_type": "", "target": "name", "target_type": "keyword"},
+        ]
+        schema = [
+            {"name": "id", "type": "bigint"},
+            {"name": "name", "type": "varchar(50)"},
+        ]
+        rebuilt = rebuild_mapping_with_schema(mapping, schema)
+        # user_id 在源中无同名列 -> 保持通配 *（不臆造对应关系）
+        assert rebuilt[0]["source"] == "*"
+        assert rebuilt[1]["source"] == "name"
+
 
 class TestConfigApi:
     def _create_pending_task(self, tm):

@@ -522,12 +522,15 @@ class ConfigUpdateRequest(BaseModel):
 @app.get("/tasks/{task_id}/config")
 async def get_task_config(task_id: str):
     """返回任务配置视图（字段映射 / where / 连接信息 / 原始 JSON）。"""
-    from src.tools.config_view import build_config_view
+    import logging
+    from src.tools.config_view import build_config_view, rebuild_mapping_with_schema
 
     tm = get_task_manager()
     task = tm.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
+    view = build_config_view(task.get("datax_config"))
+    view = _enrich_mapping_with_source_schema(view)
     editable = task.get("status") in (
         TaskStatus.PENDING_APPROVAL.value,
         TaskStatus.CONFIG_DONE.value,
@@ -537,10 +540,48 @@ async def get_task_config(task_id: str):
         "editable": editable,
         "task_type": task.get("task_type"),
         "status": task.get("status"),
-        "view": build_config_view(task.get("datax_config")),
+        "view": view,
         "datax_config": task.get("datax_config"),
         "etl_sql": task.get("etl_sql"),
     }
+
+
+def _enrich_mapping_with_source_schema(view: dict) -> dict:
+    """源端为全列通配时，查源表真实列补全字段映射（含源类型）。"""
+    import logging
+    from src.tools.config_view import rebuild_mapping_with_schema
+
+    if not view.get("available") or not view.get("source_wildcard"):
+        return view
+    source = view.get("source") or {}
+    db_type = str(source.get("db_type", "")).lower()
+    if db_type not in ("mysql", "starrocks"):
+        return view
+    if not source.get("table") or not source.get("database"):
+        return view
+    try:
+        from src.tools.db_tool import DatabaseConfig, get_table_schema
+
+        cfg = DatabaseConfig(
+            db_type=db_type,
+            host=source.get("host") or None,
+            port=int(source.get("port") or 0) or None,
+            username=config.MYSQL_CONFIG["username"],
+            password=config.MYSQL_CONFIG["password"],
+            database=source.get("database"),
+        )
+        schema = get_table_schema(cfg, source["table"])
+        columns = schema.get("columns") or []
+        if columns:
+            view["field_mapping"] = rebuild_mapping_with_schema(
+                view["field_mapping"], columns
+            )
+            view["source_schema"] = columns
+    except Exception as e:
+        logging.getLogger(__name__).warning(
+            f"补全源表 schema 失败（保持通配展示）: {e}"
+        )
+    return view
 
 
 @app.put("/tasks/{task_id}/config")
