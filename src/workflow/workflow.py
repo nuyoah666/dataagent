@@ -122,6 +122,15 @@ class AgentWorkflow:
                                        parsed_intent=result.get("parsed_intent"),
                                        datax_config=result.get("datax_config"),
                                        etl_sql=result.get("etl_sql"),
+                                       etl_source_table=result.get("etl_source_table"),
+                                       etl_target_table=result.get("etl_target_table"),
+                                       etl_partition_date=result.get("etl_partition_date"),
+                                       etl_target_exists=int(bool(result.get("etl_target_exists"))),
+                                       etl_ddl=result.get("etl_ddl"),
+                                       analysis_query=result.get("analysis_query"),
+                                       analysis_sql=result.get("analysis_sql"),
+                                       analysis_database=result.get("analysis_database"),
+                                       analysis_engine=result.get("analysis_engine"),
                                        source_table=intent.get("source_table", ""),
                                        target_table=intent.get("target_table", "")
                                        or intent.get("source_table", ""),
@@ -166,7 +175,9 @@ class AgentWorkflow:
             self.task_mgr.complete_task(task_id, TaskStatus.CANCELLED, error="任务已取消")
         elif result.get("execution_status", {}).get("success"):
             self.task_mgr.update_task(task_id, status=TaskStatus.EXEC_DONE.value,
-                                       execution_status=result.get("execution_status"))
+                                       execution_status=result.get("execution_status"),
+                                       analysis_result=result.get("analysis_result"),
+                                       analysis_summary=result.get("analysis_summary"))
             self.task_mgr.log(task_id, "INFO", "ExecutionAgent 完成")
         else:
             self.task_mgr.log(task_id, "ERROR", f"ExecutionAgent 失败: {result.get('error')}")
@@ -184,8 +195,18 @@ class AgentWorkflow:
         result = self.validation_agent.run(state)
 
         if result.get("validation_result", {}).get("success"):
+            self.task_mgr.update_task(
+                task_id,
+                validation_result=result.get("validation_result"),
+                analysis_result=result.get("analysis_result"),
+                analysis_summary=result.get("analysis_summary"),
+            )
             self.task_mgr.complete_task(task_id, TaskStatus.SUCCESS)
         else:
+            self.task_mgr.update_task(
+                task_id,
+                validation_result=result.get("validation_result"),
+            )
             self.task_mgr.complete_task(task_id, TaskStatus.FAILED,
                                          error=result.get("error", "校验失败"))
 

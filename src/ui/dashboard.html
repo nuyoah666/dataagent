@@ -276,9 +276,16 @@
 </div>
 
 <script>
+// URL 参数 ?wizard=1 时自动打开同步向导（供 chat 页入口跳转）
+window.addEventListener('DOMContentLoaded', () => {
+  if (new URLSearchParams(location.search).get('wizard') === '1') {
+    setTimeout(() => openWizard(), 300);
+  }
+});
+
 const $ = id => document.getElementById(id);
 const TOKEN_KEY = 'dataagent_api_token';
-const TYPE_LABELS = { data_integration:'数据集成', etl_development:'ETL', data_ops:'运维' };
+const TYPE_LABELS = { data_integration:'数据集成', etl_development:'ETL', data_ops:'运维', data_analysis:'分析' };
 const DBTYPE_LABELS = { mysql:'MySQL', mongodb:'MongoDB', elasticsearch:'Elasticsearch', starrocks:'StarRocks' };
 const state = { status:'all', type:'all', q:'', time:'all', sort:'created_at', order:'desc',
                 page:1, size:20, tab:'tasks' };
@@ -728,6 +735,23 @@ async function showDetail(taskId) {
     ` : '';
     const opsRec = task.ops_record_result ? `
       <div class="section-title">事故沉淀</div><div>${escapeHtml(task.ops_record_result.summary || '')}</div>` : '';
+    const anal = task.analysis_result ? `
+      <div class="section-title">分析结果</div>
+      ${task.analysis_summary ? `<div style="margin-bottom:6px">${escapeHtml(task.analysis_summary)}</div>` : ''}
+      <table style="width:100%;font-size:12.5px;border-collapse:collapse"><thead><tr>
+        ${(task.analysis_result.columns || []).map(c => `<th style="text-align:left;border-bottom:1px solid var(--border);padding:4px">${escapeHtml(c)}</th>`).join('')}
+      </tr></thead><tbody>
+        ${(task.analysis_result.rows || []).slice(0, 50).map(r =>
+          `<tr>${(task.analysis_result.columns || []).map(c =>
+            `<td style="padding:3px 6px;border-bottom:1px solid var(--border)">${escapeHtml(r[c])}</td>`).join('')}</tr>`).join('')}
+      </tbody></table>
+      ${task.analysis_sql ? `<div class="audit-detail" style="margin-top:6px">${escapeHtml(task.analysis_sql)}</div>` : ''}` : '';
+    const etl = task.etl_sql ? `
+      <div class="section-title">ETL 透传</div>
+      <div>源：${escapeHtml(task.etl_source_table || '')} → 目标：${escapeHtml(task.etl_target_table || '')}
+           <span class="d">（${escapeHtml(task.etl_partition_date || '')}）</span></div>
+      ${task.validation_result ? `<div style="margin-top:4px">校验：${escapeHtml(task.validation_result.summary || '')}</div>` : ''}
+      <pre class="audit-detail" style="white-space:pre-wrap">${escapeHtml(task.etl_sql)}</pre>` : '';
     $('detailBody').innerHTML = `
       <div>指令：<b>${escapeHtml(task.user_query)}</b></div>
       <div class="detail-meta">
@@ -738,7 +762,7 @@ async function showDetail(taskId) {
         <span>耗时：${durationSec(task.created_at, task.completed_at)}</span>
       </div>
       <div class="section-title">阶段时间线</div>${tl}
-      ${diag}${opsAct}${opsRec}
+      ${diag}${opsAct}${opsRec}${anal}${etl}
       <div class="section-title">审计记录</div>${audits || '<div class="empty">（无审计）</div>'}
       <div class="section-title">错误信息</div><pre>${escapeHtml(task.error || '（无）')}</pre>
       <div class="audit-detail">AI 链路追踪见 LangSmith 项目 dataagent（task_id=${taskId} 对应 thread_id）</div>`;

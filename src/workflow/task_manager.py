@@ -153,6 +153,17 @@ def _migrate_tables(conn: sqlite3.Connection):
         ("ops_diagnosis", "TEXT"),
         ("ops_actions", "TEXT"),
         ("ops_record_result", "TEXT"),
+        ("etl_source_table", "TEXT"),
+        ("etl_target_table", "TEXT"),
+        ("etl_partition_date", "TEXT"),
+        ("etl_target_exists", "TEXT"),
+        ("etl_ddl", "TEXT"),
+        ("analysis_query", "TEXT"),
+        ("analysis_sql", "TEXT"),
+        ("analysis_database", "TEXT"),
+        ("analysis_engine", "TEXT"),
+        ("analysis_result", "TEXT"),
+        ("analysis_summary", "TEXT"),
     ):
         if name not in cols:
             conn.execute(f"ALTER TABLE tasks ADD COLUMN {name} {ddl}")
@@ -238,6 +249,7 @@ class TaskManager:
             "parsed_intent", "source_schema", "execution_status",
             "validation_result", "datax_config",
             "ops_diagnosis", "ops_actions", "ops_record_result",
+            "analysis_query", "analysis_result",
         ]:
             if key in kwargs and isinstance(kwargs[key], (dict, list)):
                 # 敏感信息（数据库密码、密钥等）落库前脱敏
@@ -450,6 +462,7 @@ class TaskManager:
             "parsed_intent", "source_schema", "execution_status",
             "validation_result", "datax_config",
             "ops_diagnosis", "ops_actions", "ops_record_result",
+            "analysis_query", "analysis_result",
         ]:
             if result.get(key):
                 try:

@@ -14,6 +14,12 @@
 - **源表歧义消除**：跨库按表名/表注释发现候选（`discover_tables`），
   唯一命中自动采用；多个候选或找不到时强制用户明确 `库.表`，
   杜绝"猜错表名一路跑到执行才失败"
+- **ETL 确定性透传**：ODS → DWD 走三类固定模板（纯透传 / 字段映射 / 枚举码值映射），
+  按 ODS 命名规范（`ods_x` / `ods_x_day_inc` / `ods_x_day_snapshot`）自动推断表与分区，
+  `INSERT OVERWRITE PARTITION` 幂等；目标表缺失自动生成 DDL（需管理账号，见 `.env`）
+- **轻量语义层 + 数据分析**：YAML 定义指标/维度与聚合口径（Supersonic 风格），
+  LLM 只输出结构化语义查询，SQL 由代码确定性生成（SELECT-only + 超时 + LIMIT 防御），
+  结果可选 LLM 中文总结；只读查询无需人工审批
 - **多 Agent 协作**：集成失败自动交运维 Agent 诊断，事故自动沉淀为知识
 
 ## 系统架构
@@ -24,7 +30,7 @@ flowchart LR
     R -->|data_integration| I[集成工作流]
     R -->|etl_development| E[ETL 工作流]
     R -->|data_ops| O[运维工作流]
-    R -->|data_analysis| A[分析工作流<br/>规划中]
+    R -->|data_analysis| A[分析工作流<br/>语义层+只读查询]
 
     subgraph I[数据集成 Agent]
         C1[配置 Agent<br/>意图解析+表结构+RAG] --> X1[执行 Agent<br/>DataX 进程]
@@ -32,8 +38,13 @@ flowchart LR
     end
 
     subgraph E[ETL Agent]
-        C2[配置 Agent<br/>生成加工 SQL] --> X2[执行 Agent<br/>StarRocks]
+        C2[配置 Agent<br/>透传模板+ODS命名推断] --> X2[执行 Agent<br/>建表+OVERWRITE]
         X2 --> V2[校验 Agent<br/>行数对比]
+    end
+
+    subgraph A[分析 Agent]
+        C3[语义解析<br/>LLM->结构化查询] --> X3[执行 Agent<br/>只读SELECT]
+        X3 --> V3[校验 Agent<br/>结果完整性]
     end
 
     subgraph O[运维 Agent]
@@ -94,6 +105,10 @@ python -m src.api
 - `POST /tasks/{task_id}/retry`：重试已失败/取消的任务（以相同指令新建任务）
 - `POST /tasks/{task_id}/cancel`：取消运行中的任务（会终止 DataX 子进程）
 - `GET /health`：健康检查
+
+Web 界面：
+- `GET /chat`：自然语言对话（支持集成/ETL/运维/分析四种任务，右上角直达同步向导）
+- `GET /ui`：全链路监控（任务/管道/审计/健康/数据源 + 同步向导 + 亮暗主题）
 
 ### 5. 运行测试
 
