@@ -530,7 +530,7 @@ async def get_task_config(task_id: str):
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
     view = build_config_view(task.get("datax_config"))
-    view = _enrich_mapping_with_source_schema(view)
+    view = _enrich_mapping_with_schemas(view, task)
     editable = task.get("status") in (
         TaskStatus.PENDING_APPROVAL.value,
         TaskStatus.CONFIG_DONE.value,
@@ -546,41 +546,72 @@ async def get_task_config(task_id: str):
     }
 
 
-def _enrich_mapping_with_source_schema(view: dict) -> dict:
-    """源端为全列通配时，查源表真实列补全字段映射（含源类型）。"""
+def _enrich_mapping_with_schemas(view: dict, task: dict = None) -> dict:
+    """字段映射补全：
+    1. 源端为全列通配时，查源表真实列补全源列名与源类型；
+    2. 目标端类型缺失时（MySQL/StarRocks writer），查目标表补全目标类型。
+    """
     import logging
-    from src.tools.config_view import rebuild_mapping_with_schema
+    from src.tools.config_view import enrich_target_types, rebuild_mapping_with_schema
+    from src.tools.db_tool import DatabaseConfig, get_table_schema
 
-    if not view.get("available") or not view.get("source_wildcard"):
+    if not view.get("available"):
         return view
-    source = view.get("source") or {}
-    db_type = str(source.get("db_type", "")).lower()
-    if db_type not in ("mysql", "starrocks"):
-        return view
-    if not source.get("table") or not source.get("database"):
-        return view
-    try:
-        from src.tools.db_tool import DatabaseConfig, get_table_schema
 
+    # 用任务意图纠正引擎类型：StarRocks 兼容 MySQL 协议，
+    # 插件名（mysqlwriter）无法区分真实引擎，需以 parsed_intent 为准
+    intent = (task or {}).get("parsed_intent") or {}
+    if intent.get("source_db_type") and view.get("source"):
+        view["source"]["db_type"] = str(intent["source_db_type"]).lower()
+    if intent.get("target_db_type") and view.get("target"):
+        view["target"]["db_type"] = str(intent["target_db_type"]).lower()
+
+    def _query_columns(side: dict) -> list:
+        db_type = str(side.get("db_type", "")).lower()
+        if db_type not in ("mysql", "starrocks"):
+            return []
+        if not side.get("table") or not side.get("database"):
+            return []
+        defaults = config.MYSQL_CONFIG if db_type == "mysql" else config.STARROCKS_CONFIG
         cfg = DatabaseConfig(
             db_type=db_type,
-            host=source.get("host") or None,
-            port=int(source.get("port") or 0) or None,
-            username=config.MYSQL_CONFIG["username"],
-            password=config.MYSQL_CONFIG["password"],
-            database=source.get("database"),
+            host=side.get("host") or None,
+            port=int(side.get("port") or 0) or None,
+            username=defaults["username"],
+            password=defaults["password"],
+            database=side.get("database"),
         )
-        schema = get_table_schema(cfg, source["table"])
-        columns = schema.get("columns") or []
-        if columns:
-            view["field_mapping"] = rebuild_mapping_with_schema(
-                view["field_mapping"], columns
+        schema = get_table_schema(cfg, side["table"])
+        return schema.get("columns") or []
+
+    # 1. 源端通配 -> 补源列名与源类型
+    if view.get("source_wildcard"):
+        source = view.get("source") or {}
+        try:
+            columns = _query_columns(source)
+            if columns:
+                view["field_mapping"] = rebuild_mapping_with_schema(
+                    view["field_mapping"], columns
+                )
+                view["source_schema"] = columns
+        except Exception as e:
+            logging.getLogger(__name__).warning(
+                f"补全源表 schema 失败（保持通配展示）: {e}"
             )
-            view["source_schema"] = columns
-    except Exception as e:
-        logging.getLogger(__name__).warning(
-            f"补全源表 schema 失败（保持通配展示）: {e}"
-        )
+
+    # 2. 目标端类型缺失 -> 查目标表补类型
+    if any(not m.get("target_type") for m in (view.get("field_mapping") or [])):
+        target = view.get("target") or {}
+        try:
+            columns = _query_columns(target)
+            if columns:
+                view["field_mapping"] = enrich_target_types(
+                    view["field_mapping"], columns
+                )
+        except Exception as e:
+            logging.getLogger(__name__).warning(
+                f"补全目标表类型失败: {e}"
+            )
     return view
 
 

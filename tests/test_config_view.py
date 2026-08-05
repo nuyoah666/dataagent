@@ -153,6 +153,28 @@ class TestConfigView:
         assert rebuilt[0]["source"] == "*"
         assert rebuilt[1]["source"] == "name"
 
+    def test_enrich_target_types(self):
+        from src.tools.config_view import enrich_target_types
+
+        mapping = [
+            {"source": "id", "source_type": "bigint", "target": "id", "target_type": ""},
+            {"source": "name", "source_type": "varchar(64)", "target": "name", "target_type": ""},
+        ]
+        target_columns = [
+            {"name": "id", "type": "bigint"},
+            {"name": "name", "type": "varchar(100)"},
+        ]
+        out = enrich_target_types(mapping, target_columns)
+        assert out[0]["target_type"] == "bigint"
+        assert out[1]["target_type"] == "varchar(100)"
+
+    def test_enrich_target_types_keeps_existing(self):
+        from src.tools.config_view import enrich_target_types
+
+        mapping = [{"source": "id", "source_type": "", "target": "id", "target_type": "long"}]
+        out = enrich_target_types(mapping, [{"name": "id", "type": "bigint"}])
+        assert out[0]["target_type"] == "long"  # 已有类型不覆盖
+
 
 class TestConfigApi:
     def _create_pending_task(self, tm):
@@ -253,3 +275,27 @@ def test_validation_follows_edited_config():
     assert out["target_table"] == "idx_edited_new"
     assert out["target_db_type"] == "elasticsearch"
     assert out["source_table"] == "src_user"
+
+
+def test_enrich_uses_intent_engine_type(monkeypatch):
+    """StarRocks 走 MySQL 协议（mysqlwriter），引擎类型以 parsed_intent 为准。"""
+    from src import api as api_mod
+
+    view = {
+        "available": True,
+        "source_wildcard": False,
+        "field_mapping": [
+            {"source": "id", "source_type": "bigint", "target": "id", "target_type": ""},
+        ],
+        "source": {"db_type": "mysql", "database": "datax_test", "table": "src_user"},
+        "target": {"db_type": "mysql", "database": "ods", "table": "orders_src"},
+    }
+    task = {
+        "parsed_intent": {
+            "source_db_type": "mysql",
+            "target_db_type": "starrocks",
+        }
+    }
+    out = api_mod._enrich_mapping_with_schemas(view, task)
+    assert out["target"]["db_type"] == "starrocks"
+    assert out["source"]["db_type"] == "mysql"

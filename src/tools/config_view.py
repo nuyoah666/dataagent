@@ -173,6 +173,29 @@ def rebuild_mapping_with_schema(
     return out
 
 
+def enrich_target_types(
+    mapping: List[Dict[str, str]],
+    target_columns: List[Dict[str, str]],
+) -> List[Dict[str, str]]:
+    """目标端类型缺失时，按列名从目标表 schema 补全（MySQL/StarRocks writer）。
+
+    ES writer 的 column 自带 type（long/keyword），无需补全；
+    纯列名形态（如 "id name dt"）补上真实类型用于展示。
+    """
+    by_name = {str(c.get("name", "")).lower(): c for c in target_columns}
+    out = []
+    for m in mapping:
+        if not m.get("target_type"):
+            col = by_name.get(str(m.get("target", "")).lower())
+            if col:
+                m = {
+                    **m,
+                    "target_type": str(col.get("type", "") or ""),
+                }
+        out.append(m)
+    return out
+
+
 def extract_where(cfg: Dict[str, Any]) -> str:
     """提取增量/过滤 WHERE（reader.parameter.where 或 querySql 内的 WHERE）。"""
     content = ((cfg.get("job") or {}).get("content")) or []
