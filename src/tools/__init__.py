@@ -3,7 +3,7 @@ from .registry import register_tool, call_tool, TOOL_REGISTRY
 from .rag_tool import search_datax_docs
 from .ops_kb_tool import add_ops_incident, search_ops_knowledge, ingest_ops_knowledge
 from .ops_tool import check_component_health, retry_failed_task
-from .db_tool import get_table_schema, DatabaseConfig
+from .db_tool import get_table_schema, DatabaseConfig, discover_tables
 from .datax_tool import write_and_execute_datax, kill_datax_process_tree
 from .validation_tool import validate_data_quality
 from .web_search_tool import search_web
@@ -23,6 +23,7 @@ register_tool("check_component_health")(check_component_health)
 register_tool("retry_failed_task")(retry_failed_task)
 register_tool("kill_datax_process_tree")(kill_datax_process_tree)
 register_tool("get_table_schema")(get_table_schema)
+register_tool("discover_tables")(discover_tables)
 register_tool("write_and_execute_datax")(write_and_execute_datax)
 register_tool("validate_data_quality")(validate_data_quality)
 register_tool("web_search")(search_web)

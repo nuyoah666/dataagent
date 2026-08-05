@@ -233,3 +233,88 @@ def get_table_schema(config: DatabaseConfig, table_name: str) -> Dict[str, Any]:
     """获取表结构的包装函数，供 Agent 工具使用。"""
     db_tool = get_db_tool()
     return db_tool.get_table_schema(config, table_name)
+
+
+def discover_tables(
+    keyword: str,
+    db_type: str = "mysql",
+    limit: int = 20,
+) -> Dict[str, Any]:
+    """按表名/表注释在可访问库中发现候选表（歧义消除的元数据目录）。
+
+    解决"多个库都有同表名 / 表名不同但注释相同"的歧义：
+    information_schema 精确/模糊匹配表名与注释，返回
+    [{database, table, comment, match_type}]，按匹配优先级排序。
+    支持 MySQL 与 StarRocks（FE 走 MySQL 协议）。
+    """
+    db_type = str(db_type or "mysql").lower()
+    if db_type not in ("mysql", "starrocks"):
+        return {
+            "success": False,
+            "error": f"暂不支持 {db_type} 的表发现",
+            "candidates": [],
+        }
+    kw = str(keyword or "").strip()
+    if not kw:
+        return {"success": False, "error": "缺少表名关键字", "candidates": []}
+    if len(kw) > 128:
+        return {"success": False, "error": "表名关键字过长", "candidates": []}
+
+    try:
+        from .db import mysql_conn
+
+        with mysql_conn(db_type) as conn:
+            with conn.cursor() as cur:
+                try:
+                    cur.execute(
+                        """
+                        SELECT TABLE_SCHEMA, TABLE_NAME, COALESCE(TABLE_COMMENT, '')
+                        FROM information_schema.TABLES
+                        WHERE TABLE_SCHEMA NOT IN
+                              ('information_schema','mysql','performance_schema','sys')
+                          AND (TABLE_NAME = %s OR TABLE_NAME LIKE %s
+                               OR TABLE_COMMENT LIKE %s)
+                        ORDER BY (TABLE_NAME = %s) DESC, TABLE_NAME
+                        LIMIT %s
+                        """,
+                        (kw, f"%{kw}%", f"%{kw}%", kw, int(limit)),
+                    )
+                except Exception:
+                    # 兼容无 TABLE_COMMENT 列的场景（降级为仅表名匹配）
+                    cur.execute(
+                        """
+                        SELECT TABLE_SCHEMA, TABLE_NAME, ''
+                        FROM information_schema.TABLES
+                        WHERE TABLE_SCHEMA NOT IN
+                              ('information_schema','mysql','performance_schema','sys')
+                          AND (TABLE_NAME = %s OR TABLE_NAME LIKE %s)
+                        ORDER BY (TABLE_NAME = %s) DESC, TABLE_NAME
+                        LIMIT %s
+                        """,
+                        (kw, f"%{kw}%", kw, int(limit)),
+                    )
+                rows = cur.fetchall()
+
+        kw_lower = kw.lower()
+        candidates = []
+        for db, tbl, comment in rows:
+            tbl = str(tbl)
+            comment = str(comment or "")
+            if tbl == kw:
+                match_type = "name_exact"
+            elif kw_lower in tbl.lower():
+                match_type = "name_like"
+            else:
+                match_type = "comment"
+            candidates.append({
+                "database": str(db),
+                "table": tbl,
+                "comment": comment[:200],
+                "match_type": match_type,
+            })
+        rank = {"name_exact": 0, "name_like": 1, "comment": 2}
+        candidates.sort(key=lambda c: (rank.get(c["match_type"], 3), c["database"], c["table"]))
+        return {"success": True, "keyword": kw, "candidates": candidates}
+    except Exception as e:
+        logger.warning("表发现失败: %s", e)
+        return {"success": False, "error": str(e), "candidates": []}

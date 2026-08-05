@@ -10,7 +10,7 @@ from typing import Dict, Any
 
 from ..state import DataIntegrationState
 from ..tools import (
-    search_datax_docs, get_table_schema, DatabaseConfig,
+    search_datax_docs, get_table_schema, DatabaseConfig, discover_tables,
     process_config, normalize_intent,
 )
 from ..tools.config_processor import get_template
@@ -64,6 +64,23 @@ class ConfigAgent(BaseAgent):
         if state.get("table_override"):
             intent["source_table"] = state["table_override"]
             logger.info(f"批量任务: 强制源表 {intent['source_table']}")
+        # 3.2 源表歧义消除：唯一候选自动采用；多候选/无候选强制用户明确 库.表
+        if not state.get("table_override"):
+            resolved, candidates, resolve_err = self._resolve_source_table(intent)
+            if candidates or resolve_err:
+                logger.warning(
+                    "源表解析未通过: candidates=%d err=%s",
+                    len(candidates), bool(resolve_err),
+                )
+                return {
+                    **state,
+                    "error": resolve_err or self._format_candidates(
+                        intent.get("source_table", ""), candidates
+                    ),
+                    "table_candidates": candidates or None,
+                    "current_step": "config_error",
+                }
+            intent = resolved
         logger.info(f"意图: table={intent.get('source_table')}, "
                      f"{intent.get('source_db_type')}->{intent.get('target_db_type')}")
 
@@ -158,6 +175,61 @@ class ConfigAgent(BaseAgent):
         return intent
 
     # ---- 表结构获取 ----
+
+    def _resolve_source_table(
+        self, intent: Dict[str, Any],
+    ) -> tuple[Dict[str, Any], list, str]:
+        """源表解析：显式 库.表 直接用；唯一候选自动采用；多候选/零候选返回决策。
+
+        Returns:
+            (intent, candidates, error)：candidates 非空 => 歧义待选择；
+            error 非空 => 直接失败（零候选，禁止 LLM 编造表结构）。
+        """
+        table = (intent.get("source_table") or "").strip()
+        if not table:
+            return intent, [], ""  # 交由下游报"未指定源表名"
+        db_type = intent.get("source_db_type", "mysql")
+
+        # 1) 显式 库.表：跳过发现
+        if "." in table:
+            db, tbl = table.split(".", 1)
+            intent["source_database"] = db
+            intent["source_table"] = tbl
+            return intent, [], ""
+
+        # 2) 非关系型源（Mongo/ES）暂不支持元数据发现，维持原逻辑
+        if db_type not in ("mysql", "starrocks"):
+            return intent, [], ""
+
+        # 3) 跨库发现（表名精确/LIKE + 表注释 LIKE）
+        r = discover_tables(table, db_type=db_type, limit=20)
+        if not r.get("success"):
+            return intent, [], ""  # 发现失败不阻断，交由 schema 步骤报错
+        cands = r.get("candidates") or []
+        if len(cands) == 1:
+            c = cands[0]
+            logger.info("源表唯一命中: %s.%s（%s）", c["database"], c["table"], c["match_type"])
+            intent["source_database"] = c["database"]
+            intent["source_table"] = c["table"]
+            return intent, [], ""
+        if len(cands) > 1:
+            return intent, cands, ""
+        # 零候选：明确报错，避免一路跑到 DataX 执行才失败
+        return intent, [], f"在可访问的数据库中找不到表「{table}」（已按表名与表注释检索）"
+
+    @staticmethod
+    def _format_candidates(keyword: str, candidates: list) -> str:
+        """把候选列表格式化为引导用户明确选择的提示。"""
+        lines = [
+            f"「{keyword}」在多个库中匹配到 {len(candidates)} 个候选表，"
+            "请明确指定 库.表（例如：同步 库名.表名 到 ...）：",
+        ]
+        for i, c in enumerate(candidates[:10], 1):
+            comment = c.get("comment") or c.get("match_type", "")
+            lines.append(f"{i}. {c['database']}.{c['table']}（{comment[:40]}）")
+        if len(candidates) > 10:
+            lines.append(f"… 共 {len(candidates)} 个候选")
+        return "\n".join(lines)
 
     def _get_source_schema(self, intent: Dict[str, Any]) -> Dict[str, Any]:
         table = intent.get("source_table", "")
