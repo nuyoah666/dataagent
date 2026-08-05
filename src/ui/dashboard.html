@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🗄️</text></svg>">
 <title>数仓多 Agent 协作平台 · 全链路监控</title>
 <style>
   :root { --bg:#0f172a; --card:#1e293b; --border:#334155; --text:#e2e8f0; --muted:#94a3b8;
@@ -12,13 +13,43 @@
           --muted:#64748b; --ok:#16a34a; --err:#dc2626; --run:#d97706; --accent:#0284c7;
           --warn:#ca8a04; --hover:rgba(15,23,42,.05); --shadow:0 2px 10px rgba(15,23,42,.08); }
   * { box-sizing:border-box; margin:0; padding:0; }
-  body { background:var(--bg); color:var(--text); font-family:"Segoe UI",system-ui,sans-serif; }
-  .container { max-width:1440px; margin:0 auto; padding:20px; }
-  .topbar { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:16px; }
-  .brand { font-size:19px; font-weight:600; }
-  .brand small { color:var(--muted); font-size:12.5px; font-weight:normal; margin-left:8px; }
+  body { background:var(--bg); color:var(--text); font-family:"Segoe UI",system-ui,sans-serif;
+         display:flex; min-height:100vh; }
+  .layout { display:flex; width:100%; min-height:100vh; }
+  .sidebar { width:220px; flex-shrink:0; background:var(--card); border-right:1px solid var(--border);
+             display:flex; flex-direction:column; position:sticky; top:0; height:100vh; }
+  .sidebar .brand { padding:18px 16px 14px; border-bottom:1px solid var(--border); }
+  .sidebar .brand .logo { font-size:16px; font-weight:700; display:flex; align-items:center; gap:8px; }
+  .sidebar .brand .logo .dot { width:10px; height:10px; border-radius:50%;
+                               background:linear-gradient(135deg,var(--accent),#6366f1); box-shadow:0 0 8px var(--accent); }
+  .sidebar .brand small { display:block; color:var(--muted); font-size:11.5px; margin-top:4px; }
+  .sidebar nav { flex:1; padding:10px 8px; display:flex; flex-direction:column; gap:2px; }
+  .sidebar nav button { display:flex; align-items:center; gap:10px; width:100%; text-align:left;
+                         background:none; border:none; color:var(--muted); padding:10px 12px;
+                         border-radius:8px; cursor:pointer; font-size:13.5px; transition:all .15s; }
+  .sidebar nav button:hover { background:var(--hover); color:var(--text); }
+  .sidebar nav button.active { background:rgba(56,189,248,.12); color:var(--accent); font-weight:600; }
+  .sidebar nav button .ico { width:18px; text-align:center; font-size:14px; }
+  .sidebar .side-foot { padding:12px 16px; border-top:1px solid var(--border); font-size:11.5px;
+                         color:var(--muted); display:flex; align-items:center; gap:8px; }
+  .main { flex:1; min-width:0; display:flex; flex-direction:column; }
+  .topbar { display:flex; align-items:center; gap:12px; flex-wrap:wrap; padding:14px 24px;
+            border-bottom:1px solid var(--border); background:var(--bg); position:sticky; top:0; z-index:5; }
+  .topbar .page-title { font-size:17px; font-weight:600; }
+  .topbar .page-title small { color:var(--muted); font-size:12px; font-weight:normal; margin-left:8px; }
   .topbar .spacer { flex:1; }
   .topbar .controls { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .btn-wizard { background:linear-gradient(135deg,#38bdf8,#6366f1); border:none; color:#fff; font-weight:600;
+                padding:8px 18px; border-radius:9px; cursor:pointer; font-size:13px;
+                box-shadow:0 4px 14px rgba(56,189,248,.35); transition:transform .12s, box-shadow .12s; }
+  .btn-wizard:hover { transform:translateY(-1px); box-shadow:0 6px 18px rgba(56,189,248,.45); }
+  .content { padding:20px 24px 32px; }
+  .status-strip { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:16px; }
+  .status-pill { background:var(--card); border:1px solid var(--border); border-radius:999px;
+                 padding:5px 14px; font-size:12.5px; color:var(--muted); display:flex; gap:6px; align-items:center; }
+  .status-pill b { color:var(--text); }
+  .status-pill .ok { color:var(--ok); } .status-pill .err { color:var(--err); }
+  .status-pill .run { color:var(--run); } .status-pill .warn { color:var(--warn); }
   input,select,button { font-family:inherit; }
   .input, .select { background:var(--card); border:1px solid var(--border); color:var(--text);
                      border-radius:8px; padding:6px 10px; font-size:12.5px; }
@@ -104,28 +135,37 @@
 </style>
 </head>
 <body>
-<div class="container">
-  <div class="topbar">
-    <div class="brand">数仓多 Agent 协作平台<small>全链路监控</small></div>
-    <div class="spacer"></div>
-    <div class="controls">
-      <span class="refresh-note" id="refreshed">加载中…</span>
-      <button class="btn btn-ghost" onclick="loadAll()">刷新</button>
-      <button class="btn btn-ghost" id="themeToggle" onclick="toggleTheme()">☀️</button>
-      <span style="display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px">
-        Token <input type="password" class="input" id="apiToken" placeholder="API_TOKEN（可选）" style="width:170px">
-      </span>
-      <a href="/chat" target="_blank" style="color:var(--accent);font-size:13px">去交互 ↗</a>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="logo"><span class="dot"></span>数仓平台</div>
+      <small>多 Agent 协作 · 全链路监控</small>
     </div>
-  </div>
-
-  <div class="tabs">
-    <button data-tab="tasks" class="active">任务</button>
-    <button data-tab="pipelines">管道</button>
-    <button data-tab="audit">审计</button>
-    <button data-tab="health">组件健康</button>
-    <button data-tab="datasources">数据源</button>
-  </div>
+    <nav>
+      <button data-tab="tasks" class="active"><span class="ico">▤</span>任务</button>
+      <button data-tab="pipelines"><span class="ico">⛓</span>管道</button>
+      <button data-tab="audit"><span class="ico">◷</span>审计</button>
+      <button data-tab="health"><span class="ico">❤</span>组件健康</button>
+      <button data-tab="datasources"><span class="ico">🗄</span>数据源</button>
+    </nav>
+    <div class="side-foot"><span style="width:8px;height:8px;border-radius:50%;background:var(--ok);box-shadow:0 0 6px var(--ok)"></span> 服务运行中</div>
+  </aside>
+  <div class="main">
+    <div class="topbar">
+      <div class="page-title">全链路监控<small>任务 · 管道 · 审计 · 健康 · 数据源</small></div>
+      <div class="spacer"></div>
+      <div class="controls">
+        <span class="refresh-note" id="refreshed">加载中…</span>
+        <button class="btn btn-ghost" onclick="loadAll()">刷新</button>
+        <button class="btn-wizard" onclick="location.href='/ui/wizard'">⚡ 同步向导</button>
+        <button class="btn btn-ghost" id="themeToggle" onclick="toggleTheme()">☀️</button>
+        <span style="display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px">
+          Token <input type="password" class="input" id="apiToken" placeholder="API_TOKEN（可选）" style="width:150px">
+        </span>
+        <a href="/chat" target="_blank" style="color:var(--accent);font-size:13px">去交互 ↗</a>
+      </div>
+    </div>
+  <div class="content">
 
   <div id="tab-tasks">
     <div class="cards" id="cards"></div>
@@ -195,7 +235,6 @@
   <div id="tab-datasources" style="display:none">
     <div class="toolbar">
       <button class="btn btn-action" onclick="openDsForm()">+ 新增数据源</button>
-      <button class="btn btn-approve" onclick="openWizard()">⚡ 同步向导</button>
       <span class="refresh-note">密码仅写入不回显；测试连接使用已保存的凭据</span>
     </div>
     <div class="table-wrap">
@@ -247,39 +286,15 @@
     </div>
   </div>
 
-  <div id="wizModal" style="display:none">
-    <div class="panel">
-      <span class="close" onclick="closeWizard()">✕</span>
-      <h3>同步向导</h3>
-      <div class="form-grid">
-        <label>源数据源 *<select class="select" id="wizSource" onchange="wizSourceChanged()"></select></label>
-        <label>数据库 *<select class="select" id="wizDb" onchange="wizDbChanged()"></select></label>
-        <label>源表 *<select class="select" id="wizTable"></select></label>
-        <label>同步类型<select class="select" id="wizSync">
-          <option value="full">全量</option><option value="incremental">增量</option>
-        </select></label>
-        <label>目标类型 *<select class="select" id="wizTargetType" onchange="wizTargetChanged()">
-          <option value="elasticsearch">Elasticsearch</option>
-          <option value="mysql">MySQL</option>
-          <option value="mongodb">MongoDB</option>
-          <option value="starrocks">StarRocks</option>
-        </select></label>
-        <label id="wizTargetDbWrap" style="display:none">目标库<input class="input" id="wizTargetDb" placeholder="如：dwd"></label>
-        <label>目标表/索引 *<input class="input" id="wizTargetTable" placeholder="如：src_user_index"></label>
-      </div>
-      <div class="form-actions">
-        <button type="button" class="btn btn-ghost" onclick="closeWizard()">取消</button>
-        <button class="btn btn-approve" onclick="submitWizard()">提交任务</button>
-      </div>
-    </div>
+  </div>
   </div>
 </div>
 
 <script>
-// URL 参数 ?wizard=1 时自动打开同步向导（供 chat 页入口跳转）
+// URL 参数 ?wizard=1 时跳转到独立同步向导页（供 chat 页入口跳转）
 window.addEventListener('DOMContentLoaded', () => {
   if (new URLSearchParams(location.search).get('wizard') === '1') {
-    setTimeout(() => openWizard(), 300);
+    location.href = '/ui/wizard';
   }
 });
 
@@ -622,70 +637,6 @@ async function deleteDs(id) {
   } catch (e) { alert(e.message); }
 }
 
-// ---------- 同步向导 ----------
-async function openWizard() {
-  $('wizModal').style.display = 'block';
-  try {
-    const data = await api('/datasources');
-    const srcs = (data.sources || []).filter(s => ['mysql', 'starrocks'].includes(s.db_type));
-    $('wizSource').innerHTML = '<option value="">选择源数据源…</option>' +
-      srcs.map(s => `<option value="${escapeHtml(s.name)}">${escapeHtml(s.name)}（${DBTYPE_LABELS[s.db_type] || s.db_type}）</option>`).join('');
-  } catch (e) { alert(e.message); }
-  $('wizDb').innerHTML = '<option value="">先选数据源</option>';
-  $('wizTable').innerHTML = '<option value="">先选数据库</option>';
-}
-function closeWizard() { $('wizModal').style.display = 'none'; }
-
-async function wizSourceChanged() {
-  const name = $('wizSource').value;
-  $('wizTable').innerHTML = '<option value="">先选数据库</option>';
-  if (!name) { $('wizDb').innerHTML = '<option value="">先选数据源</option>'; return; }
-  $('wizDb').innerHTML = '<option value="">加载中…</option>';
-  try {
-    const data = await api('/datasources');
-    const s = (data.sources || []).find(x => x.name === name);
-    if (!s) return;
-    const r = await api('/datasources/' + s.id + '/discover', {method:'POST'});
-    $('wizDb').innerHTML = '<option value="">选择数据库…</option>' +
-      (r.databases || []).map(d => `<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join('');
-  } catch (e) { $('wizDb').innerHTML = '<option value="">加载失败</option>'; alert(e.message); }
-}
-async function wizDbChanged() {
-  const name = $('wizSource').value, db = $('wizDb').value;
-  if (!name || !db) { $('wizTable').innerHTML = '<option value="">先选数据库</option>'; return; }
-  $('wizTable').innerHTML = '<option value="">加载中…</option>';
-  try {
-    const data = await api('/datasources');
-    const s = (data.sources || []).find(x => x.name === name);
-    const r = await api('/datasources/' + s.id + '/discover?database=' + encodeURIComponent(db), {method:'POST'});
-    $('wizTable').innerHTML = '<option value="">选择表…</option>' +
-      (r.tables || []).map(t => `<option value="${escapeHtml(t.name)}">${escapeHtml(t.name)}${t.comment ? '（' + escapeHtml(t.comment) + '）' : ''}</option>`).join('');
-  } catch (e) { $('wizTable').innerHTML = '<option value="">加载失败</option>'; alert(e.message); }
-}
-function wizTargetChanged() {
-  $('wizTargetDbWrap').style.display = ['mysql', 'starrocks'].includes($('wizTargetType').value) ? '' : 'none';
-}
-async function submitWizard() {
-  const body = {
-    source_name: $('wizSource').value,
-    database: $('wizDb').value,
-    table: $('wizTable').value,
-    target_db_type: $('wizTargetType').value,
-    target_database: $('wizTargetDb').value.trim(),
-    target_table: $('wizTargetTable').value.trim(),
-    sync_type: $('wizSync').value,
-  };
-  if (!body.source_name || !body.database || !body.table || !body.target_table) {
-    alert('请完整选择：源数据源 / 数据库 / 表 / 目标表'); return;
-  }
-  try {
-    const r = await api('/sync/wizard', {method:'POST', headers:Object.assign({'Content-Type':'application/json'}, headers()), body: JSON.stringify(body)});
-    closeWizard();
-    alert('已提交向导任务: ' + r.task_id + '（生成配置后需审批）');
-    document.querySelector('.tabs button[data-tab="tasks"]').click();
-  } catch (e) { alert(e.message); }
-}
-
 function buildTimeline(logs, task) {
   const markers = [
     ['ConfigAgent 开始', '配置生成'], ['ConfigAgent 完成', '配置完成'],
@@ -805,8 +756,8 @@ $('filterStatus').onchange = e => { state.status = e.target.value; state.page = 
 $('filterType').onchange = e => { state.type = e.target.value; state.page = 1; loadTasks(); };
 $('filterTime').onchange = e => { state.time = e.target.value; state.page = 1; loadTasks(); };
 
-document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
-  document.querySelectorAll('.tabs button').forEach(x => x.classList.remove('active'));
+document.querySelectorAll('.sidebar nav button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.sidebar nav button').forEach(x => x.classList.remove('active'));
   b.classList.add('active');
   state.tab = b.dataset.tab;
   ['tasks','pipelines','audit','health','datasources'].forEach(t => $('tab-' + t).style.display = t === b.dataset.tab ? '' : 'none');
@@ -829,7 +780,6 @@ $('apiToken').value = localStorage.getItem(TOKEN_KEY) || '';
 $('apiToken').onchange = e => localStorage.setItem(TOKEN_KEY, e.target.value);
 $('modal').onclick = e => { if (e.target === $('modal')) closeModal(); };
 $('dsModal').onclick = e => { if (e.target === $('dsModal')) closeDsModal(); };
-$('wizModal').onclick = e => { if (e.target === $('wizModal')) closeWizard(); };
 initTheme();
 loadAll();
 setInterval(() => {

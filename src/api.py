@@ -83,6 +83,13 @@ async def dashboard():
     return HTMLResponse(html_path.read_text(encoding="utf-8"))
 
 
+@app.get("/ui/wizard", response_class=HTMLResponse, include_in_schema=False)
+async def wizard_page():
+    """独立数据同步向导页。"""
+    html_path = Path(__file__).parent / "ui" / "wizard.html"
+    return HTMLResponse(html_path.read_text(encoding="utf-8"))
+
+
 @app.get("/chat", response_class=HTMLResponse, include_in_schema=False)
 async def chat_page():
     """用户交互页：自然语言指令 -> 任务实时进度 -> 审批/结果。"""

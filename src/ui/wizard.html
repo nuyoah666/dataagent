@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🗄️</text></svg>">
+<title>数仓平台 · 同步向导</title>
+<style>
+  :root { --bg:#0f172a; --card:#1e293b; --border:#334155; --text:#e2e8f0; --muted:#94a3b8;
+          --ok:#22c55e; --err:#ef4444; --run:#f59e0b; --accent:#38bdf8; --warn:#eab308;
+          --hover:rgba(255,255,255,.05); --shadow:0 4px 16px rgba(0,0,0,.25); }
+  :root[data-theme="light"] { --bg:#f1f5f9; --card:#ffffff; --border:#e2e8f0; --text:#0f172a;
+          --muted:#64748b; --ok:#16a34a; --err:#dc2626; --run:#d97706; --accent:#0284c7;
+          --warn:#ca8a04; --hover:rgba(15,23,42,.05); --shadow:0 2px 10px rgba(15,23,42,.08); }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:var(--bg); color:var(--text); font-family:"Segoe UI",system-ui,sans-serif;
+         min-height:100vh; display:flex; flex-direction:column; }
+  .topbar { display:flex; align-items:center; gap:12px; padding:14px 24px;
+            border-bottom:1px solid var(--border); background:var(--bg); position:sticky; top:0; z-index:5; }
+  .topbar .logo { font-size:16px; font-weight:700; display:flex; align-items:center; gap:8px; }
+  .topbar .logo .dot { width:10px; height:10px; border-radius:50%;
+                       background:linear-gradient(135deg,var(--accent),#6366f1); box-shadow:0 0 8px var(--accent); }
+  .topbar .title { font-size:15px; color:var(--muted); }
+  .topbar .spacer { flex:1; }
+  .topbar a { color:var(--accent); text-decoration:none; font-size:13px; }
+  .theme-btn { background:none; border:1px solid var(--border); color:var(--muted); border-radius:7px;
+               padding:4px 10px; cursor:pointer; font-size:13px; }
+  .steps { display:flex; justify-content:center; gap:0; margin:26px auto 8px; padding:0 24px; flex-wrap:wrap; }
+  .step { display:flex; align-items:center; gap:8px; padding:8px 18px; color:var(--muted); font-size:13px; }
+  .step .num { width:24px; height:24px; border-radius:50%; border:1px solid var(--border);
+               display:flex; align-items:center; justify-content:center; font-size:12px; }
+  .step.active { color:var(--accent); }
+  .step.active .num { background:var(--accent); color:#fff; border-color:var(--accent); }
+  .step.done .num { background:rgba(34,197,94,.2); color:var(--ok); border-color:var(--ok); }
+  .step::after { content:"→"; margin-left:14px; color:var(--border); }
+  .step:last-child::after { content:""; }
+  .wrap { flex:1; display:flex; justify-content:center; align-items:flex-start; padding:20px 24px 40px; }
+  .card { width:100%; max-width:720px; background:var(--card); border:1px solid var(--border);
+          border-radius:14px; box-shadow:var(--shadow); padding:26px 30px; }
+  .card h2 { font-size:17px; margin-bottom:4px; }
+  .card .sub { color:var(--muted); font-size:12.5px; margin-bottom:20px; }
+  .form-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px 18px; }
+  .form-grid .full { grid-column:1 / -1; }
+  label { display:flex; flex-direction:column; gap:6px; font-size:12.5px; color:var(--muted); }
+  label .req { color:var(--err); }
+  .input, .select { background:var(--bg); border:1px solid var(--border); color:var(--text);
+                    border-radius:9px; padding:10px 12px; font-size:13.5px; width:100%; }
+  .input:focus, .select:focus { outline:2px solid rgba(56,189,248,.35); border-color:var(--accent); }
+  .hint { font-size:11.5px; color:var(--muted); margin-top:6px; }
+  .actions { display:flex; gap:10px; margin-top:26px; justify-content:flex-end; }
+  .btn { padding:9px 22px; border-radius:9px; cursor:pointer; font-size:13.5px;
+         border:1px solid var(--border); background:var(--bg); color:var(--text); }
+  .btn:hover { opacity:.85; }
+  .btn-primary { background:linear-gradient(135deg,#38bdf8,#6366f1); border:none; color:#fff; font-weight:600;
+                 box-shadow:0 4px 14px rgba(56,189,248,.35); }
+  .btn-primary:disabled { opacity:.5; cursor:not-allowed; }
+  .result-box { text-align:center; padding:26px 10px; }
+  .result-box .big { font-size:44px; }
+  .result-box h3 { margin:10px 0 6px; font-size:17px; }
+  .result-box .task-id { background:var(--bg); border:1px solid var(--border); border-radius:8px;
+                         padding:8px 16px; display:inline-block; font-family:monospace; margin:10px 0; }
+  .result-box .note { color:var(--warn); font-size:12.5px; margin-top:6px; }
+  .result-box a { color:var(--accent); }
+  .spinner { display:inline-block; width:14px; height:14px; border:2px solid var(--border);
+             border-top-color:var(--accent); border-radius:50%; animation:spin .8s linear infinite;
+             vertical-align:-2px; margin-right:6px; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  @media (max-width:640px) { .form-grid { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="logo"><span class="dot"></span>数仓平台</div>
+    <span class="title">数据同步向导</span>
+    <div class="spacer"></div>
+    <a href="/ui" target="_blank">全链路监控 ↗</a>
+    <a href="/chat" target="_blank">对话交互 ↗</a>
+    <button class="theme-btn" id="themeToggle" onclick="toggleTheme()">☀️</button>
+  </div>
+
+  <div class="steps">
+    <div class="step active" id="step1"><span class="num">1</span>源端</div>
+    <div class="step" id="step2"><span class="num">2</span>目标端</div>
+    <div class="step" id="step3"><span class="num">3</span>提交</div>
+  </div>
+
+  <div class="wrap">
+    <div class="card" id="formCard">
+      <h2>创建数据同步任务</h2>
+      <div class="sub">选择源端数据 → 配置目标端 → 提交后由系统生成 DataX 配置，人工审批后执行</div>
+
+      <div class="form-grid">
+        <label class="full">源数据源 <span class="req">*</span>
+          <select class="select" id="wizSource" onchange="wizSourceChanged()"></select>
+        </label>
+        <label>数据库 <span class="req">*</span>
+          <select class="select" id="wizDb" onchange="wizDbChanged()"><option>先选数据源</option></select>
+        </label>
+        <label>源表 <span class="req">*</span>
+          <select class="select" id="wizTable"><option>先选数据库</option></select>
+        </label>
+        <label>同步类型
+          <select class="select" id="wizSync">
+            <option value="full">全量同步</option>
+            <option value="incremental">增量同步</option>
+          </select>
+        </label>
+        <label>目标类型 <span class="req">*</span>
+          <select class="select" id="wizTargetType" onchange="wizTargetChanged()">
+            <option value="elasticsearch">Elasticsearch</option>
+            <option value="mysql">MySQL</option>
+            <option value="mongodb">MongoDB</option>
+            <option value="starrocks">StarRocks</option>
+          </select>
+        </label>
+        <label id="wizTargetDbWrap" class="full" style="display:none">目标库
+          <input class="input" id="wizTargetDb" placeholder="如：dwd">
+        </label>
+        <label class="full">目标表 / 索引 <span class="req">*</span>
+          <input class="input" id="wizTargetTable" placeholder="如：src_user_index">
+          <span class="hint">ES 填索引名；MySQL/StarRocks 填表名</span>
+        </label>
+      </div>
+
+      <div class="actions">
+        <button class="btn" onclick="location.href='/ui'">取消</button>
+        <button class="btn btn-primary" id="submitBtn" onclick="submitWizard()">提交任务</button>
+      </div>
+    </div>
+
+    <div class="card" id="resultCard" style="display:none">
+      <div class="result-box">
+        <div class="big">✅</div>
+        <h3>任务已提交</h3>
+        <div>任务 ID</div>
+        <div class="task-id" id="resultTaskId"></div>
+        <div class="note">⏳ 系统正在生成 DataX 配置，完成后需<b>人工审批</b>才会执行</div>
+        <div style="margin-top:16px">
+          <a href="/ui" id="resultLink">去全链路监控查看任务状态 →</a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+const $ = id => document.getElementById(id);
+const TOKEN_KEY = 'dataagent_api_token';
+const DBTYPE_LABELS = { mysql:'MySQL', mongodb:'MongoDB', elasticsearch:'Elasticsearch', starrocks:'StarRocks' };
+
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  $('themeToggle').textContent = theme === 'dark' ? '☀️' : '🌙';
+}
+function initTheme() {
+  const saved = localStorage.getItem('dataagent_theme');
+  applyTheme(saved || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'));
+}
+function toggleTheme() {
+  const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+  applyTheme(next);
+  localStorage.setItem('dataagent_theme', next);
+}
+
+function token() { return localStorage.getItem(TOKEN_KEY) || ''; }
+function headers() { const t = token(); return t ? {'X-API-Token': t} : {}; }
+function escapeHtml(s) {
+  return (s == null ? '' : String(s)).replace(/[&<>"']/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+async function api(url, opts) {
+  const r = await fetch(url, Object.assign({headers: headers()}, opts || {}));
+  if (r.status === 401) { alert('未授权：请配置 API_TOKEN'); throw new Error('unauthorized'); }
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.detail || ('HTTP ' + r.status));
+  return data;
+}
+
+function setStep(n) {
+  [1, 2, 3].forEach(i => {
+    const el = $('step' + i);
+    el.classList.toggle('active', i === n);
+    el.classList.toggle('done', i < n);
+  });
+}
+
+async function initWizard() {
+  setStep(1);
+  try {
+    const data = await api('/datasources');
+    const srcs = (data.sources || []).filter(s => ['mysql', 'starrocks'].includes(s.db_type));
+    $('wizSource').innerHTML = '<option value="">选择源数据源…</option>' +
+      srcs.map(s => `<option value="${escapeHtml(s.name)}">${escapeHtml(s.name)}（${DBTYPE_LABELS[s.db_type] || s.db_type}）</option>`).join('');
+  } catch (e) {
+    $('wizSource').innerHTML = '<option value="">数据源加载失败</option>';
+    alert(e.message);
+  }
+}
+
+async function wizSourceChanged() {
+  setStep(1);
+  const name = $('wizSource').value;
+  $('wizTable').innerHTML = '<option>先选数据库</option>';
+  if (!name) { $('wizDb').innerHTML = '<option>先选数据源</option>'; return; }
+  $('wizDb').innerHTML = '<option>加载中…</option>';
+  try {
+    const data = await api('/datasources');
+    const s = (data.sources || []).find(x => x.name === name);
+    if (!s) return;
+    const r = await api('/datasources/' + s.id + '/discover', {method:'POST'});
+    $('wizDb').innerHTML = '<option value="">选择数据库…</option>' +
+      (r.databases || []).map(d => `<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join('');
+  } catch (e) {
+    $('wizDb').innerHTML = '<option value="">加载失败</option>';
+    alert(e.message);
+  }
+}
+
+async function wizDbChanged() {
+  setStep(1);
+  const name = $('wizSource').value, db = $('wizDb').value;
+  if (!name || !db) { $('wizTable').innerHTML = '<option>先选数据库</option>'; return; }
+  $('wizTable').innerHTML = '<option>加载中…</option>';
+  try {
+    const data = await api('/datasources');
+    const s = (data.sources || []).find(x => x.name === name);
+    const r = await api('/datasources/' + s.id + '/discover?database=' + encodeURIComponent(db), {method:'POST'});
+    $('wizTable').innerHTML = '<option value="">选择表…</option>' +
+      (r.tables || []).map(t => `<option value="${escapeHtml(t.name)}">${escapeHtml(t.name)}${t.comment ? '（' + escapeHtml(t.comment) + '）' : ''}</option>`).join('');
+  } catch (e) {
+    $('wizTable').innerHTML = '<option value="">加载失败</option>';
+    alert(e.message);
+  }
+}
+
+function wizTargetChanged() {
+  $('wizTargetDbWrap').style.display = ['mysql', 'starrocks'].includes($('wizTargetType').value) ? '' : 'none';
+  setStep(2);
+}
+
+async function submitWizard() {
+  const body = {
+    source_name: $('wizSource').value,
+    database: $('wizDb').value,
+    table: $('wizTable').value,
+    target_db_type: $('wizTargetType').value,
+    target_database: $('wizTargetDb').value.trim(),
+    target_table: $('wizTargetTable').value.trim(),
+    sync_type: $('wizSync').value,
+  };
+  if (!body.source_name || !body.database || !body.table || !body.target_table) {
+    alert('请完整选择：源数据源 / 数据库 / 表 / 目标表'); return;
+  }
+  setStep(3);
+  const btn = $('submitBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>提交中…';
+  try {
+    const r = await api('/sync/wizard', {method:'POST', headers:Object.assign({'Content-Type':'application/json'}, headers()), body: JSON.stringify(body)});
+    $('formCard').style.display = 'none';
+    $('resultCard').style.display = 'block';
+    $('resultTaskId').textContent = r.task_id;
+    $('resultLink').href = '/ui';
+  } catch (e) {
+    alert('提交失败: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '提交任务';
+  }
+}
+
+initTheme();
+initWizard();
+</script>
+</body>
+</html>
