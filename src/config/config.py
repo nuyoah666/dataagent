@@ -1,6 +1,6 @@
 """配置管理模块。"""
 import os
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -65,6 +65,16 @@ class Config:
     )
     LLM_MODEL: str = os.getenv("LLM_MODEL", "mimo-v2.5-pro")
 
+    # ---- 按 Agent 模型覆盖（可选）----
+    # 缺省为空 => 对应 Agent 使用全局 LLM_MODEL；
+    # 配置后仅该任务类型的 Agent 使用指定模型（如意图解析用便宜模型、运维诊断用强模型）
+    AGENT_MODELS: Dict[str, str] = {
+        "data_integration": os.getenv("AGENT_DATA_INTEGRATION_MODEL", ""),
+        "etl_development": os.getenv("AGENT_ETL_DEVELOPMENT_MODEL", ""),
+        "data_ops": os.getenv("AGENT_DATA_OPS_MODEL", ""),
+        "data_analysis": os.getenv("AGENT_DATA_ANALYSIS_MODEL", ""),
+    }
+
     # ---- DataX 执行超时（秒），防止任务挂死 ----
     DATAX_TIMEOUT: int = int(os.getenv("DATAX_TIMEOUT", "3600"))
 
@@ -104,6 +114,11 @@ class Config:
             return cls.STARROCKS_CONFIG
         else:
             raise ValueError(f"不支持的数据库类型: {db_type}")
+
+    @classmethod
+    def get_agent_model(cls, task_type: str) -> Optional[str]:
+        """返回该任务类型 Agent 的模型覆盖；未配置返回 None（走全局 LLM_MODEL）。"""
+        return cls.AGENT_MODELS.get(task_type) or None
 
     @classmethod
     def ensure_directories(cls):

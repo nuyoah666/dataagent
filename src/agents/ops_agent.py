@@ -21,7 +21,7 @@ from ..tools import (
 from ..tools.ops_kb_tool import add_ops_incident, _load_records, _store_path
 from ..workflow.task_manager import get_task_manager
 from ..utils import llm_circuit_breaker, rag_circuit_breaker
-from ..utils.llm import llm_json, LLMJsonError
+from ..utils.llm import llm_json, LLMJsonError, get_agent_llm
 from .base import BaseAgent, register_agent
 
 logger = logging.getLogger(__name__)
@@ -158,7 +158,12 @@ class OpsDiagnosisAgent(BaseAgent):
             f"事故知识库检索结果:\n{rag_text[:2000]}"
         )
         try:
-            data = llm_json(prompt_text, human, breaker=llm_circuit_breaker)
+            data = llm_json(
+                prompt_text,
+                human,
+                llm=get_agent_llm("data_ops"),
+                breaker=llm_circuit_breaker,
+            )
             return {
                 "root_cause": str(data.get("root_cause", "")).strip() or "未知根因",
                 "impact": str(data.get("impact", "")).strip(),

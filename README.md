@@ -174,7 +174,9 @@ StarRocks / Doris 的 FE 兼容 MySQL 协议，Agent 可直接把它们作为目
 - 工具注册表：`@register_tool(name)` + `call_tool(name, **kwargs)`，
   后续 ETL/运维/分析 Agent 可直接复用现有工具
 - 统一 LLM 层：`src/utils/llm.py` 的 `get_llm()` 提供共享实例，
-  统一管理 API Key 校验、超时与重试
+  统一管理 API Key 校验、超时与重试；按任务类型可覆盖模型
+  （`.env` 中配置 `AGENT_<TASK_TYPE>_MODEL`，缺省全部走 `LLM_MODEL`），
+  新增 Agent 时只需在 `config.AGENT_MODELS` 注册一项
 
 ## 意图路由（MVP：基于规则）
 

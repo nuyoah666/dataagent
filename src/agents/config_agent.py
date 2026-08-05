@@ -14,7 +14,7 @@ from ..tools import (
     process_config, normalize_intent,
 )
 from ..utils import llm_circuit_breaker, rag_circuit_breaker
-from ..utils.llm import get_llm, llm_json, LLMJsonError
+from ..utils.llm import get_agent_llm, llm_json, LLMJsonError
 from ..config import config
 from ..tools.credentials import apply_intent_defaults
 from ..schemas import SyncIntent
@@ -35,9 +35,12 @@ class ConfigAgent(BaseAgent):
         if self._ok:
             return True
         try:
-            self.llm = get_llm()
+            self.llm = get_agent_llm("data_integration")
             self._ok = True
-            logger.info(f"LLM 初始化成功: {config.LLM_MODEL}")
+            logger.info(
+                f"LLM 初始化成功: "
+                f"{config.get_agent_model('data_integration') or config.LLM_MODEL}"
+            )
             return True
         except Exception as e:
             logger.error(f"LLM 初始化失败: {e}")

@@ -1,36 +1,47 @@
 """统一 LLM 客户端与 JSON 输出解析。
 
-所有 Agent 共用同一个 LLM 实例（线程安全的懒加载单例），
+默认所有 Agent 共用全局 LLM_MODEL（线程安全的懒加载缓存），
+同时支持按任务类型覆盖模型（见 config.AGENT_MODELS），
 统一管理模型、超时、重试与 API Key 校验。
 """
 import json
 import logging
 import re
 from functools import lru_cache
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from ..config import config
 
 logger = logging.getLogger(__name__)
 
 
-@lru_cache(maxsize=1)
-def get_llm():
-    """获取共享 ChatOpenAI 实例（未配置 API Key 时抛清晰错误）。"""
+@lru_cache(maxsize=8)
+def get_llm(model: Optional[str] = None):
+    """获取 ChatOpenAI 实例（未配置 API Key 时抛清晰错误）。
+
+    按模型分别缓存：model 缺省用全局 LLM_MODEL；
+    传入具体模型名即可实现"按 Agent 覆盖模型"。
+    """
     if not config.LLM_API_KEY:
         raise RuntimeError("未配置 LLM_API_KEY，请在 .env 中设置")
     from langchain_openai import ChatOpenAI
 
+    resolved_model = model or config.LLM_MODEL
     llm = ChatOpenAI(
-        model=config.LLM_MODEL,
+        model=resolved_model,
         temperature=0,
         api_key=config.LLM_API_KEY,
         base_url=config.LLM_BASE_URL,
         request_timeout=30,
         max_retries=2,
     )
-    logger.info(f"LLM 初始化成功: {config.LLM_MODEL}")
+    logger.info(f"LLM 初始化成功: {resolved_model}")
     return llm
+
+
+def get_agent_llm(task_type: str):
+    """按任务类型获取 LLM 实例（支持单 Agent 模型覆盖，未配置走全局模型）。"""
+    return get_llm(config.get_agent_model(task_type))
 
 
 class LLMJsonError(Exception):

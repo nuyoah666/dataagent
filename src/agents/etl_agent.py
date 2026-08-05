@@ -11,7 +11,7 @@ from ..schemas import ETLIntent, ETLPlan
 from ..tools.sql_validator import validate_etl_sql
 from ..tools.db_tool import validate_identifier
 from ..tools.db import mysql_conn
-from ..utils.llm import llm_json, LLMJsonError
+from ..utils.llm import llm_json, LLMJsonError, get_agent_llm
 from ..utils import llm_circuit_breaker
 from ..config import config
 from .base import BaseAgent, register_agent
@@ -22,6 +22,15 @@ logger = logging.getLogger(__name__)
 @register_agent("etl_development", "config")
 class ETLConfigAgent(BaseAgent):
     """解析 ETL 意图并生成安全的加工 SQL。"""
+
+    def __init__(self):
+        self._llm = None
+
+    def _get_llm(self):
+        """懒加载本 Agent 的 LLM（支持模型覆盖）。"""
+        if self._llm is None:
+            self._llm = get_agent_llm("etl_development")
+        return self._llm
 
     def run(self, state: DataIntegrationState) -> DataIntegrationState:
         user_query = state.get("user_query", "")
@@ -88,6 +97,7 @@ class ETLConfigAgent(BaseAgent):
                 "（clean/aggregate/wide_table）。\n"
                 "从指令中提取源表和目标表，未提及时 database 留空。",
                 f"指令：{user_query}",
+                llm=self._get_llm(),
                 breaker=llm_circuit_breaker,
             )
             return ETLIntent.model_validate(data).model_dump()
@@ -151,6 +161,7 @@ class ETLConfigAgent(BaseAgent):
                 f"源表：{intent['source_table']}\n目标表：{intent['target_table']}\n"
                 f"加工类型：{intent.get('transform_type', 'clean')}\n"
                 f"源表结构：{col_desc}\n请生成 SQL：",
+                llm=self._get_llm(),
                 breaker=llm_circuit_breaker,
             )
             return ETLPlan.model_validate(data).model_dump()
