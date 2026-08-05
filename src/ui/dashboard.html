@@ -95,6 +95,12 @@
   .audit-detail { color:var(--muted); font-size:11.5px; word-break:break-all; }
   .refresh-note { color:var(--muted); font-size:12px; }
   .detail-meta { display:flex; gap:16px; flex-wrap:wrap; color:var(--muted); font-size:12.5px; margin-top:6px; }
+  .form-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px 14px; margin-top:12px; }
+  .form-grid label { display:flex; flex-direction:column; gap:4px; font-size:12px; color:var(--muted); }
+  .form-grid .full { grid-column:1 / -1; }
+  .form-actions { display:flex; gap:8px; margin-top:14px; justify-content:flex-end; }
+  .test-result { font-size:12px; margin-top:8px; }
+  .test-result.ok { color:var(--ok); } .test-result.bad { color:var(--err); }
 </style>
 </head>
 <body>
@@ -118,6 +124,7 @@
     <button data-tab="pipelines">管道</button>
     <button data-tab="audit">审计</button>
     <button data-tab="health">组件健康</button>
+    <button data-tab="datasources">数据源</button>
   </div>
 
   <div id="tab-tasks">
@@ -185,6 +192,20 @@
     <div class="health-grid" id="healthGrid" style="margin-top:12px"></div>
   </div>
 
+  <div id="tab-datasources" style="display:none">
+    <div class="toolbar">
+      <button class="btn btn-action" onclick="openDsForm()">+ 新增数据源</button>
+      <span class="refresh-note">密码仅写入不回显；测试连接使用已保存的凭据</span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>名称</th><th>类型</th><th>主机:端口</th><th>库</th>
+          <th>备注</th><th>密码</th><th>操作</th></tr></thead>
+        <tbody id="dsRows"><tr><td colspan="7" class="empty">加载中…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
   <div id="modal">
     <div class="panel">
       <span class="close" onclick="closeModal()">✕</span>
@@ -193,12 +214,44 @@
       <div class="actions-bar" id="detailActions"></div>
     </div>
   </div>
+
+  <div id="dsModal" style="display:none">
+    <div class="panel">
+      <span class="close" onclick="closeDsModal()">✕</span>
+      <h3 id="dsTitle">新增数据源</h3>
+      <form id="dsForm" onsubmit="saveDs(event)">
+        <input type="hidden" id="dsId">
+        <div class="form-grid">
+          <label>名称 *<input class="input" id="dsName" placeholder="如：生产MySQL"></label>
+          <label>类型 *<select class="select" id="dsType">
+            <option value="mysql">MySQL</option>
+            <option value="mongodb">MongoDB</option>
+            <option value="elasticsearch">Elasticsearch</option>
+            <option value="starrocks">StarRocks</option>
+          </select></label>
+          <label>主机 *<input class="input" id="dsHost" placeholder="127.0.0.1"></label>
+          <label>端口 *<input class="input" id="dsPort" type="number" value="3306"></label>
+          <label>用户名<input class="input" id="dsUser" placeholder="root"></label>
+          <label>密码<input class="input" id="dsPass" type="password" placeholder="留空=保留原密码"></label>
+          <label>默认库<input class="input" id="dsDb" placeholder="如：datax_test"></label>
+          <label>备注<input class="input" id="dsRemark" placeholder="用途说明"></label>
+        </div>
+        <div class="test-result" id="dsTestResult"></div>
+        <div class="form-actions">
+          <button type="button" class="btn btn-ghost" onclick="testDsFields()">测试连接</button>
+          <button type="button" class="btn btn-ghost" onclick="closeDsModal()">取消</button>
+          <button type="submit" class="btn btn-action">保存</button>
+        </div>
+      </form>
+    </div>
+  </div>
 </div>
 
 <script>
 const $ = id => document.getElementById(id);
 const TOKEN_KEY = 'dataagent_api_token';
 const TYPE_LABELS = { data_integration:'数据集成', etl_development:'ETL', data_ops:'运维' };
+const DBTYPE_LABELS = { mysql:'MySQL', mongodb:'MongoDB', elasticsearch:'Elasticsearch', starrocks:'StarRocks' };
 const state = { status:'all', type:'all', q:'', time:'all', sort:'created_at', order:'desc',
                 page:1, size:20, tab:'tasks' };
 
@@ -436,6 +489,104 @@ async function loadHealth() {
   } catch (e) { grid.innerHTML = `<div class="empty">${escapeHtml(e.message)}</div>`; }
 }
 
+// ---------- 数据源 ----------
+async function loadSources() {
+  const tbody = $('dsRows');
+  tbody.innerHTML = '<tr><td colspan="7" class="empty">加载中…</td></tr>';
+  try {
+    const data = await api('/datasources');
+    const srcs = data.sources || [];
+    if (!srcs.length) { tbody.innerHTML = '<tr><td colspan="7" class="empty">暂无数据源，点击右上角"新增数据源"</td></tr>'; return; }
+    tbody.innerHTML = srcs.map(s => `<tr>
+      <td><b>${escapeHtml(s.name)}</b></td>
+      <td><span class="tag type">${DBTYPE_LABELS[s.db_type] || escapeHtml(s.db_type)}</span></td>
+      <td>${escapeHtml(s.host)}:${s.port}</td>
+      <td>${escapeHtml(s.database || '—')}</td>
+      <td>${escapeHtml(s.remark || '—')}</td>
+      <td>${s.has_password ? '●●●●' : '未设置'}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-action" onclick="testDs(${s.id})">测试</button>
+        <button class="btn btn-action" onclick="openDsForm(${s.id})">编辑</button>
+        <button class="btn btn-danger" onclick="deleteDs(${s.id})">删除</button>
+      </td></tr>`).join('');
+  } catch (e) { tbody.innerHTML = `<tr><td colspan="7" class="empty">${escapeHtml(e.message)}</td></tr>`; }
+}
+
+function openDsForm(id) {
+  $('dsTestResult').textContent = '';
+  $('dsTestResult').className = 'test-result';
+  if (id) {
+    api('/datasources').then(d => {
+      const s = (d.sources || []).find(x => x.id === id);
+      if (!s) return;
+      $('dsTitle').textContent = '编辑数据源';
+      $('dsId').value = s.id;
+      $('dsName').value = s.name;
+      $('dsType').value = s.db_type;
+      $('dsHost').value = s.host;
+      $('dsPort').value = s.port;
+      $('dsUser').value = s.username || '';
+      $('dsPass').value = '';
+      $('dsDb').value = s.database || '';
+      $('dsRemark').value = s.remark || '';
+      $('dsModal').style.display = 'block';
+    }).catch(e => alert(e.message));
+  } else {
+    $('dsTitle').textContent = '新增数据源';
+    $('dsForm').reset();
+    $('dsId').value = '';
+    $('dsPort').value = '3306';
+    $('dsModal').style.display = 'block';
+  }
+}
+function closeDsModal() { $('dsModal').style.display = 'none'; }
+
+function dsFields() {
+  return {
+    name: $('dsName').value.trim(), db_type: $('dsType').value,
+    host: $('dsHost').value.trim(), port: parseInt($('dsPort').value || '0', 10),
+    username: $('dsUser').value.trim(), password: $('dsPass').value,
+    database: $('dsDb').value.trim(), remark: $('dsRemark').value.trim(),
+  };
+}
+async function testDsFields() {
+  const el = $('dsTestResult');
+  el.className = 'test-result'; el.textContent = '测试中…';
+  try {
+    const r = await api('/datasources/test', {method:'POST', headers:Object.assign({'Content-Type':'application/json'}, headers()), body: JSON.stringify(dsFields())});
+    el.className = 'test-result ' + (r.success ? 'ok' : 'bad');
+    el.textContent = r.success ? `✅ 连接成功 · ${r.latency_ms}ms` : `❌ ${r.error}`;
+  } catch (e) { el.className = 'test-result bad'; el.textContent = '❌ ' + e.message; }
+}
+async function saveDs(e) {
+  e.preventDefault();
+  const id = $('dsId').value;
+  const body = dsFields();
+  try {
+    const r = await api('/datasources' + (id ? '/' + id : ''), {
+      method: id ? 'PUT' : 'POST',
+      headers: Object.assign({'Content-Type':'application/json'}, headers()),
+      body: JSON.stringify(body),
+    });
+    if (!r.success) { alert('保存失败: ' + r.error); return; }
+    closeDsModal(); loadSources();
+  } catch (err) { alert('保存失败: ' + err.message); }
+}
+async function testDs(id) {
+  try {
+    const r = await api('/datasources/' + id + '/test', {method:'POST'});
+    alert(r.success ? `✅ 连接成功 · ${r.latency_ms}ms` : `❌ ${r.error}`);
+  } catch (e) { alert(e.message); }
+}
+async function deleteDs(id) {
+  if (!confirm('确认删除该数据源？')) return;
+  try {
+    const r = await api('/datasources/' + id, {method:'DELETE'});
+    if (!r.success) { alert('删除失败: ' + r.error); return; }
+    loadSources();
+  } catch (e) { alert(e.message); }
+}
+
 function buildTimeline(logs, task) {
   const markers = [
     ['ConfigAgent 开始', '配置生成'], ['ConfigAgent 完成', '配置完成'],
@@ -542,11 +693,12 @@ document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
   document.querySelectorAll('.tabs button').forEach(x => x.classList.remove('active'));
   b.classList.add('active');
   state.tab = b.dataset.tab;
-  ['tasks','pipelines','audit','health'].forEach(t => $('tab-' + t).style.display = t === b.dataset.tab ? '' : 'none');
+  ['tasks','pipelines','audit','health','datasources'].forEach(t => $('tab-' + t).style.display = t === b.dataset.tab ? '' : 'none');
   if (b.dataset.tab === 'tasks') loadTasks();
   if (b.dataset.tab === 'pipelines') loadPipelines();
   if (b.dataset.tab === 'audit') loadAudit();
   if (b.dataset.tab === 'health') loadHealth();
+  if (b.dataset.tab === 'datasources') loadSources();
 });
 
 function loadAll() {
@@ -554,11 +706,13 @@ function loadAll() {
   if (state.tab === 'pipelines') loadPipelines();
   if (state.tab === 'audit') loadAudit();
   if (state.tab === 'health') loadHealth();
+  if (state.tab === 'datasources') loadSources();
 }
 
 $('apiToken').value = localStorage.getItem(TOKEN_KEY) || '';
 $('apiToken').onchange = e => localStorage.setItem(TOKEN_KEY, e.target.value);
 $('modal').onclick = e => { if (e.target === $('modal')) closeModal(); };
+$('dsModal').onclick = e => { if (e.target === $('dsModal')) closeDsModal(); };
 initTheme();
 loadAll();
 setInterval(() => {

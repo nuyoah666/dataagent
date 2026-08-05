@@ -165,6 +165,28 @@ class ChatSubmitRequest(BaseModel):
             raise HTTPException(status_code=422, detail="query 过长（最多 2000 字符）")
         return query
 
+
+class DataSourceCreate(BaseModel):
+    name: str
+    db_type: str
+    host: str
+    port: int
+    username: str = ""
+    password: str = ""
+    database: str = ""
+    remark: str = ""
+
+
+class DataSourceUpdate(BaseModel):
+    name: Optional[str] = None
+    db_type: Optional[str] = None
+    host: Optional[str] = None
+    port: Optional[int] = None
+    username: Optional[str] = None
+    password: Optional[str] = None
+    database: Optional[str] = None
+    remark: Optional[str] = None
+
 @app.get("/")
 async def root():
     return {"service": "数仓多 Agent 协作平台", "version": "1.0.0", "status": "running"}
@@ -419,6 +441,66 @@ async def reject_task(task_id: str, request: Request):
     if result is None:
         raise HTTPException(status_code=409, detail="只有待审批任务可以拒绝")
     return {"task_id": task_id, "status": result.get("status"), "message": "已拒绝执行"}
+
+
+# ---------- 数据源注册表 ----------
+
+
+@app.get("/datasources")
+async def list_datasources():
+    from src.tools.data_source import list_sources
+
+    return {"sources": list_sources()}
+
+
+@app.post("/datasources")
+async def create_datasource(req: DataSourceCreate):
+    from src.tools.data_source import create_source
+
+    return create_source(
+        req.name, req.db_type, req.host, req.port,
+        req.username, req.password, req.database, req.remark,
+    )
+
+
+@app.post("/datasources/test")
+async def test_datasource_fields(req: DataSourceCreate):
+    from src.tools.data_source import test_fields
+
+    return test_fields(
+        req.db_type, req.host, req.port,
+        req.username, req.password, req.database,
+    )
+
+
+@app.put("/datasources/{source_id}")
+async def update_datasource(source_id: int, req: DataSourceUpdate):
+    from src.tools.data_source import update_source
+
+    fields = {k: v for k, v in req.model_dump().items() if v is not None}
+    return update_source(source_id, **fields)
+
+
+@app.delete("/datasources/{source_id}")
+async def delete_datasource(source_id: int):
+    from src.tools.data_source import delete_source
+
+    return delete_source(source_id)
+
+
+@app.post("/datasources/{source_id}/test")
+async def test_datasource(source_id: int):
+    from src.tools.data_source import test_source
+
+    return test_source(source_id)
+
+
+@app.post("/datasources/{source_id}/discover")
+async def discover_datasource(source_id: int, database: Optional[str] = None):
+    from src.tools.data_source import discover_source
+
+    return discover_source(source_id, database)
+
 
 @app.get("/health")
 async def health():

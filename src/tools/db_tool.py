@@ -239,6 +239,10 @@ def discover_tables(
     keyword: str,
     db_type: str = "mysql",
     limit: int = 20,
+    host: str = None,
+    port: int = None,
+    username: str = None,
+    password: str = None,
 ) -> Dict[str, Any]:
     """按表名/表注释在可访问库中发现候选表（歧义消除的元数据目录）。
 
@@ -263,7 +267,9 @@ def discover_tables(
     try:
         from .db import mysql_conn
 
-        with mysql_conn(db_type) as conn:
+        with mysql_conn(
+            db_type, host=host, port=port, username=username, password=password,
+        ) as conn:
             with conn.cursor() as cur:
                 try:
                     cur.execute(

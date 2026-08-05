@@ -119,6 +119,21 @@ def _init_tables(conn: sqlite3.Connection):
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_task_logs_task_id ON task_logs(task_id)"
     )
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS data_sources (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            db_type TEXT NOT NULL,
+            host TEXT NOT NULL,
+            port INTEGER NOT NULL,
+            username TEXT DEFAULT '',
+            password TEXT DEFAULT '',
+            database TEXT DEFAULT '',
+            remark TEXT DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
     _migrate_tables(conn)
     conn.commit()
 
