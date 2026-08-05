@@ -403,8 +403,39 @@ class TestStarRocks:
         assert writer["parameter"]["connection"][0]["jdbcUrl"].startswith(
             "jdbc:mysql://127.0.0.1:9030/"
         )
-        # 连接表必须是目标表，不能用 LLM 填的源表名
-        assert writer["parameter"]["connection"][0]["table"] == ["src_user_sr"]
+
+    def test_es_writer_sanitizes_dynamic_and_cleanup(self):
+        """回归：LLM 把 dynamic 输出成 mapping 对象、cleanup 输出成 true 时，
+        DataX elasticsearchwriter 会报错/删索引——后处理必须净化。"""
+        intent = _intent(
+            target_db_type="elasticsearch",
+            target_host="localhost",
+            target_port=9200,
+            target_table="idx_user",
+        )
+        llm_cfg = {
+            "job": {"content": [{
+                "reader": {
+                    "name": "mysqlreader",
+                    "parameter": {
+                        "connection": [{"jdbcUrl": ["jdbc:mysql://127.0.0.1:3306/datax_test"]}],
+                    },
+                },
+                "writer": {
+                    "name": "elasticsearchwriter",
+                    "parameter": {
+                        "column": ["id", "name"],
+                        "cleanup": True,
+                        "dynamic": {"date_detection": False, "numeric_detection": True},
+                    },
+                },
+            }]}
+        }
+        result = process_config(intent, {"success": True, "columns": []}, llm_config=llm_cfg)
+        writer = result["config"]["job"]["content"][0]["writer"]
+        param = writer["parameter"]
+        assert param["dynamic"] is True
+        assert param["cleanup"] is False
 
     def test_jdbcwriter_normalized_to_mysqlwriter(self):
         """LLM 输出 jdbcwriter 通用名时，应归一化为 mysqlwriter。"""

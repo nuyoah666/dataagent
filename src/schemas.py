@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field, field_validator
 class SyncIntent(BaseModel):
     """数据集成意图（LLM 解析结果）。"""
 
+    source_name: str = Field(default="", description="命名数据源（数据源注册表，可选）")
     source_db_type: str = Field(default="mysql", description="源数据库类型")
     source_host: str = Field(default="127.0.0.1")
     source_port: int = Field(default=3306)

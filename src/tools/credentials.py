@@ -1,8 +1,11 @@
 """凭据统一管理：意图凭据回填（LLM 留空/编造/脱敏的本地默认回填）。"""
 
-from typing import Any, Dict
+import logging
+from typing import Any, Dict, Optional
 
 from ..config import config
+
+logger = logging.getLogger(__name__)
 
 _DEFAULTS_MAP = {
     "mysql": config.MYSQL_CONFIG,
@@ -13,6 +16,20 @@ _DEFAULTS_MAP = {
 
 # 空值或脱敏占位（任务记录落库时密码会脱敏为 ***）
 _MISSING = ("", "***")
+
+
+def _named_source(side: str, intent: dict) -> Optional[Dict[str, Any]]:
+    """意图指定了命名数据源时，从注册表取连接配置（含明文密码）。"""
+    name = str(intent.get(f"{side}_name") or "").strip()
+    if not name:
+        return None
+    try:
+        from .data_source import resolve
+
+        return resolve(name=name)
+    except Exception as e:
+        logger.warning("命名数据源解析失败 %s: %s", name, e)
+        return None
 
 
 def apply_intent_defaults(intent: Dict[str, Any]) -> Dict[str, Any]:
@@ -27,8 +44,28 @@ def apply_intent_defaults(intent: Dict[str, Any]) -> Dict[str, Any]:
     result = dict(intent or {})
     for side in ("source", "target"):
         db_type = str(result.get(f"{side}_db_type", "")).lower()
-        defaults = _DEFAULTS_MAP.get(db_type)
+        side_name = str(result.get(f"{side}_name") or "").strip()
+        named = _named_source(side, result)
+        if side_name and named is None:
+            # 用户显式指定了命名源但注册表里没有：报错，不回退到默认实例
+            result["_source_name_error"] = f"命名数据源不存在: {side_name}"
+            continue
+        defaults = named or _DEFAULTS_MAP.get(db_type)
         if not defaults:
+            continue
+
+        if named:
+            # 用户显式指定的命名源：连接凭据以注册表为准（库名保留意图显式值）
+            if not result.get(f"{side}_host"):
+                result[f"{side}_host"] = defaults["host"]
+            if not result.get(f"{side}_port"):
+                result[f"{side}_port"] = defaults["port"]
+            if not result.get(f"{side}_database"):
+                result[f"{side}_database"] = defaults.get("database", "")
+            if str(result.get(f"{side}_username") or "") in _MISSING:
+                result[f"{side}_username"] = defaults.get("username", "")
+            if str(result.get(f"{side}_password") or "") in _MISSING:
+                result[f"{side}_password"] = defaults.get("password", "")
             continue
 
         host = result.get(f"{side}_host") or defaults["host"]

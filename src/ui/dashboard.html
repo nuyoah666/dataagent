@@ -195,6 +195,7 @@
   <div id="tab-datasources" style="display:none">
     <div class="toolbar">
       <button class="btn btn-action" onclick="openDsForm()">+ 新增数据源</button>
+      <button class="btn btn-approve" onclick="openWizard()">⚡ 同步向导</button>
       <span class="refresh-note">密码仅写入不回显；测试连接使用已保存的凭据</span>
     </div>
     <div class="table-wrap">
@@ -243,6 +244,33 @@
           <button type="submit" class="btn btn-action">保存</button>
         </div>
       </form>
+    </div>
+  </div>
+
+  <div id="wizModal" style="display:none">
+    <div class="panel">
+      <span class="close" onclick="closeWizard()">✕</span>
+      <h3>同步向导</h3>
+      <div class="form-grid">
+        <label>源数据源 *<select class="select" id="wizSource" onchange="wizSourceChanged()"></select></label>
+        <label>数据库 *<select class="select" id="wizDb" onchange="wizDbChanged()"></select></label>
+        <label>源表 *<select class="select" id="wizTable"></select></label>
+        <label>同步类型<select class="select" id="wizSync">
+          <option value="full">全量</option><option value="incremental">增量</option>
+        </select></label>
+        <label>目标类型 *<select class="select" id="wizTargetType" onchange="wizTargetChanged()">
+          <option value="elasticsearch">Elasticsearch</option>
+          <option value="mysql">MySQL</option>
+          <option value="mongodb">MongoDB</option>
+          <option value="starrocks">StarRocks</option>
+        </select></label>
+        <label id="wizTargetDbWrap" style="display:none">目标库<input class="input" id="wizTargetDb" placeholder="如：dwd"></label>
+        <label>目标表/索引 *<input class="input" id="wizTargetTable" placeholder="如：src_user_index"></label>
+      </div>
+      <div class="form-actions">
+        <button type="button" class="btn btn-ghost" onclick="closeWizard()">取消</button>
+        <button class="btn btn-approve" onclick="submitWizard()">提交任务</button>
+      </div>
     </div>
   </div>
 </div>
@@ -587,6 +615,70 @@ async function deleteDs(id) {
   } catch (e) { alert(e.message); }
 }
 
+// ---------- 同步向导 ----------
+async function openWizard() {
+  $('wizModal').style.display = 'block';
+  try {
+    const data = await api('/datasources');
+    const srcs = (data.sources || []).filter(s => ['mysql', 'starrocks'].includes(s.db_type));
+    $('wizSource').innerHTML = '<option value="">选择源数据源…</option>' +
+      srcs.map(s => `<option value="${escapeHtml(s.name)}">${escapeHtml(s.name)}（${DBTYPE_LABELS[s.db_type] || s.db_type}）</option>`).join('');
+  } catch (e) { alert(e.message); }
+  $('wizDb').innerHTML = '<option value="">先选数据源</option>';
+  $('wizTable').innerHTML = '<option value="">先选数据库</option>';
+}
+function closeWizard() { $('wizModal').style.display = 'none'; }
+
+async function wizSourceChanged() {
+  const name = $('wizSource').value;
+  $('wizTable').innerHTML = '<option value="">先选数据库</option>';
+  if (!name) { $('wizDb').innerHTML = '<option value="">先选数据源</option>'; return; }
+  $('wizDb').innerHTML = '<option value="">加载中…</option>';
+  try {
+    const data = await api('/datasources');
+    const s = (data.sources || []).find(x => x.name === name);
+    if (!s) return;
+    const r = await api('/datasources/' + s.id + '/discover', {method:'POST'});
+    $('wizDb').innerHTML = '<option value="">选择数据库…</option>' +
+      (r.databases || []).map(d => `<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join('');
+  } catch (e) { $('wizDb').innerHTML = '<option value="">加载失败</option>'; alert(e.message); }
+}
+async function wizDbChanged() {
+  const name = $('wizSource').value, db = $('wizDb').value;
+  if (!name || !db) { $('wizTable').innerHTML = '<option value="">先选数据库</option>'; return; }
+  $('wizTable').innerHTML = '<option value="">加载中…</option>';
+  try {
+    const data = await api('/datasources');
+    const s = (data.sources || []).find(x => x.name === name);
+    const r = await api('/datasources/' + s.id + '/discover?database=' + encodeURIComponent(db), {method:'POST'});
+    $('wizTable').innerHTML = '<option value="">选择表…</option>' +
+      (r.tables || []).map(t => `<option value="${escapeHtml(t.name)}">${escapeHtml(t.name)}${t.comment ? '（' + escapeHtml(t.comment) + '）' : ''}</option>`).join('');
+  } catch (e) { $('wizTable').innerHTML = '<option value="">加载失败</option>'; alert(e.message); }
+}
+function wizTargetChanged() {
+  $('wizTargetDbWrap').style.display = ['mysql', 'starrocks'].includes($('wizTargetType').value) ? '' : 'none';
+}
+async function submitWizard() {
+  const body = {
+    source_name: $('wizSource').value,
+    database: $('wizDb').value,
+    table: $('wizTable').value,
+    target_db_type: $('wizTargetType').value,
+    target_database: $('wizTargetDb').value.trim(),
+    target_table: $('wizTargetTable').value.trim(),
+    sync_type: $('wizSync').value,
+  };
+  if (!body.source_name || !body.database || !body.table || !body.target_table) {
+    alert('请完整选择：源数据源 / 数据库 / 表 / 目标表'); return;
+  }
+  try {
+    const r = await api('/sync/wizard', {method:'POST', headers:Object.assign({'Content-Type':'application/json'}, headers()), body: JSON.stringify(body)});
+    closeWizard();
+    alert('已提交向导任务: ' + r.task_id + '（生成配置后需审批）');
+    document.querySelector('.tabs button[data-tab="tasks"]').click();
+  } catch (e) { alert(e.message); }
+}
+
 function buildTimeline(logs, task) {
   const markers = [
     ['ConfigAgent 开始', '配置生成'], ['ConfigAgent 完成', '配置完成'],
@@ -713,6 +805,7 @@ $('apiToken').value = localStorage.getItem(TOKEN_KEY) || '';
 $('apiToken').onchange = e => localStorage.setItem(TOKEN_KEY, e.target.value);
 $('modal').onclick = e => { if (e.target === $('modal')) closeModal(); };
 $('dsModal').onclick = e => { if (e.target === $('dsModal')) closeDsModal(); };
+$('wizModal').onclick = e => { if (e.target === $('wizModal')) closeWizard(); };
 initTheme();
 loadAll();
 setInterval(() => {

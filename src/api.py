@@ -187,6 +187,16 @@ class DataSourceUpdate(BaseModel):
     database: Optional[str] = None
     remark: Optional[str] = None
 
+
+class WizardRequest(BaseModel):
+    source_name: str
+    database: str = ""
+    table: str = ""
+    target_db_type: str = "elasticsearch"
+    target_database: str = ""
+    target_table: str = ""
+    sync_type: str = "full"
+
 @app.get("/")
 async def root():
     return {"service": "数仓多 Agent 协作平台", "version": "1.0.0", "status": "running"}
@@ -285,6 +295,58 @@ async def submit_sync_batch(req: BatchRequest):
         import logging
         logging.getLogger(__name__).exception("批量同步请求处理失败")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/sync/wizard")
+async def submit_wizard(req: WizardRequest):
+    """向导式提交：命名数据源 + 库 + 表 + 目标端，跳过 LLM 意图解析。"""
+    from src.tools.data_source import resolve as resolve_source
+
+    src = resolve_source(name=req.source_name.strip())
+    if not src:
+        raise HTTPException(status_code=404, detail=f"数据源不存在: {req.source_name}")
+    table = (req.table or "").strip()
+    if not table:
+        raise HTTPException(status_code=422, detail="未选择源表")
+
+    intent = {
+        "source_name": src["name"],
+        "source_db_type": src["db_type"],
+        "source_database": req.database or src.get("database", ""),
+        "source_table": table,
+        "target_db_type": req.target_db_type,
+        "target_database": req.target_database,
+        "target_table": req.target_table,
+        "sync_type": req.sync_type,
+    }
+    target_desc = req.target_table or req.target_db_type
+    summary = f"[向导] 同步 {intent['source_database']}.{table} 到 {target_desc}"
+
+    tm = get_task_manager()
+    task_id = tm.create_task(summary, task_type="data_integration")
+    tm.update_task(task_id, current_step="submitted")
+    tm.log(task_id, "INFO", f"已提交（向导，数据源={src['name']}）")
+
+    def _run_background():
+        try:
+            wf = get_workflow("data_integration")
+            with _task_semaphore:
+                wf.run(
+                    summary, thread_id=task_id, precreated_task_id=task_id,
+                    parsed_intent=intent,
+                )
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).exception("向导任务执行异常")
+            tm.complete_task(task_id, TaskStatus.FAILED, error=str(e))
+
+    threading.Thread(target=_run_background, daemon=True).start()
+    return {
+        "task_id": task_id,
+        "task_type": "data_integration",
+        "status": "submitted",
+        "message": f"已提交，识别为 数据集成（数据源 {src['name']}）",
+    }
 
 
 @app.post("/ops/diagnose")

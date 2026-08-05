@@ -213,6 +213,7 @@ class AgentWorkflow:
         table_override: str = None,
         diagnose_task_id: str = None,
         precreated_task_id: str = None,
+        parsed_intent: dict = None,
     ) -> Dict[str, Any]:
         """执行完整工作流。"""
         # 创建任务记录
@@ -233,7 +234,7 @@ class AgentWorkflow:
         init: DataIntegrationState = {
             "user_query": user_query,
             "_task_id": task_id,
-            "parsed_intent": None,
+            "parsed_intent": parsed_intent,
             "source_schema": None,
             "rag_context": None,
             "datax_config": None,

@@ -54,10 +54,18 @@ class ConfigAgent(BaseAgent):
 
         user_query = state["user_query"]
 
-        # 1. 解析意图（带熔断）
-        intent = self._parse_intent(user_query)
+        # 1. 解析意图（带熔断）；向导等结构化入口可直接注入 parsed_intent，跳过 LLM
+        if state.get("parsed_intent"):
+            intent = dict(state["parsed_intent"])
+        else:
+            intent = self._parse_intent(user_query)
         # 2. 回填本地默认凭据（LLM 可能编造密码，或留空）
         intent = self._apply_config_defaults(intent)
+        if intent.get("_source_name_error"):
+            return {
+                **state, "error": intent["_source_name_error"],
+                "current_step": "config_error",
+            }
         # 3. 标准化（别名、ES 索引名归位、sync_type 等），保证下游一致
         intent = normalize_intent(intent)
         # 3.1 多表批量：显式指定源表时覆盖 LLM 解析结果
@@ -96,7 +104,12 @@ class ConfigAgent(BaseAgent):
         )
 
         # 6. LLM 生成配置（带熔断）
-        llm_config = self._llm_generate_config(intent, schema_result, rag_context)
+        if state.get("parsed_intent"):
+            # 向导等结构化入口：参数已齐全，跳过 LLM 直接模板直出（确定性、零幻觉）
+            llm_config = None
+            logger.info("向导路径：模板直出配置（跳过 LLM 生成）")
+        else:
+            llm_config = self._llm_generate_config(intent, schema_result, rag_context)
 
         # 7. 配置后处理 Pipeline（标准化 + 校验 + 模板兜底）
         result = process_config(intent, schema_result, llm_config)
@@ -127,10 +140,12 @@ class ConfigAgent(BaseAgent):
         try:
             data = llm_json(
                 "你是数据同步专家。解析用户指令，返回 JSON（仅 JSON，无其他文本）。\n"
-                "字段：source_db_type, source_host, source_port, source_username, "
+                "字段：source_name, source_db_type, source_host, source_port, source_username, "
                 "source_password, source_database, source_table, target_db_type, "
                 "target_host, target_port, target_username, target_password, "
                 "target_database, target_table, sync_type。\n"
+                "source_name：用户提到命名数据源（如「数据源 生产MySQL」/「用 XX 同步」）"
+                "时填写，否则空字符串。\n"
                 "重要：不要编造账号密码。source_password/target_password 仅在指令中"
                 "明确出现时填写，否则一律返回空字符串。\n"
                 "默认值：MySQL 127.0.0.1:3306 root/datax_test；"
@@ -179,6 +194,9 @@ class ConfigAgent(BaseAgent):
             intent["source_host"] = config.MONGODB_CONFIG["host"]
             intent["source_port"] = config.MONGODB_CONFIG["port"]
             intent["source_database"] = config.MONGODB_CONFIG["database"]
+        m = re.search(r"数据源[：:\s]*([\w\u4e00-\u9fa5-]+)", text or "")
+        if m:
+            intent["source_name"] = m.group(1)
         return intent
 
     # ---- 表结构获取 ----
@@ -209,10 +227,10 @@ class ConfigAgent(BaseAgent):
             return intent, [], ""
 
         # 3) 跨库发现（表名精确/LIKE + 表注释 LIKE）
-        cands = self._discover_candidates(table, db_type)
+        cands = self._discover_candidates(table, db_type, intent)
         # 4) 兜底：去掉"表"后缀再查（用户表 -> 用户，匹配注释）
         if not cands and table.endswith("表") and len(table) > 1:
-            cands = self._discover_candidates(table[:-1], db_type)
+            cands = self._discover_candidates(table[:-1], db_type, intent)
         if len(cands) == 1:
             c = cands[0]
             logger.info("源表唯一命中: %s.%s（%s）", c["database"], c["table"], c["match_type"])
@@ -225,9 +243,14 @@ class ConfigAgent(BaseAgent):
         return intent, [], f"在可访问的数据库中找不到表「{table}」（已按表名与表注释检索）"
 
     @staticmethod
-    def _discover_candidates(table: str, db_type: str) -> list:
-        """跨库发现候选表；发现失败返回空（不阻断，交由 schema 步骤报错）。"""
-        r = discover_tables(table, db_type=db_type, limit=20)
+    def _discover_candidates(table: str, db_type: str, intent: Dict[str, Any]) -> list:
+        """跨库发现候选表（用意图已解析的连接，支持命名数据源）。"""
+        r = discover_tables(
+            table, db_type=db_type, limit=20,
+            host=intent.get("source_host"), port=intent.get("source_port"),
+            username=intent.get("source_username"),
+            password=intent.get("source_password"),
+        )
         if not r.get("success"):
             return []
         return r.get("candidates") or []

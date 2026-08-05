@@ -103,7 +103,7 @@ class TestResolveSourceTable:
         agent = self._agent()
         monkeypatch.setattr(
             "src.agents.config_agent.discover_tables",
-            lambda kw, db_type="mysql", limit=20: {
+            lambda kw, db_type="mysql", limit=20, **conn: {
                 "success": True,
                 "candidates": [{
                     "database": "dw", "table": "orders",
@@ -122,7 +122,7 @@ class TestResolveSourceTable:
         agent = self._agent()
         monkeypatch.setattr(
             "src.agents.config_agent.discover_tables",
-            lambda kw, db_type="mysql", limit=20: {
+            lambda kw, db_type="mysql", limit=20, **conn: {
                 "success": True,
                 "candidates": [
                     {"database": "dw", "table": "orders", "comment": "订单主表", "match_type": "name_exact"},
@@ -140,7 +140,7 @@ class TestResolveSourceTable:
         agent = self._agent()
         monkeypatch.setattr(
             "src.agents.config_agent.discover_tables",
-            lambda kw, db_type="mysql", limit=20: {"success": True, "candidates": []},
+            lambda kw, db_type="mysql", limit=20, **conn: {"success": True, "candidates": []},
         )
         _, _, err = agent._resolve_source_table({
             "source_table": "no_such_table", "source_db_type": "mysql",
@@ -172,7 +172,7 @@ def _run_config(monkeypatch, discover_result):
     monkeypatch.setattr(mod, "llm_json", _llm_down)
     monkeypatch.setattr(
         mod, "discover_tables",
-        lambda kw, db_type="mysql", limit=20: discover_result,
+        lambda kw, db_type="mysql", limit=20, **conn: discover_result,
     )
     return mod.ConfigAgent().run({
         "user_query": "同步 orders 到 ES", "_task_id": "t1",
@@ -230,7 +230,7 @@ class TestSuffixStrippedDiscovery:
     def test_table_suffix_retries_without_suffix(self, monkeypatch):
         agent = ConfigAgent()
 
-        def _fake(kw, db_type="mysql", limit=20):
+        def _fake(kw, db_type="mysql", limit=20, **conn):
             if kw == "用户表":
                 return {"success": True, "candidates": []}
             return {

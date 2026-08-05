@@ -369,6 +369,13 @@ def _fix_writer(item: Dict[str, Any], intent: Dict[str, Any]):
         port = intent.get("target_port", 9200)
         param["endpoint"] = f"http://{host}:{port}"
         param["index"] = param.get("index") or table
+        # DataX elasticsearchwriter 的 dynamic 必须是布尔值；LLM 常误输出
+        # ES mapping 对象（如 {date_detection, numeric_detection}），归一为 true
+        if not isinstance(param.get("dynamic"), bool):
+            param["dynamic"] = True
+        # cleanup=true 会删除并重建目标索引（数据丢失风险，见事故库 incident-005），
+        # 一律强制关闭；同索引重复全量同步会累积数据，但不破坏已有数据
+        param["cleanup"] = False
 
     elif spec.name == "mongodbwriter":
         param["address"] = [
