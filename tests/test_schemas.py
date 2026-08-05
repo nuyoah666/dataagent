@@ -35,7 +35,19 @@ class TestETLIntent:
         plan = ETLPlan(sql="INSERT INTO dwd SELECT * FROM ods")
         assert "INSERT" in plan.sql
         intent = ETLIntent(source_table="ods_user", target_table="dwd_user")
-        assert intent.transform_type == "clean"
+        assert intent.transform_type == "passthrough"
+        assert intent.source_kind == "auto"
+        assert intent.field_mappings == []
+
+    def test_normalizers(self):
+        intent = ETLIntent.model_validate({
+            "transform_type": "枚举",
+            "source_kind": "增量",
+            "partition_date": "20260805",
+        })
+        assert intent.transform_type == "enum_mapping"
+        assert intent.source_kind == "inc"
+        assert intent.partition_date == "2026-08-05"
 
 
 class _FakeLLM:

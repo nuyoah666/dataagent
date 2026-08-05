@@ -3,7 +3,7 @@
 所有 Agent 与 LLM 交互的结构化数据都定义在这里，统一用 Pydantic 强校验，
 避免 LLM 输出缺字段、错类型导致下游崩溃。
 """
-from typing import Optional
+from typing import List, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -42,20 +42,83 @@ class SyncIntent(BaseModel):
         return v
 
 
-class ETLIntent(BaseModel):
-    """ETL 加工意图。"""
+class ETLFieldMap(BaseModel):
+    """字段映射：源列 -> 目标列（改名/取舍）。"""
 
-    source_table: str = Field(default="", description="源表（ODS 层）")
-    target_table: str = Field(default="", description="目标表（DWD/DWS 层）")
+    source_column: str = Field(description="源表列名")
+    target_column: str = Field(description="目标表列名")
+
+
+class ETLEnumMap(BaseModel):
+    """枚举映射：源列按码值表转换为可读名。"""
+
+    column: str = Field(description="源表列名（如 gender）")
+    code_type: str = Field(description="码值类型（如 gender/status），对应 dim_code_map.code_type")
+    target_column: Optional[str] = Field(
+        default=None, description="输出可读名列名，缺省为 <column>_name"
+    )
+
+
+class ETLIntent(BaseModel):
+    """ETL 透传意图（规则优先解析，LLM 仅兜底映射细节）。
+
+    transform_type: passthrough（纯透传）| field_mapping（字段改名/取舍）| enum_mapping（枚举转码值可读名）
+    source_kind: auto（自动探测）| base（非分区基准表）| inc（日增量分区）| snapshot（日全量快照分区）
+    """
+
+    source_table: str = Field(default="", description="源表（ODS 层，可给业务名或完整表名）")
+    target_table: str = Field(default="", description="目标表（DWD 层，缺省按命名规范推断）")
     database: str = Field(default="", description="StarRocks 库名")
-    transform_type: str = Field(default="clean", description="清洗/聚合/宽表")
-    where_condition: Optional[str] = Field(default=None, description="可选过滤条件")
+    transform_type: str = Field(
+        default="passthrough",
+        description="passthrough | field_mapping | enum_mapping",
+    )
+    source_kind: str = Field(
+        default="auto", description="auto | base | inc | snapshot"
+    )
+    partition_date: str = Field(default="", description="分区日期 YYYY-MM-DD，缺省当天")
+    field_mappings: List[ETLFieldMap] = Field(default_factory=list)
+    enum_mappings: List[ETLEnumMap] = Field(default_factory=list)
+
+    @field_validator("transform_type")
+    @classmethod
+    def _normalize_transform_type(cls, v: str) -> str:
+        v = (v or "").strip().lower()
+        if v in ("枚举", "enum", "码值", "转码"):
+            return "enum_mapping"
+        if v in ("字段映射", "映射", "改名", "field", "field_mapping", "mapping"):
+            return "field_mapping"
+        return "passthrough"
+
+    @field_validator("source_kind")
+    @classmethod
+    def _normalize_source_kind(cls, v: str) -> str:
+        v = (v or "").strip().lower()
+        if v in ("增量", "inc", "incremental", "day_inc"):
+            return "inc"
+        if v in ("快照", "snapshot", "snap", "day_snapshot"):
+            return "snapshot"
+        if v in ("基准", "base", "全量", "full"):
+            return "base"
+        return "auto"
+
+    @field_validator("partition_date")
+    @classmethod
+    def _normalize_partition_date(cls, v: str) -> str:
+        """宽松接受 20260805 / 2026-08-05 / 2026/08/05 -> 2026-08-05。"""
+        import re
+
+        v = (v or "").strip()
+        m = re.match(r"^(\d{4})[-/]?(\d{2})[-/]?(\d{2})$", v)
+        if m:
+            return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+        return ""
 
 
 class ETLPlan(BaseModel):
     """ETL 生成的执行计划（SQL）。"""
 
-    sql: str = Field(description="可执行的 INSERT INTO ... SELECT 语句")
+    sql: str = Field(description="可执行的 INSERT OVERWRITE ... SELECT 语句")
     description: str = Field(default="", description="加工说明")
 
 

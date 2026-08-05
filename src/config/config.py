@@ -55,6 +55,10 @@ class Config:
         "password": os.getenv("STARROCKS_PASSWORD", ""),
         "database": os.getenv("STARROCKS_DATABASE", "datax_test"),
     }
+    # StarRocks 管理账号（可选）：ETL 建表/加分区等 DDL 操作需要 CREATE/ALTER 权限，
+    # 普通读写账号通常没有。未配置时 ETL 会给出 DDL 提示而不自动建表。
+    STARROCKS_ADMIN_USERNAME: str = os.getenv("STARROCKS_ADMIN_USERNAME", "")
+    STARROCKS_ADMIN_PASSWORD: str = os.getenv("STARROCKS_ADMIN_PASSWORD", "")
 
     # ---- LLM (MiMo) ----
     LLM_API_KEY: str = os.getenv("LLM_API_KEY", "")

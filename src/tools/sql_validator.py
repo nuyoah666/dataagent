@@ -1,4 +1,4 @@
-"""SQL 安全校验：ETL 生成的 SQL 只允许 INSERT INTO ... SELECT。"""
+"""SQL 安全校验：ETL 生成的 SQL 只允许 INSERT [OVERWRITE] ... SELECT。"""
 import logging
 import re
 from typing import Tuple
@@ -19,8 +19,15 @@ _KEYWORD_RE = re.compile(
 )
 
 
+_INSERT_RE = re.compile(
+    r"^\s*INSERT\s+(?:OVERWRITE\s+)?(?:INTO\s+)?(?:TABLE\s+)?"
+    r"[A-Za-z0-9_]+(?:\s+PARTITION\([^)]*\))?\s+SELECT\b",
+    re.IGNORECASE,
+)
+
+
 def validate_etl_sql(sql: str) -> Tuple[bool, str]:
-    """校验 ETL SQL 是否安全可执行。
+    """校验 ETL SQL 是否安全可执行（只允许 INSERT [OVERWRITE] ... SELECT）。
 
     Returns:
         (is_valid, reason)
@@ -38,10 +45,10 @@ def validate_etl_sql(sql: str) -> Tuple[bool, str]:
     if "--" in stripped or "/*" in stripped:
         return False, "不允许包含 SQL 注释"
 
-    # 必须是指定形态：INSERT INTO <表> SELECT ...
+    # 必须是指定形态：INSERT [OVERWRITE] [TABLE] <表> SELECT ...
     upper = stripped.upper()
-    if not upper.startswith("INSERT INTO"):
-        return False, "只允许 INSERT INTO ... SELECT 语句"
+    if not _INSERT_RE.match(stripped):
+        return False, "只允许 INSERT [OVERWRITE] ... SELECT 语句"
     if " SELECT " not in (" " + upper + " "):
         return False, "缺少 SELECT 子句"
 
