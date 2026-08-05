@@ -44,6 +44,27 @@ def test_custom_host_credentials_not_overwritten():
     assert out["source_password"] == "custom_pw"
 
 
+def test_same_instance_other_database_backfills_password():
+    """回归：明确选择 test.user_activity（非默认库）时，密码应按实例回填。"""
+    agent = ConfigAgent()
+    out = agent._apply_config_defaults(
+        _intent(source_database="test", source_table="user_activity")
+    )
+    assert out["source_database"] == "test"  # 库保持用户选择
+    assert out["source_password"] == config.MYSQL_CONFIG["password"]
+    assert out["source_username"] == config.MYSQL_CONFIG["username"]
+
+
+def test_custom_username_keeps_its_password():
+    """指定非默认用户名时，不得用 root 密码覆盖。"""
+    agent = ConfigAgent()
+    out = agent._apply_config_defaults(
+        _intent(source_username="readonly", source_password="ro_pw")
+    )
+    assert out["source_username"] == "readonly"
+    assert out["source_password"] == "ro_pw"
+
+
 def test_es_defaults_filled():
     agent = ConfigAgent()
     out = agent._apply_config_defaults(_intent())
