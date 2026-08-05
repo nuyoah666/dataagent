@@ -1,22 +1,45 @@
-"""Agent 基类与注册表。
+"""Agent 基类与注册表（统一运行时骨架）。
 
-骨架目标：新增 Agent 只需实现 BaseAgent.run(state) -> state，
-并用 @register_agent(task_type, name) 注册，工作流按 task_type 路由。
+约定：
+  - 每个任务类型注册 config/execution/validation 三个步骤
+  - BaseAgent 提供 ok/fail/guarded 统一封装，消除每个 run() 里
+    "拼 error + current_step" 的重复样板
+  - 审批门禁等任务级策略通过注册元数据声明，workflow 自动读取
 """
-from typing import Any, Callable, Dict
+import logging
+from typing import Any, Callable, Dict, Optional
 
+logger = logging.getLogger(__name__)
 
 # task_type -> {step_name: AgentClass}
 AGENT_REGISTRY: Dict[str, Dict[str, type]] = {}
 
 
-def register_agent(task_type: str, name: str) -> Callable:
-    """注册 Agent 类。"""
+def register_agent(
+    task_type: str,
+    name: str,
+    *,
+    description: str = "",
+    approval_required: Optional[bool] = None,
+) -> Callable:
+    """注册 Agent 类。
+
+    Args:
+        task_type: 任务类型（data_integration / etl_development / data_ops / data_analysis）
+        name: 步骤名（config / execution / validation）
+        description: 该步骤的职责说明（用于 UI 展示/文档）
+        approval_required: 该任务类型是否默认需要人工审批；None 表示
+            由 config agent 声明（取第一个非 None），否则默认 False
+    """
 
     def decorator(cls):
         AGENT_REGISTRY.setdefault(task_type, {})[name] = cls
         cls.task_type = task_type
         cls.name = name
+        cls.step = name
+        cls.description = description
+        if approval_required is not None:
+            cls.approval_required = approval_required
         return cls
 
     return decorator
@@ -30,11 +53,53 @@ def get_step_agents(task_type: str) -> Dict[str, type]:
     return steps
 
 
-class BaseAgent:
-    """Agent 基类：所有 Agent 实现 run(state) -> state。"""
+def get_task_approval(task_type: str) -> bool:
+    """读取该任务类型声明的审批策略（默认 False）。"""
+    steps = AGENT_REGISTRY.get(task_type) or {}
+    for step_cls in steps.values():
+        if getattr(step_cls, "approval_required", None) is not None:
+            return bool(step_cls.approval_required)
+    return False
 
-    task_type: str = "data_integration"
-    name: str = "base"
+
+class BaseAgent:
+    """Agent 基类：实现 run(state) -> state，并提供统一状态封装。"""
+
+    task_type: str = ""
+    name: str = ""
+    step: str = ""
+    description: str = ""
 
     def run(self, state: Dict[str, Any]) -> Dict[str, Any]:
         raise NotImplementedError
+
+    # ---- 统一状态封装 ----
+
+    def ok(self, state: Dict[str, Any], **fields) -> Dict[str, Any]:
+        """成功返回：error 置空 + current_step 自动补 complete。"""
+        step = self.step or "step"
+        return {**state, **fields, "error": None, "current_step": f"{step}_complete"}
+
+    def fail(self, state: Dict[str, Any], message: str, **fields) -> Dict[str, Any]:
+        """失败返回：error + current_step 自动补 error。"""
+        step = self.step or "step"
+        return {**state, **fields, "error": message, "current_step": f"{step}_error"}
+
+    def guarded(
+        self,
+        state: Dict[str, Any],
+        fn: Callable[[Dict[str, Any]], Dict[str, Any]],
+        error_msg: Optional[str] = None,
+        **fields,
+    ) -> Dict[str, Any]:
+        """统一异常包装：ValueError 用原信息（参数类错误），其余用兜底信息。"""
+        try:
+            return fn(state)
+        except ValueError as e:
+            logger.warning(f"{self.__class__.__name__}: {e}")
+            return self.fail(state, str(e), **fields)
+        except Exception as e:
+            logger.error(f"{self.__class__.__name__}: {e}")
+            return self.fail(
+                state, error_msg or f"{self.__class__.__name__} 执行失败", **fields
+            )

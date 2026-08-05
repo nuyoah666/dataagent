@@ -10,7 +10,7 @@ from typing import Dict, Any, Optional
 from langgraph.graph import StateGraph, END
 
 from ..state import DataIntegrationState
-from ..agents import get_step_agents
+from ..agents import get_step_agents, get_task_approval
 from ..tools import detect_incremental_field, enhance_config_with_incremental
 from ..tools.db_tool import validate_identifier
 from .checkpointer import create_checkpointer
@@ -46,7 +46,10 @@ class AgentWorkflow:
 
     @staticmethod
     def _resolve_approval_gate(task_type: str) -> bool:
-        """是否对该任务类型启用人工审批（APPROVAL_GATE=false 全局关闭）。"""
+        """是否对该任务类型启用人工审批。
+
+        优先级：环境变量显式覆盖 > Agent 注册元数据（approval_required）> 默认 False。
+        """
         if os.getenv("APPROVAL_GATE", "true").strip().lower() == "false":
             return False
         gated = [
@@ -55,7 +58,9 @@ class AgentWorkflow:
                       "data_integration,etl_development").split(",")
             if t.strip()
         ]
-        return task_type in gated
+        if gated:
+            return task_type in gated
+        return get_task_approval(task_type)
 
     def _build(self):
         wf = StateGraph(DataIntegrationState)

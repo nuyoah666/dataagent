@@ -116,7 +116,11 @@ def _admin_conn(database: str):
     )
 
 
-@register_agent("etl_development", "config")
+@register_agent(
+    "etl_development", "config",
+    description="解析透传意图，推断 ODS/DWD 表并生成确定性 SQL",
+    approval_required=True,
+)
 class ETLConfigAgent(BaseAgent):
     """解析透传意图，推断 ODS/DWD 表，确定性生成 SQL（映射场景 LLM 补细节）。"""
 
@@ -129,93 +133,78 @@ class ETLConfigAgent(BaseAgent):
         return self._llm
 
     def run(self, state: DataIntegrationState) -> DataIntegrationState:
+        return self.guarded(
+            state, self._run, error_msg="ETL 配置生成失败"
+        )
+
+    def _run(self, state: DataIntegrationState) -> DataIntegrationState:
         user_query = state.get("user_query", "")
-        try:
-            intent = self._parse_intent(user_query)
-            if not intent["source_table"]:
-                return {
-                    **state,
-                    "error": "无法解析源表（示例：把 ods_user 透传到 dwd_user）",
-                    "current_step": "config_error",
-                }
+        intent = self._parse_intent(user_query)
+        if not intent["source_table"]:
+            raise ValueError("无法解析源表（示例：把 ods_user 透传到 dwd_user）")
 
-            database = intent["database"] or config.STARROCKS_CONFIG["database"]
-            validate_table_name(database)
-            partition_date = intent.get("partition_date") or default_partition_date()
+        database = intent["database"] or config.STARROCKS_CONFIG["database"]
+        validate_table_name(database)
+        partition_date = intent.get("partition_date") or default_partition_date()
 
-            with mysql_conn("starrocks", database=database) as conn:
-                source = resolve_source_table(
-                    conn, database, intent["source_table"], intent.get("source_kind", "auto")
-                )
-                columns = describe_table(conn, database, source["table"])
-                target = resolve_target_table(
-                    conn, database, source["table"], source["kind"], intent.get("target_table", "")
-                )
-                tables = set(list_tables(conn, database))
-                target_exists = target["table"] in tables
-                source_partitioned = is_partitioned(conn, database, source["table"])
-
-                # 目标分区表：分区名统一 p<yyyymmdd>；新建分区表只有当天分区
-                target_partitioned = (
-                    is_partitioned(conn, database, target["table"])
-                    if target_exists else source_partitioned
-                )
-                partition_name = None
-                if target_partitioned and source["kind"] in ("inc", "snapshot"):
-                    partition_name = f"p{partition_date.replace('-', '')}"
-
-                sql = self._build_sql(
-                    intent, source, target, columns,
-                    partition_name=partition_name,
-                    partition_date=partition_date,
-                    source_partitioned=source_partitioned,
-                )
-
-            ok, reason = validate_etl_sql(sql)
-            if not ok:
-                logger.warning(f"ETL SQL 校验不通过: {reason}")
-                return {
-                    **state, "error": f"ETL SQL 校验不通过: {reason}",
-                    "current_step": "config_error",
-                }
-
-            result = {
-                **state,
-                "parsed_intent": intent,
-                "source_schema": {"success": True, "columns": columns},
-                "etl_sql": sql,
-                "etl_source_table": source["table"],
-                "etl_target_table": target["table"],
-                "etl_partition_date": partition_date,
-                "etl_target_exists": target_exists,
-                "etl_ddl": None,
-                "error": None,
-                "current_step": "config_complete",
-            }
-            if not target_exists:
-                result["etl_ddl"] = build_create_table_sql(
-                    target["table"],
-                    build_target_columns(
-                        columns,
-                        field_mappings=intent.get("field_mappings"),
-                        enum_mappings=intent.get("enum_mappings"),
-                    ),
-                    partition_date=partition_date if target_partitioned else None,
-                )
-            logger.info(
-                f"ETL 配置完成: {source['table']}({source['kind']}) -> "
-                f"{target['table']} [{intent['transform_type']}]"
+        with mysql_conn("starrocks", database=database) as conn:
+            source = resolve_source_table(
+                conn, database, intent["source_table"], intent.get("source_kind", "auto")
             )
-            return result
-        except ValueError as e:
-            logger.warning(f"ETL 配置参数错误: {e}")
-            return {**state, "error": str(e), "current_step": "config_error"}
-        except Exception as e:
-            logger.error(f"ETL 配置生成失败: {e}")
-        return {
-            **state, "error": "ETL 配置生成失败",
-            "current_step": "config_error",
+            columns = describe_table(conn, database, source["table"])
+            target = resolve_target_table(
+                conn, database, source["table"], source["kind"], intent.get("target_table", "")
+            )
+            tables = set(list_tables(conn, database))
+            target_exists = target["table"] in tables
+            source_partitioned = is_partitioned(conn, database, source["table"])
+
+            # 目标分区表：分区名统一 p<yyyymmdd>；新建分区表只有当天分区
+            target_partitioned = (
+                is_partitioned(conn, database, target["table"])
+                if target_exists else source_partitioned
+            )
+            partition_name = None
+            if target_partitioned and source["kind"] in ("inc", "snapshot"):
+                partition_name = f"p{partition_date.replace('-', '')}"
+
+            sql = self._build_sql(
+                intent, source, target, columns,
+                partition_name=partition_name,
+                partition_date=partition_date,
+                source_partitioned=source_partitioned,
+            )
+
+        ok, reason = validate_etl_sql(sql)
+        if not ok:
+            logger.warning(f"ETL SQL 校验不通过: {reason}")
+            raise ValueError(f"ETL SQL 校验不通过: {reason}")
+
+        fields = {
+            "parsed_intent": intent,
+            "source_schema": {"success": True, "columns": columns},
+            "etl_sql": sql,
+            "etl_source_table": source["table"],
+            "etl_target_table": target["table"],
+            "etl_partition_date": partition_date,
+            "etl_target_exists": target_exists,
+            "etl_ddl": None,
         }
+        if not target_exists:
+            fields["etl_ddl"] = build_create_table_sql(
+                target["table"],
+                build_target_columns(
+                    columns,
+                    field_mappings=intent.get("field_mappings"),
+                    enum_mappings=intent.get("enum_mappings"),
+                ),
+                partition_date=partition_date if target_partitioned else None,
+            )
+        logger.info(
+            f"ETL 配置完成: {source['table']}({source['kind']}) -> "
+            f"{target['table']} [{intent['transform_type']}]"
+        )
+        return self.ok(state, **fields)
 
     # ---- 内部实现 ----
 
@@ -298,146 +287,133 @@ class ETLConfigAgent(BaseAgent):
         )
 
 
-@register_agent("etl_development", "execution")
+@register_agent(
+    "etl_development", "execution",
+    description="确保目标表/分区存在并执行 INSERT OVERWRITE",
+)
 class ETLEExecutionAgent(BaseAgent):
     """确保目标表/分区存在（管理账号建表），执行 INSERT OVERWRITE。"""
 
     def run(self, state: DataIntegrationState) -> DataIntegrationState:
+        return self.guarded(
+            state, self._run,
+            error_msg="ETL SQL 执行失败",
+            execution_status={"success": False, "error": "ETL SQL 执行失败"},
+        )
+
+    def _run(self, state: DataIntegrationState) -> DataIntegrationState:
         sql = state.get("etl_sql")
         if not sql:
-            return self._fail(state, "缺少 ETL SQL")
+            raise ValueError("缺少 ETL SQL")
         ok, reason = validate_etl_sql(sql)
         if not ok:
-            return self._fail(state, f"ETL SQL 校验不通过: {reason}")
+            raise ValueError(f"ETL SQL 校验不通过: {reason}")
 
         target_table = state.get("etl_target_table", "")
         partition_date = state.get("etl_partition_date") or default_partition_date()
         database = (state.get("parsed_intent") or {}).get("database") or config.STARROCKS_CONFIG["database"]
-        target_exists = bool(state.get("etl_target_exists"))
 
-        try:
-            with mysql_conn("starrocks", database=database) as conn:
-                tables = set(list_tables(conn, database))
-                target_exists = target_table in tables
+        with mysql_conn("starrocks", database=database) as conn:
+            tables = set(list_tables(conn, database))
+            target_exists = target_table in tables
 
-                # 1. 目标表缺失 -> 管理账号建表
-                if not target_exists:
-                    ddl = state.get("etl_ddl") or ""
-                    if not ddl:
-                        return self._fail(state, "目标表缺失且缺少建表 DDL，无法执行")
+            # 1. 目标表缺失 -> 管理账号建表
+            if not target_exists:
+                ddl = state.get("etl_ddl") or ""
+                if not ddl:
+                    raise ValueError("目标表缺失且缺少建表 DDL，无法执行")
+                admin_ctx = _admin_conn(database)
+                if admin_ctx is None:
+                    raise ValueError(
+                        "目标表不存在且未配置管理账号（STARROCKS_ADMIN_USERNAME），"
+                        "请先手动建表或配置管理账号。DDL：\n" + ddl
+                    )
+                with admin_ctx as aconn:
+                    with aconn.cursor() as cur:
+                        cur.execute(ddl)
+                    aconn.commit()
+                logger.info(f"ETL 已创建目标表 {target_table}")
+
+            # 2. 分区表 -> 确保目标分区存在
+            if is_partitioned(conn, database, target_table):
+                pname = f"p{partition_date.replace('-', '')}"
+                partitions = list_partitions(conn, database, target_table)
+                if not partition_name_for_date(partitions, partition_date):
+                    from ..tools.ods_naming import build_add_partition_sql
+
                     admin_ctx = _admin_conn(database)
                     if admin_ctx is None:
-                        return self._fail(
-                            state,
-                            "目标表不存在且未配置管理账号（STARROCKS_ADMIN_USERNAME），"
-                            "请先手动建表或配置管理账号。DDL：\n" + ddl,
+                        raise ValueError(
+                            f"目标分区 {pname} 不存在且未配置管理账号，"
+                            f"请手动执行：\n{build_add_partition_sql(target_table, partition_date)}"
                         )
                     with admin_ctx as aconn:
                         with aconn.cursor() as cur:
-                            cur.execute(ddl)
+                            cur.execute(build_add_partition_sql(target_table, partition_date))
                         aconn.commit()
-                    logger.info(f"ETL 已创建目标表 {target_table}")
+                    logger.info(f"ETL 已创建目标分区 {pname}")
 
-                # 2. 分区表 -> 确保目标分区存在
-                if is_partitioned(conn, database, target_table):
-                    pname = f"p{partition_date.replace('-', '')}"
-                    partitions = list_partitions(conn, database, target_table)
-                    if not partition_name_for_date(partitions, partition_date):
-                        from ..tools.ods_naming import build_add_partition_sql
+            # 3. 执行透传 SQL
+            with conn.cursor() as cur:
+                affected = cur.execute(sql)
+            conn.commit()
 
-                        admin_ctx = _admin_conn(database)
-                        if admin_ctx is None:
-                            return self._fail(
-                                state,
-                                f"目标分区 {pname} 不存在且未配置管理账号，"
-                                f"请手动执行：\n{build_add_partition_sql(target_table, partition_date)}",
-                            )
-                        with admin_ctx as aconn:
-                            with aconn.cursor() as cur:
-                                cur.execute(build_add_partition_sql(target_table, partition_date))
-                            aconn.commit()
-                        logger.info(f"ETL 已创建目标分区 {pname}")
-
-                # 3. 执行透传 SQL
-                with conn.cursor() as cur:
-                    affected = cur.execute(sql)
-                conn.commit()
-
-            logger.info(f"ETL SQL 执行成功，影响 {affected} 行")
-            return {
-                **state,
-                "execution_status": {
-                    "success": True, "sql": sql, "affected_rows": affected,
-                    "target_table": target_table,
-                },
-                "error": None,
-                "current_step": "execution_complete",
-            }
-        except Exception as e:
-            logger.error(f"ETL SQL 执行失败: {e}")
-            return self._fail(state, f"ETL SQL 执行失败: {e}")
-
-    @staticmethod
-    def _fail(state, message: str):
-        return {
-            **state,
-            "execution_status": {"success": False, "error": message},
-            "error": message,
-            "current_step": "execution_error",
-        }
+        logger.info(f"ETL SQL 执行成功，影响 {affected} 行")
+        return self.ok(state, execution_status={
+            "success": True, "sql": sql, "affected_rows": affected,
+            "target_table": target_table,
+        })
 
 
-@register_agent("etl_development", "validation")
+@register_agent(
+    "etl_development", "validation",
+    description="分区感知的透传行数校验",
+)
 class ETLValidationAgent(BaseAgent):
     """分区感知的透传行数校验。"""
 
     def run(self, state: DataIntegrationState) -> DataIntegrationState:
-        try:
-            source_table = state.get("etl_source_table") or ""
-            target_table = state.get("etl_target_table") or ""
-            partition_date = state.get("etl_partition_date") or default_partition_date()
-            source_kind = (state.get("parsed_intent") or {}).get("source_kind", "auto")
-            database = (state.get("parsed_intent") or {}).get("database") or config.STARROCKS_CONFIG["database"]
-            validate_table_name(source_table)
-            validate_table_name(target_table)
-            validate_table_name(database)
+        return self.guarded(
+            state, self._run,
+            error_msg="ETL 校验失败",
+            validation_result={"success": False, "error": "ETL 校验失败"},
+        )
 
-            with mysql_conn("starrocks", database=database) as conn:
-                source_partitioned = is_partitioned(conn, database, source_table)
-                target_partitioned = is_partitioned(conn, database, target_table)
-                source_count = self._count(
-                    conn, source_table, source_partitioned and source_kind in ("inc", "snapshot"), partition_date
-                )
-                target_count = self._count(
-                    conn, target_table, target_partitioned, partition_date
-                )
+    def _run(self, state: DataIntegrationState) -> DataIntegrationState:
+        source_table = state.get("etl_source_table") or ""
+        target_table = state.get("etl_target_table") or ""
+        partition_date = state.get("etl_partition_date") or default_partition_date()
+        source_kind = (state.get("parsed_intent") or {}).get("source_kind", "auto")
+        database = (state.get("parsed_intent") or {}).get("database") or config.STARROCKS_CONFIG["database"]
+        validate_table_name(source_table)
+        validate_table_name(target_table)
+        validate_table_name(database)
 
-            count_match = source_count == target_count
-            result = {
-                "success": count_match,
-                "source_count": source_count,
-                "target_count": target_count,
-                "count_match": count_match,
-                "summary": (
-                    f"✅ 行数匹配：源 {source_count} = 目标 {target_count}"
-                    if count_match else
-                    f"❌ 行数不匹配：源 {source_count} != 目标 {target_count}"
-                ),
-            }
-            return {
-                **state,
-                "validation_result": result,
-                "error": None if count_match else "ETL 行数校验失败",
-                "current_step": "validation_complete",
-            }
-        except Exception as e:
-            logger.error(f"ETL 校验失败: {e}")
-            return {
-                **state,
-                "validation_result": {"success": False, "error": str(e)},
-                "error": str(e),
-                "current_step": "validation_error",
-            }
+        with mysql_conn("starrocks", database=database) as conn:
+            source_partitioned = is_partitioned(conn, database, source_table)
+            target_partitioned = is_partitioned(conn, database, target_table)
+            source_count = self._count(
+                conn, source_table, source_partitioned and source_kind in ("inc", "snapshot"), partition_date
+            )
+            target_count = self._count(
+                conn, target_table, target_partitioned, partition_date
+            )
+
+        count_match = source_count == target_count
+        result = {
+            "success": count_match,
+            "source_count": source_count,
+            "target_count": target_count,
+            "count_match": count_match,
+            "summary": (
+                f"✅ 行数匹配：源 {source_count} = 目标 {target_count}"
+                if count_match else
+                f"❌ 行数不匹配：源 {source_count} != 目标 {target_count}"
+            ),
+        }
+        if not count_match:
+            return self.fail(state, "ETL 行数校验失败", validation_result=result)
+        return self.ok(state, validation_result=result)
 
     @staticmethod
     def _count(conn, table: str, partitioned: bool, partition_date: str) -> int:
