@@ -160,14 +160,21 @@ class ConfigAgent(BaseAgent):
             "target_username": "", "target_password": "", "target_database": "",
             "target_table": "", "sync_type": "full",
         }
-        for pat in [r"表[：:]\s*(\w+)", r"(\w+)\s*表", r"同步\s*(\w+)"]:
-            m = re.search(pat, text)
+        # 去掉引导动词，避免"把"被误抓进表名（如"把用户表"）
+        clean = re.sub(r"^\s*(?:把|将|请|帮我|帮忙|对|给)\s*", "", text or "")
+        for pat in [
+            r"表[：:]\s*(\w+)",
+            r"(\w+)\s*表",
+            r"同步\s*([\w]+?)\s*到",
+            r"同步\s*(\w+)",
+        ]:
+            m = re.search(pat, clean)
             if m:
                 intent["source_table"] = m.group(1)
                 break
-        if "增量" in text:
+        if "增量" in clean:
             intent["sync_type"] = "incremental"
-        if "mongo" in text.lower():
+        if "mongo" in clean.lower():
             intent["source_db_type"] = "mongodb"
             intent["source_host"] = config.MONGODB_CONFIG["host"]
             intent["source_port"] = config.MONGODB_CONFIG["port"]
@@ -202,10 +209,10 @@ class ConfigAgent(BaseAgent):
             return intent, [], ""
 
         # 3) 跨库发现（表名精确/LIKE + 表注释 LIKE）
-        r = discover_tables(table, db_type=db_type, limit=20)
-        if not r.get("success"):
-            return intent, [], ""  # 发现失败不阻断，交由 schema 步骤报错
-        cands = r.get("candidates") or []
+        cands = self._discover_candidates(table, db_type)
+        # 4) 兜底：去掉"表"后缀再查（用户表 -> 用户，匹配注释）
+        if not cands and table.endswith("表") and len(table) > 1:
+            cands = self._discover_candidates(table[:-1], db_type)
         if len(cands) == 1:
             c = cands[0]
             logger.info("源表唯一命中: %s.%s（%s）", c["database"], c["table"], c["match_type"])
@@ -216,6 +223,14 @@ class ConfigAgent(BaseAgent):
             return intent, cands, ""
         # 零候选：明确报错，避免一路跑到 DataX 执行才失败
         return intent, [], f"在可访问的数据库中找不到表「{table}」（已按表名与表注释检索）"
+
+    @staticmethod
+    def _discover_candidates(table: str, db_type: str) -> list:
+        """跨库发现候选表；发现失败返回空（不阻断，交由 schema 步骤报错）。"""
+        r = discover_tables(table, db_type=db_type, limit=20)
+        if not r.get("success"):
+            return []
+        return r.get("candidates") or []
 
     @staticmethod
     def _format_candidates(keyword: str, candidates: list) -> str:

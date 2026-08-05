@@ -196,6 +196,58 @@ class TestConfigAgentAmbiguityGate:
         state = _run_config(monkeypatch, {"success": True, "candidates": []})
         assert state["current_step"] == "config_error"
         assert "找不到表" in state["error"]
+        assert "到ES" not in state["error"]  # 不再把"到ES"当表名
+
+
+class TestFallbackIntentExtraction:
+    """LLM 失败走规则兜底时，表名提取必须准确。"""
+
+    def _fallback_intent(self, monkeypatch, query):
+        from src.agents import config_agent as mod
+
+        def _llm_down(*a, **k):
+            raise LLMJsonError("mock llm")
+
+        monkeypatch.setattr(mod, "llm_json", _llm_down)
+        return mod.ConfigAgent()._parse_intent(query)
+
+    def test_chinese_table_with_leading_verb(self, monkeypatch):
+        # 回归：此前"把"被误抓进表名（把用户）；现在应提取"用户"（表字前的部分）
+        intent = self._fallback_intent(monkeypatch, "把用户表同步到ES")
+        assert intent["source_table"] == "用户"
+
+    def test_sync_to_pattern(self, monkeypatch):
+        intent = self._fallback_intent(monkeypatch, "同步 orders 到 ES")
+        assert intent["source_table"] == "orders"
+
+    def test_incremental_still_detected(self, monkeypatch):
+        intent = self._fallback_intent(monkeypatch, "把用户表增量同步到ES")
+        assert intent["source_table"] == "用户"
+        assert intent["sync_type"] == "incremental"
+
+
+class TestSuffixStrippedDiscovery:
+    def test_table_suffix_retries_without_suffix(self, monkeypatch):
+        agent = ConfigAgent()
+
+        def _fake(kw, db_type="mysql", limit=20):
+            if kw == "用户表":
+                return {"success": True, "candidates": []}
+            return {
+                "success": True,
+                "candidates": [{
+                    "database": "dw", "table": "user",
+                    "comment": "用户表", "match_type": "comment",
+                }],
+            }
+
+        monkeypatch.setattr("src.agents.config_agent.discover_tables", _fake)
+        intent, cands, err = agent._resolve_source_table({
+            "source_table": "用户表", "source_db_type": "mysql",
+        })
+        assert cands == [] and err == ""
+        assert intent["source_database"] == "dw"
+        assert intent["source_table"] == "user"
 
 
 def test_discover_tables_registered():
