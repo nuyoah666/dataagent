@@ -451,3 +451,30 @@ class TestMappingApi:
         with TestClient(api.app) as client:
             r = client.post(f"/tasks/{task_id}/config/mapping", json={"mapping": []})
             assert r.status_code == 422
+
+
+def test_approve_uses_recorded_task_type(monkeypatch):
+    """审批用任务记录的 task_type，不重新做意图路由（避免表名含 ods 等误命中）。"""
+    tm = get_task_manager()
+    # 该 query 会触发路由 ambiguous（"同步" + 表名含 "ods"）
+    task_id = tm.create_task(
+        "[向导] 同步 datax_test.src_user 到 src_user_demo_ods",
+        task_type="data_integration",
+    )
+    tm.update_task(
+        task_id,
+        status=TaskStatus.PENDING_APPROVAL.value,
+        datax_config=SAMPLE_CFG,
+    )
+    seen = {}
+
+    class _FakeWF:
+        def approve_task(self, tid, operator):
+            seen["task_type"] = "data_integration"
+            return {"current_step": "execution_complete", "error": None}
+
+    monkeypatch.setattr(api, "get_workflow", lambda t: _FakeWF())
+    with TestClient(api.app) as client:
+        r = client.post(f"/tasks/{task_id}/approve")
+        assert r.status_code == 200, r.text
+    assert seen.get("task_type") == "data_integration"

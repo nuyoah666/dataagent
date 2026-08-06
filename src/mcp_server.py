@@ -136,12 +136,12 @@ def approve_task(task_id: str) -> str:
             "success": False,
             "error": f"任务当前状态为 {task.get('status')}，仅 pending_approval 可审批",
         })
-    routed = get_router().route(task.get("user_query", ""))
-    if not routed.task_type:
-        return _dump({"success": False, "error": "无法确定任务类型"})
+    task_type = task.get("task_type")
+    if not task_type:
+        return _dump({"success": False, "error": "任务缺少 task_type"})
     try:
         with _task_slot():
-            result = _workflow(routed.task_type).approve_task(task_id, "mcp")
+            result = _workflow(task_type).approve_task(task_id, "mcp")
         if result is None:
             return _dump({"success": False, "error": "只有待审批任务可以审批"})
         return _dump({
@@ -169,11 +169,11 @@ def reject_task(task_id: str) -> str:
             "success": False,
             "error": f"任务当前状态为 {task.get('status')}，仅 pending_approval 可拒绝",
         })
-    routed = get_router().route(task.get("user_query", ""))
-    if not routed.task_type:
-        return _dump({"success": False, "error": "无法确定任务类型"})
+    task_type = task.get("task_type")
+    if not task_type:
+        return _dump({"success": False, "error": "任务缺少 task_type"})
     try:
-        result = _workflow(routed.task_type).reject_task(task_id, "mcp")
+        result = _workflow(task_type).reject_task(task_id, "mcp")
         if result is None:
             return _dump({"success": False, "error": "只有待审批任务可以拒绝"})
         return _dump({"success": True, "task_id": task_id, "message": "已拒绝执行"})

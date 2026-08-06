@@ -8,6 +8,7 @@
 """
 
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 from ..config import config
@@ -21,6 +22,15 @@ from ..utils.llm import LLMJsonError, get_agent_llm, llm_json
 from .base import BaseAgent, register_agent
 
 logger = logging.getLogger(__name__)
+
+# 规则解析："分析 X 按 Y" / "统计 X 按 Y"（LLM 兜底前的确定性路径）
+_RULE_QUERY_RE = re.compile(
+    r"(?:分析|统计|查询|看看|看下)\s*([\u4e00-\u9fa5A-Za-z0-9_]+?)\s*"
+    r"(?:按|根据|以|维度)\s*([\u4e00-\u9fa5A-Za-z0-9_]+)"
+)
+_GRANULARITY_HINT = {
+    "年": "year", "月": "month", "日": "day", "天": "day",
+}
 
 
 @register_agent(
@@ -76,6 +86,12 @@ class AnalysisConfigAgent(BaseAgent):
         })
 
     def _parse_query(self, user_query: str, catalog) -> AnalysisQuery:
+        # 规则优先：固定模式（分析X按Y）确定性解析，零 LLM、零延迟
+        rule_query = self._rule_query(user_query, catalog)
+        if rule_query is not None:
+            logger.info("分析意图规则命中，跳过 LLM: %s", rule_query.model_dump())
+            return rule_query
+
         # 汇总全部表的指标/维度清单供 LLM 选择
         all_metrics = []
         all_dims = []
@@ -83,27 +99,69 @@ class AnalysisConfigAgent(BaseAgent):
             all_metrics.extend(t.all_metric_names())
             all_dims.extend(t.all_dimension_names())
 
-        try:
-            data = llm_json(
-                "你是数据分析语义层解析器。把用户的分析请求转成 JSON（仅 JSON，无其他文本）：\n"
-                "{\"metrics\": [\"指标名\"], \"dimensions\": [\"维度名\"],\n"
-                " \"filters\": [{\"dimension\": \"维度名\", \"op\": \"=\", \"value\": \"值\"}],\n"
-                " \"granularity\": \"day|month|year（空字符串表示不折叠）\",\n"
-                " \"limit\": 1000, \"order_by\": \"指标或维度名（可选）\", \"order_desc\": true}\n"
-                "要求：\n"
-                "1) 指标/维度只能从下面清单选择，禁止臆造：\n"
-                f"指标: {', '.join(all_metrics)}\n"
-                f"维度: {', '.join(all_dims)}\n"
-                "2) 用户提到'按月/按年/按天'时设置 granularity；\n"
-                "3) 没有过滤条件时 filters 为空数组。",
-                f"用户请求：{user_query}",
-                llm=self._get_llm(),
-                breaker=llm_circuit_breaker,
-            )
-            return AnalysisQuery.model_validate(data)
-        except (LLMJsonError, Exception) as e:
-            logger.warning(f"分析语义解析失败: {e}")
-            raise ValueError("分析语义解析失败，请换个说法（如：分析用户数按月）")
+        prompt = (
+            "你是数据分析语义层解析器。把用户的分析请求转成 JSON（仅 JSON，无其他文本）：\n"
+            "{\"metrics\": [\"指标名\"], \"dimensions\": [\"维度名\"],\n"
+            " \"filters\": [{\"dimension\": \"维度名\", \"op\": \"=\", \"value\": \"值\"}],\n"
+            " \"granularity\": \"day|month|year（空字符串表示不折叠）\",\n"
+            " \"limit\": 1000, \"order_by\": \"指标或维度名（可选）\", \"order_desc\": true}\n"
+            "要求：\n"
+            "1) 指标/维度只能从下面清单选择，禁止臆造：\n"
+            f"指标: {', '.join(all_metrics)}\n"
+            f"维度: {', '.join(all_dims)}\n"
+            "2) 用户提到'按月/按年/按天'时设置 granularity；\n"
+            "3) 没有过滤条件时 filters 为空数组。"
+        )
+        last_err = None
+        for attempt in range(2):  # LLM 输出不稳定，重试一次
+            try:
+                data = llm_json(
+                    prompt,
+                    f"用户请求：{user_query}",
+                    llm=self._get_llm(),
+                    breaker=llm_circuit_breaker,
+                )
+                return AnalysisQuery.model_validate(data)
+            except (LLMJsonError, Exception) as e:
+                last_err = e
+                logger.warning(f"分析语义解析失败(第{attempt + 1}次): {e}")
+        raise ValueError(f"分析语义解析失败，请换个说法（如：分析用户数按月）。{last_err}")
+
+    @staticmethod
+    def _rule_query(user_query: str, catalog) -> Optional[AnalysisQuery]:
+        """规则解析：'分析 <指标显示名> 按 <维度显示名>'。
+
+        指标/维度按名称或显示名匹配语义层；命中即可确定性生成查询。
+        """
+        m = _RULE_QUERY_RE.search(user_query or "")
+        if not m:
+            return None
+        metric_word, dim_word = m.group(1).strip(), m.group(2).strip()
+        if not metric_word or not dim_word:
+            return None
+
+        metric = dim = None
+        for t in catalog.tables:
+            if metric is None:
+                metric = t.find_metric(metric_word)
+            if dim is None:
+                dim = t.find_dimension(dim_word)
+            if metric and dim:
+                break
+        if not metric or not dim:
+            return None
+
+        granularity = ""
+        if dim.get("type") == "date":
+            for word, g in _GRANULARITY_HINT.items():
+                if word in (user_query or ""):
+                    granularity = g
+                    break
+        return AnalysisQuery(
+            metrics=[metric["name"]],
+            dimensions=[dim["name"]],
+            granularity=granularity,
+        )
 
 
 @register_agent(

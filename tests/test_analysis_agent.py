@@ -144,6 +144,18 @@ class _FakeAnalysisConn:
 
 
 class TestAnalysisConfigAgent:
+    def test_rule_query_hits(self):
+        cat = _make_catalog()
+        q = AnalysisConfigAgent._rule_query("分析用户数按日期", cat)
+        assert q is not None
+        assert q.metrics == ["user_count"]
+        assert q.dimensions == ["dt"]
+
+    def test_rule_query_miss_falls_to_llm(self):
+        cat = _make_catalog()
+        q = AnalysisConfigAgent._rule_query("看看今年的销售趋势", cat)
+        assert q is None
+
     def test_generates_sql(self, monkeypatch):
         cat = _make_catalog()
         _patch_catalog(monkeypatch, cat)
@@ -156,7 +168,7 @@ class TestAnalysisConfigAgent:
             "order_by": "user_count",
             "order_desc": True,
         })
-        result = AnalysisConfigAgent().run({"user_query": "分析用户数按日期"})
+        result = AnalysisConfigAgent().run({"user_query": "分析用户数的变化趋势"})
         assert result["current_step"] == "config_complete", result.get("error")
         assert "SELECT dt AS `dt`, COUNT(id) AS `user_count`" in result["analysis_sql"]
         assert "LIMIT 100" in result["analysis_sql"]

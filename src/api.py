@@ -484,11 +484,11 @@ async def approve_task(task_id: str, request: Request):
         raise HTTPException(status_code=404, detail="任务不存在")
     if task.get("status") != "pending_approval":
         raise HTTPException(status_code=409, detail="任务不在待审批状态")
-    routed = get_router().route(task.get("user_query", ""))
-    if not routed.task_type:
-        raise HTTPException(status_code=409, detail="无法确定任务类型，请人工检查")
+    task_type = task.get("task_type")
+    if not task_type:
+        raise HTTPException(status_code=409, detail="任务缺少 task_type，无法执行")
     try:
-        wf = get_workflow(routed.task_type)
+        wf = get_workflow(task_type)
         operator = request.headers.get("X-Operator", "system")[:50]
         result = await asyncio.to_thread(wf.approve_task, task_id, operator)
         if result is None:
@@ -516,10 +516,10 @@ async def reject_task(task_id: str, request: Request):
         raise HTTPException(status_code=404, detail="任务不存在")
     if task.get("status") != "pending_approval":
         raise HTTPException(status_code=409, detail="任务不在待审批状态")
-    routed = get_router().route(task.get("user_query", ""))
-    if not routed.task_type:
-        raise HTTPException(status_code=409, detail="无法确定任务类型")
-    wf = get_workflow(routed.task_type)
+    task_type = task.get("task_type")
+    if not task_type:
+        raise HTTPException(status_code=409, detail="任务缺少 task_type")
+    wf = get_workflow(task_type)
     operator = request.headers.get("X-Operator", "system")[:50]
     result = await asyncio.to_thread(wf.reject_task, task_id, operator)
     if result is None:

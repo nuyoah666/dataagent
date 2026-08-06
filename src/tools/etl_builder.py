@@ -220,21 +220,21 @@ def build_create_table_sql(
     col_defs = [f"{_quote_ident(c['name'])} {_col_type_for_ddl(c['type'])}" for c in columns]
     names = [c["name"] for c in columns]
 
-    # key 列：分区列优先，其次取第一个非 text 列，最后兜底第一列
+    # key 列：取第一个非 text 列（StarRocks 要求 key 列是 schema 最前列，
+    # 按源表列序取第一个合法列即天然在最前；VARCHAR 等不做 key）。
+    # 分区列不强制做 key（RANGE 分区列可以是 value 列）。
     key_col = None
-    if partition_column in names:
-        key_col = partition_column
-    else:
-        for c in columns:
-            if _base_type(c["type"]) not in ("VARCHAR", "STRING", "JSON", "TEXT", "LARGEINT"):
-                key_col = c["name"]
-                break
-        if key_col is None:
-            key_col = names[0]
+    for c in columns:
+        if _base_type(c["type"]) not in (
+            "VARCHAR", "STRING", "JSON", "TEXT",
+            "BOOLEAN", "FLOAT", "DOUBLE",
+        ):
+            key_col = c["name"]
+            break
+    if key_col is None:
+        key_col = names[0]
 
     key_columns = [key_col]
-    if partition_column in names and partition_column != key_col:
-        key_columns.append(partition_column)
     key_def = ", ".join(_quote_ident(k) for k in key_columns)
 
     # 分桶列：key 之外优先数字列；否则用第一个 key 列
