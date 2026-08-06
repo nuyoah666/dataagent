@@ -3,7 +3,7 @@
 基于 LangChain + LangGraph 构建的智能化数仓多 Agent 协作平台，
 通过自然语言指令完成数据集成、ETL 加工、运维诊断等数仓工作流。
 
-![CI](https://img.shields.io/github/actions/workflow/status/nuyoah69/dataagent/ci.yml?branch=main&label=CI)
+![CI](https://img.shields.io/github/actions/workflow/status/nuyoah666/dataagent/ci.yml?branch=main&label=CI)
 
 ## 核心特性
 
