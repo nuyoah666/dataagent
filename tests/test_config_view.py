@@ -3,6 +3,7 @@ from fastapi.testclient import TestClient
 
 from src import api
 from src.tools.config_view import build_config_view
+from src.tools.config_view import apply_field_mapping
 from src.tools.config_processor import normalize_jdbc_url
 from src.workflow.task_manager import get_task_manager, TaskStatus
 
@@ -332,3 +333,121 @@ def test_mark_interrupted_tasks():
     # 待审批与终态任务保留
     assert tm.get_task(approval_id)["status"] == TaskStatus.PENDING_APPROVAL.value
     assert tm.get_task(success_id)["status"] == TaskStatus.SUCCESS.value
+
+
+class TestApplyFieldMapping:
+    def test_es_writer_typed(self):
+        cfg = {
+            "job": {"content": [{
+                "reader": {"name": "mysqlreader", "parameter": {"column": ["*"]}},
+                "writer": {"name": "elasticsearchwriter", "parameter": {"column": []}},
+            }]},
+        }
+        mapping = [
+            {"source": "id", "target": "user_id", "target_type": "long"},
+            {"source": "name", "target": "name", "target_type": "keyword"},
+        ]
+        out = apply_field_mapping(cfg, mapping)
+        reader_cols = out["job"]["content"][0]["reader"]["parameter"]["column"]
+        writer_cols = out["job"]["content"][0]["writer"]["parameter"]["column"]
+        # 源列已知 -> 具体列名；通配保留
+        assert reader_cols == ["id", "name"]
+        assert writer_cols == [
+            {"name": "user_id", "type": "long"},
+            {"name": "name", "type": "keyword"},
+        ]
+
+    def test_wildcard_source_kept(self):
+        cfg = {
+            "job": {"content": [{
+                "reader": {"name": "mysqlreader", "parameter": {"column": ["*"]}},
+                "writer": {"name": "elasticsearchwriter", "parameter": {"column": []}},
+            }]},
+        }
+        mapping = [{"source": "*", "target": "id", "target_type": "long"}]
+        out = apply_field_mapping(cfg, mapping)
+        assert out["job"]["content"][0]["reader"]["parameter"]["column"] == ["*"]
+
+    def test_mysql_writer_plain(self):
+        cfg = {
+            "job": {"content": [{
+                "reader": {"name": "mysqlreader", "parameter": {"column": ["*"]}},
+                "writer": {"name": "mysqlwriter", "parameter": {"column": []}},
+            }]},
+        }
+        mapping = [
+            {"source": "id", "target": "id", "target_type": "bigint"},
+            {"source": "name", "target": "user_name", "target_type": "varchar(50)"},
+        ]
+        out = apply_field_mapping(cfg, mapping)
+        writer_cols = out["job"]["content"][0]["writer"]["parameter"]["column"]
+        assert writer_cols == ["id", "user_name"]
+
+    def test_mongo_writer_typed(self):
+        cfg = {
+            "job": {"content": [{
+                "reader": {"name": "mongodbreader", "parameter": {"column": []}},
+                "writer": {"name": "mongodbwriter", "parameter": {"column": []}},
+            }]},
+        }
+        mapping = [{"source": "id", "target": "id", "target_type": "long"}]
+        out = apply_field_mapping(cfg, mapping)
+        assert out["job"]["content"][0]["writer"]["parameter"]["column"] == [
+            {"name": "id", "type": "long"}
+        ]
+
+
+class TestMappingApi:
+    def _pending_task(self, tm):
+        task_id = tm.create_task("把 a 同步到 b", task_type="data_integration")
+        cfg = {
+            "job": {"content": [{
+                "reader": {"name": "mysqlreader", "parameter": {"column": ["*"]}},
+                "writer": {"name": "elasticsearchwriter", "parameter": {
+                    "column": [{"name": "id", "type": "long"}],
+                }},
+            }]},
+        }
+        tm.update_task(task_id, status=TaskStatus.PENDING_APPROVAL.value, datax_config=cfg)
+        return task_id
+
+    def test_mapping_edit_updates_config(self):
+        tm = get_task_manager()
+        task_id = self._pending_task(tm)
+        mapping = [
+            {"source": "id", "target": "id", "target_type": "long"},
+            {"source": "name", "target": "name", "target_type": "keyword"},
+        ]
+        with TestClient(api.app) as client:
+            r = client.post(
+                f"/tasks/{task_id}/config/mapping",
+                json={"mapping": mapping},
+                headers={"X-Operator": "tester"},
+            )
+            assert r.status_code == 200, r.text
+            body = r.json()
+            cols = body["datax_config"]["job"]["content"][0]["writer"]["parameter"]["column"]
+            assert cols == [
+                {"name": "id", "type": "long"},
+                {"name": "name", "type": "keyword"},
+            ]
+        logs = tm.get_audit_logs(task_id)
+        assert any(l["action"] == "mapping_edit" and l["operator"] == "tester" for l in logs)
+
+    def test_mapping_edit_rejected_when_running(self):
+        tm = get_task_manager()
+        task_id = self._pending_task(tm)
+        tm.update_task(task_id, status=TaskStatus.EXECUTING.value)
+        with TestClient(api.app) as client:
+            r = client.post(
+                f"/tasks/{task_id}/config/mapping",
+                json={"mapping": [{"source": "id", "target": "id", "target_type": "long"}]},
+            )
+            assert r.status_code == 409
+
+    def test_mapping_empty_rejected(self):
+        tm = get_task_manager()
+        task_id = self._pending_task(tm)
+        with TestClient(api.app) as client:
+            r = client.post(f"/tasks/{task_id}/config/mapping", json={"mapping": []})
+            assert r.status_code == 422

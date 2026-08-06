@@ -233,3 +233,70 @@ def build_config_view(cfg: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         "target": extract_side(cfg, "writer"),
         "setting": extract_setting(cfg),
     }
+
+
+def apply_field_mapping(
+    cfg: Dict[str, Any],
+    mapping: List[Dict[str, str]],
+) -> Dict[str, Any]:
+    """把可视化编辑后的字段映射写回 DataX 配置（reader/writer column）。
+
+    规则：
+      - mysqlreader（plain）：源列全为通配/空 -> ["*"]，否则具体列名列表
+      - mongodbreader（typed）：[{"name", "type"}]，类型缺省 string
+      - elasticsearchwriter（typed）：[{"name", "type"}]，类型缺省 keyword
+      - mysql/starrocks writer（plain）：目标列名列表
+      - mongodbwriter（typed）：[{"name", "type"}]，类型缺省 string
+    """
+    import copy
+
+    cfg = copy.deepcopy(cfg)
+    content = ((cfg.get("job") or {}).get("content")) or []
+    if not content:
+        raise ValueError("DataX 配置缺少 content")
+    item = content[0]
+    reader = item.get("reader") or {}
+    writer = item.get("writer") or {}
+    reader_param = reader.setdefault("parameter", {})
+    writer_param = writer.setdefault("parameter", {})
+
+    # 源列
+    src_names = [
+        m.get("source", "").strip()
+        for m in mapping
+        if m.get("source") and m["source"].strip() not in ("", "*")
+    ]
+    rname = str(reader.get("name", "")).lower()
+    if rname == "mysqlreader":
+        reader_param["column"] = src_names if src_names else ["*"]
+    elif rname == "mongodbreader":
+        reader_param["column"] = [
+            {"name": m["source"], "type": m.get("source_type") or "string"}
+            for m in mapping if m.get("source") and m["source"] != "*"
+        ]
+
+    # 目标列
+    wname = str(writer.get("name", "")).lower()
+    if wname == "elasticsearchwriter":
+        writer_param["column"] = [
+            {
+                "name": m.get("target", "").strip(),
+                "type": m.get("target_type") or "keyword",
+            }
+            for m in mapping if m.get("target", "").strip()
+        ]
+    elif wname == "mongodbwriter":
+        writer_param["column"] = [
+            {
+                "name": m.get("target", "").strip(),
+                "type": m.get("target_type") or "string",
+            }
+            for m in mapping if m.get("target", "").strip()
+        ]
+    elif wname == "mysqlwriter":
+        writer_param["column"] = [
+            m.get("target", "").strip()
+            for m in mapping if m.get("target", "").strip()
+        ]
+
+    return cfg

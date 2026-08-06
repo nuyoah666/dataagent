@@ -751,6 +751,73 @@ function renderMapping(view) {
     ${wildcardHint ? `<div class="muted-flag" style="margin-top:8px">⚠ 源端为全列通配（*），已按位置与目标列对齐；需要精确映射请在 DataX JSON 中指定源列</div>` : ''}`;
 }
 
+const TYPE_OPTIONS = {
+  elasticsearchwriter: ['long','keyword','text','date','integer','boolean','double','float'],
+  mysqlwriter: ['bigint','int','varchar(50)','char(10)','date','datetime','decimal(10,2)','double','tinyint'],
+  mongodbwriter: ['string','long','double','date','boolean','object'],
+};
+
+function mapRowHtml(m, srcCols, typeOpts) {
+  const curSrc = m.source || '*';
+  const srcOpts = ['*', ...srcCols].map(s =>
+    `<option value="${escapeHtml(s)}" ${s === curSrc ? 'selected' : ''}>${escapeHtml(s === '*' ? '*（源全列）' : s)}</option>`).join('');
+  return `<tr>
+    <td><select class="select" data-map-src>${srcOpts}</select></td>
+    <td class="mid">──▶</td>
+    <td><input class="input" data-map-target value="${escapeHtml(m.target || '')}" placeholder="目标列名" style="width:100%"></td>
+    <td><input class="input" data-map-type list="mapTypeList" value="${escapeHtml(m.target_type || '')}" placeholder="类型" style="width:100%"></td>
+    <td style="text-align:right"><button class="btn btn-ghost" onclick="delMapRow(this)">✕</button></td>
+  </tr>`;
+}
+
+function renderMappingEditor(view, cfg) {
+  const writerName = (((cfg.datax_config || {}).job || {}).content || [{}])[0]?.writer?.name || '';
+  const typeOpts = TYPE_OPTIONS[writerName] || ['string'];
+  const srcCols = (view.source_schema || []).map(c => c.name);
+  const rows = (view.field_mapping || []).map(m => mapRowHtml(m, srcCols, typeOpts)).join('');
+  return `<table class="mapping-table">
+    <thead><tr><th style="text-align:left">源列</th><th style="width:56px"></th>
+      <th style="text-align:left">目标列</th><th style="text-align:left">类型</th><th style="width:44px"></th></tr></thead>
+    <tbody id="mapRows">${rows || mapRowHtml({source:'*', target:'', target_type:''}, srcCols, typeOpts)}</tbody>
+  </table>
+  <datalist id="mapTypeList">${typeOpts.map(t => `<option value="${escapeHtml(t)}">`).join('')}</datalist>
+  <div class="cfg-actions">
+    <button class="btn btn-ghost" onclick="addMapRow()">+ 添加字段</button>
+    <button class="btn btn-action" onclick="saveMapping()">保存字段映射</button>
+  </div>`;
+}
+
+function addMapRow() {
+  const tbody = $('mapRows');
+  const first = tbody.querySelector('[data-map-src]');
+  const srcs = first ? [...first.options].map(o => o.value) : ['*'];
+  tbody.insertAdjacentHTML('beforeend', mapRowHtml({source: srcs[0] || '*', target: '', target_type: ''}, srcs, []));
+}
+
+function delMapRow(btn) {
+  const rows = $('mapRows');
+  if (rows.children.length <= 1) { alert('至少保留一个字段'); return; }
+  btn.closest('tr').remove();
+}
+
+function collectMapping() {
+  return [...document.querySelectorAll('#mapRows tr')].map(r => ({
+    source: r.querySelector('[data-map-src]').value,
+    target: r.querySelector('[data-map-target]').value.trim(),
+    target_type: r.querySelector('[data-map-type]').value.trim(),
+  })).filter(m => m.target);
+}
+
+async function saveMapping() {
+  const mapping = collectMapping();
+  if (!mapping.length) { alert('至少保留一个目标列'); return; }
+  try {
+    await api('/tasks/' + _detailTaskId + '/config/mapping', {method:'POST', headers:Object.assign({'Content-Type':'application/json'}, headers()), body: JSON.stringify({mapping})});
+    alert('字段映射已保存，审批时将使用新配置');
+    showDetail(_detailTaskId);
+  } catch (e) { alert('保存失败: ' + e.message); }
+}
+
 function renderConfigSection(cfg) {
   const view = cfg.view || {};
   const tabs = [];
@@ -764,7 +831,8 @@ function renderConfigSection(cfg) {
     `<button class="${i === 0 ? 'active' : ''}" data-cfg="${key}" onclick="switchCfgTab(this)">${label}</button>`).join('');
   const panes = [];
   if (tabs.some(t => t[0] === 'mapping')) {
-    panes.push(`<div class="cfg-pane ${tabs[0][0] === 'mapping' ? 'active' : ''}" id="cfg-mapping">${renderMapping(view)}</div>`);
+    const mappingHtml = cfg.editable ? renderMappingEditor(view, cfg) : renderMapping(view);
+    panes.push(`<div class="cfg-pane ${tabs[0][0] === 'mapping' ? 'active' : ''}" id="cfg-mapping">${mappingHtml}</div>`);
   }
   if (tabs.some(t => t[0] === 'where')) {
     panes.push(`<div class="cfg-pane ${tabs[0][0] === 'where' ? 'active' : ''}" id="cfg-where">

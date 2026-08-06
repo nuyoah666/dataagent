@@ -534,6 +534,12 @@ class ConfigUpdateRequest(BaseModel):
     etl_sql: Optional[str] = None
 
 
+class MappingUpdateRequest(BaseModel):
+    """字段映射可视化编辑请求。"""
+
+    mapping: list
+
+
 @app.get("/tasks/{task_id}/config")
 async def get_task_config(task_id: str):
     """返回任务配置视图（字段映射 / where / 连接信息 / 原始 JSON）。"""
@@ -599,20 +605,30 @@ def _enrich_mapping_with_schemas(view: dict, task: dict = None) -> dict:
         schema = get_table_schema(cfg, side["table"])
         return schema.get("columns") or []
 
-    # 1. 源端通配 -> 补源列名与源类型
-    if view.get("source_wildcard"):
-        source = view.get("source") or {}
-        try:
-            columns = _query_columns(source)
-            if columns:
+    # 1. 源端可查则补 schema：通配时展开真实列名，非通配时补源类型与下拉选项
+    source = view.get("source") or {}
+    try:
+        columns = _query_columns(source)
+        if columns:
+            if view.get("source_wildcard"):
                 view["field_mapping"] = rebuild_mapping_with_schema(
                     view["field_mapping"], columns
                 )
-                view["source_schema"] = columns
-        except Exception as e:
-            logging.getLogger(__name__).warning(
-                f"补全源表 schema 失败（保持通配展示）: {e}"
-            )
+            else:
+                by_name = {str(c.get("name", "")).lower(): c for c in columns}
+                view["field_mapping"] = [
+                    {
+                        **m,
+                        "source_type": m.get("source_type")
+                        or by_name.get(str(m.get("source", "")).lower(), {}).get("type", ""),
+                    }
+                    for m in view["field_mapping"]
+                ]
+            view["source_schema"] = columns
+    except Exception as e:
+        logging.getLogger(__name__).warning(
+            f"补全源表 schema 失败: {e}"
+        )
 
     # 2. 目标端类型缺失 -> 查目标表补类型
     if any(not m.get("target_type") for m in (view.get("field_mapping") or [])):
@@ -668,6 +684,56 @@ async def update_task_config(task_id: str, req: ConfigUpdateRequest, request: Re
         "view": build_config_view(updated.get("datax_config")),
         "datax_config": updated.get("datax_config"),
         "etl_sql": updated.get("etl_sql"),
+    }
+
+
+@app.post("/tasks/{task_id}/config/mapping")
+async def update_task_mapping(task_id: str, req: MappingUpdateRequest, request: Request):
+    """可视化编辑字段映射：写回 DataX column 并保存（仅待审批任务）。"""
+    import logging
+    from src.tools.config_view import apply_field_mapping, build_config_view
+
+    tm = get_task_manager()
+    task = tm.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if task.get("status") != TaskStatus.PENDING_APPROVAL.value:
+        raise HTTPException(status_code=409, detail="仅待审批任务可编辑字段映射")
+    cfg = task.get("datax_config")
+    if not isinstance(cfg, dict):
+        raise HTTPException(status_code=422, detail="任务缺少 DataX 配置，无法编辑映射")
+
+    mapping = []
+    for m in req.mapping or []:
+        if not isinstance(m, dict):
+            continue
+        source = str(m.get("source", "") or "").strip()
+        target = str(m.get("target", "") or "").strip()
+        if target:
+            mapping.append({
+                "source": source,
+                "source_type": str(m.get("source_type", "") or ""),
+                "target": target,
+                "target_type": str(m.get("target_type", "") or ""),
+            })
+    if not mapping:
+        raise HTTPException(status_code=422, detail="字段映射不能为空（至少保留一个目标列）")
+
+    try:
+        new_cfg = apply_field_mapping(cfg, mapping)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"字段映射转换失败: {e}")
+
+    operator = request.headers.get("X-Operator", "system")[:50]
+    tm.update_task(task_id, datax_config=new_cfg)
+    tm.audit(task_id, "mapping_edit", operator=operator, detail="可视化编辑字段映射")
+    updated = tm.get_task(task_id)
+    view = _enrich_mapping_with_schemas(build_config_view(updated.get("datax_config")), updated)
+    return {
+        "success": True,
+        "task_id": task_id,
+        "view": view,
+        "datax_config": updated.get("datax_config"),
     }
 
 
