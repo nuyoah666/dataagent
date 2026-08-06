@@ -106,6 +106,9 @@ python -m src.api
 - `POST /tasks/{task_id}/cancel`：取消运行中的任务（会终止 DataX 子进程）
 - `GET /health`：健康检查
 
+完整 API 文档见 [docs/API.md](docs/API.md)（含请求/响应示例与状态码约定），
+交互式文档可直接访问 `http://localhost:8000/docs`（Swagger UI，自动同步代码）。
+
 Web 界面：
 - `GET /chat`：自然语言对话（支持集成/ETL/运维/分析四种任务，右上角直达同步向导）
 - `GET /ui`：全链路监控（任务/管道/审计/健康/数据源 + 同步向导 + 亮暗主题）
