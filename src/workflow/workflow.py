@@ -235,8 +235,13 @@ class AgentWorkflow:
 
     @staticmethod
     def _partition_load_info(state: dict) -> Optional[dict]:
-        """分区形态 ODS（StarRocks）：返回 {real_table, staging, columns, dt}，非分区返回 None。"""
-        from datetime import datetime
+        """分区形态 ODS（StarRocks）：返回 {real_table, staging, columns, dt, date_field}。
+
+        - 快照表：dt = 同步日期，date_field 为空（全量装载到同步日分区）
+        - 增量表：dt = 增量窗口起点（min(水位日+1, 今天)，与增量 where 一致），
+          date_field = 增量字段，装载按数据业务日期分区
+        """
+        from datetime import datetime, timedelta
 
         from ..tools.incremental import _staging_table_for
         from ..tools.ods_naming import kind_from_table
@@ -245,16 +250,39 @@ class AgentWorkflow:
         if str(intent.get("target_db_type", "")).lower() != "starrocks":
             return None
         real_table = str(intent.get("target_table") or "")
-        if kind_from_table(real_table) == "base":
+        kind = kind_from_table(real_table)
+        if kind == "base":
             return None
         columns = ((state.get("source_schema") or {}).get("columns")) or []
         if not columns:
             return None
+
+        today = datetime.now()
+        dt = today.strftime("%Y-%m-%d")
+        date_field = ""
+        if kind == "inc":
+            incremental_field = str(state.get("incremental_field") or "").strip()
+            if incremental_field:
+                date_field = incremental_field
+                last_value = str(state.get("last_value") or "")[:10]
+                if last_value:
+                    try:
+                        start = min(
+                            datetime.strptime(last_value, "%Y-%m-%d") + timedelta(days=1),
+                            today,
+                        )
+                    except ValueError:
+                        start = today
+                else:
+                    start = today - timedelta(days=7)
+                dt = start.strftime("%Y-%m-%d")
+
         return {
             "real_table": real_table,
             "staging": _staging_table_for(real_table),
             "columns": columns,
-            "dt": datetime.now().strftime("%Y-%m-%d"),
+            "dt": dt,
+            "date_field": date_field,
             "database": str(intent.get("target_database") or "").strip()
             or config.STARROCKS_CONFIG.get("database", ""),
         }
@@ -277,6 +305,7 @@ class AgentWorkflow:
         sqls = build_ods_partition_load_sql(
             load_info["real_table"], load_info["staging"],
             load_info["columns"], load_info["dt"],
+            date_field=load_info.get("date_field", ""),
         )
         self._exec_starrocks_sql(task_id, sqls, load_info.get("database", ""))
         self.task_mgr.log(

@@ -66,10 +66,15 @@ def build_incremental_where(
         if last_value:
             d = str(last_value).strip()[:10]
             try:
-                next_day = (
-                    datetime.strptime(d, "%Y-%m-%d") + timedelta(days=1)
+                # 窗口起点 = min(水位日 + 1, 今天)：
+                #   - 水位日 < 今天（正常跨天）：从水位日+1 零点起，不重复
+                #   - 水位日 == 今天（同天重跑）：从今天零点起，不漏当天后续新数据
+                # 绝不出现未来窗口（水位日=今天时不会生成"明天"）
+                start = min(
+                    datetime.strptime(d, "%Y-%m-%d") + timedelta(days=1),
+                    datetime.now(),
                 ).strftime("%Y-%m-%d 00:00:00")
-                return f"{field} >= '{next_day}'"
+                return f"{field} >= '{start}'"
             except ValueError:
                 pass  # 非日期水位，降级精确比较
         start = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d 00:00:00")
@@ -167,9 +172,13 @@ def build_ods_partition_load_sql(
     staging_table: str,
     columns: List[Dict[str, Any]],
     dt: str,
+    date_field: str = "",
 ) -> List[str]:
-    """分区装载 SQL：清当日分区 -> INSERT SELECT（带 dt）-> DROP staging。
+    """分区装载 SQL：清窗口分区 -> INSERT SELECT（带 dt）-> DROP staging。
 
+    - 快照表（date_field 为空）：dt = 同步日期，删同步日分区后全量装载
+    - 增量表（date_field 非空）：dt = 增量字段的业务日期（DATE(field)），
+      删 dt >= 窗口起点（dt 参数）的所有分区后装载——补跑/跨天数据落在正确的业务日期分区
     DataX 无法在 SELECT 中注入常量列（本机 mysqlreader 忽略 querySql），
     因此走数仓标准 staging 装载，全程幂等（DELETE + INSERT 可重复执行）。
     """
@@ -181,6 +190,13 @@ def build_ods_partition_load_sql(
     if not cols:
         raise ValueError("源表无列信息，无法生成分区装载 SQL")
     col_sql = ", ".join(f"`{c}`" for c in cols)
+    if date_field:
+        return [
+            f"DELETE FROM {real_table} WHERE `dt` >= '{dt}'",
+            f"INSERT INTO {real_table} ({col_sql}, `dt`) "
+            f"SELECT {col_sql}, DATE(`{date_field}`) FROM {staging_table}",
+            f"DROP TABLE IF EXISTS {staging_table}",
+        ]
     return [
         f"DELETE FROM {real_table} WHERE `dt` = '{dt}'",
         f"INSERT INTO {real_table} ({col_sql}, `dt`) "

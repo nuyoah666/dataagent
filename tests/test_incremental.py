@@ -218,6 +218,16 @@ class TestDayWindowIncremental:
         where = build_incremental_where("update_time", "datetime", "2026-08-02 16:30:09")
         assert where == "update_time >= '2026-08-03 00:00:00'"
 
+    def test_today_watermark_window_is_today(self):
+        """水位=今天（同天重跑）：窗口=今天零点，绝不出现未来窗口。"""
+        from datetime import datetime
+
+        from src.tools.incremental import build_incremental_where
+
+        today = datetime.now().strftime("%Y-%m-%d")
+        where = build_incremental_where("update_time", "datetime", today)
+        assert where == f"update_time >= '{today} 00:00:00'"
+
     def test_no_watermark_seven_day_window(self):
         from src.tools.incremental import build_incremental_where
 
@@ -271,3 +281,43 @@ def test_approval_path_persists_watermark(monkeypatch):
     assert (result.get("validation_result") or {}).get("success")
     task = tm.get_task(task_id)
     assert task["last_value"] == "2026-08-02"  # 按天窗口：水位存日期
+
+
+def test_build_ods_partition_load_sql_incremental_by_data_date():
+    """增量装载：dt 取增量字段的业务日期，清空 dt >= 窗口起点的分区。"""
+    from src.tools.incremental import build_ods_partition_load_sql
+
+    sqls = build_ods_partition_load_sql(
+        "ods_x_day_inc", "stg_ods_x_day_inc",
+        [{"name": "id", "type": "bigint"}, {"name": "update_time", "type": "datetime"}],
+        "2026-08-09", date_field="update_time",
+    )
+    assert sqls[0] == "DELETE FROM ods_x_day_inc WHERE `dt` >= '2026-08-09'"
+    assert "SELECT `id`, `update_time`, DATE(`update_time`)" in sqls[1]
+    assert sqls[2] == "DROP TABLE IF EXISTS stg_ods_x_day_inc"
+
+
+def test_partition_load_info_incremental_window(monkeypatch):
+    """增量分区装载信息：dt=窗口起点（min(水位日+1,今天)），date_field=增量字段。"""
+    from datetime import datetime, timedelta
+
+    from src.workflow.workflow import AgentWorkflow
+
+    today = datetime.now()
+    last_day = (today - timedelta(days=1)).strftime("%Y-%m-%d")
+    info = AgentWorkflow._partition_load_info({
+        "parsed_intent": {
+            "target_db_type": "starrocks",
+            "target_table": "ods_user_log_day_inc",
+            "target_database": "datax_test",
+        },
+        "source_schema": {"success": True, "columns": [
+            {"name": "id", "type": "bigint"},
+            {"name": "update_time", "type": "datetime"},
+        ]},
+        "incremental_field": "update_time",
+        "last_value": last_day,
+    })
+    assert info is not None
+    assert info["date_field"] == "update_time"
+    assert info["dt"] == today.strftime("%Y-%m-%d")  # 水位=昨天 -> 窗口=今天
