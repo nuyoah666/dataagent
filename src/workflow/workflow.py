@@ -421,7 +421,8 @@ class AgentWorkflow:
             ):
                 new_last = self._query_source_max(final)
                 if new_last is not None:
-                    self.task_mgr.update_task(task_id, last_value=str(new_last))
+                    # 按天窗口增量：水位只存日期（YYYY-MM-DD），避免秒级精度遗漏同秒记录
+                    self.task_mgr.update_task(task_id, last_value=str(new_last)[:10])
                     self.task_mgr.log(task_id, "INFO", f"增量水位更新: {new_last}")
             logger.info(f"[task={task_id}] 完成: {final.get('current_step')}")
             return final

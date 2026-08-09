@@ -614,8 +614,9 @@ class TestIncremental:
         assert detect_incremental_field(cols) == "id"
 
     def test_build_where_datetime(self):
-        assert build_incremental_where("update_time", "datetime", "2026-08-01 00:00:00") == \
-            "update_time > '2026-08-01 00:00:00'"
+        # 按天窗口：水位日期 -> 次日零点（等价 date(field) > 水位日期，索引友好）
+        assert build_incremental_where("update_time", "datetime", "2026-08-01") == \
+            "update_time >= '2026-08-02 00:00:00'"
 
     def test_build_where_int(self):
         assert build_incremental_where("id", "bigint", "100") == "id > 100"

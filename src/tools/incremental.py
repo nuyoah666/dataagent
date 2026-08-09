@@ -50,15 +50,38 @@ def detect_incremental_field(columns: List[Dict[str, Any]]) -> Optional[str]:
 
 
 def build_incremental_where(
-    field: str, field_type: str, last_value: str
+    field: str, field_type: str, last_value: str,
+    day_window: bool = True,
 ) -> str:
-    """构建增量查询 WHERE 条件。"""
-    if "date" in field_type or "time" in field_type or "timestamp" in field_type:
-        return f"{field} > '{last_value}'"
-    elif "int" in field_type or "bigint" in field_type:
-        return f"{field} > {last_value}"
-    else:
-        return f"{field} > '{last_value}'"
+    """构建增量查询 WHERE 条件。
+
+    日期时间字段默认按天窗口（day_window=True）：水位为日期（YYYY-MM-DD），
+    生成 `field >= '次日 00:00:00'`——等价 date(field) > 水位日期，且可走索引。
+    避免 datetime 秒级精度下 `>` 精确水位漏掉同秒多条记录（上次同步的
+    max(update_time) 只能精确到秒，同秒其余记录水位相同会被跳过）。
+    无水位时默认最近 7 天窗口。数值字段（自增 ID）走精确 `>`。
+    """
+    is_dt = any(k in field_type for k in ("date", "time", "timestamp"))
+    if day_window and is_dt:
+        if last_value:
+            d = str(last_value).strip()[:10]
+            try:
+                next_day = (
+                    datetime.strptime(d, "%Y-%m-%d") + timedelta(days=1)
+                ).strftime("%Y-%m-%d 00:00:00")
+                return f"{field} >= '{next_day}'"
+            except ValueError:
+                pass  # 非日期水位，降级精确比较
+        start = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d 00:00:00")
+        return f"{field} >= '{start}'"
+    if last_value:
+        if is_dt:
+            return f"{field} > '{last_value}'"
+        elif "int" in field_type or "bigint" in field_type:
+            return f"{field} > {last_value}"
+        else:
+            return f"{field} > '{last_value}'"
+    return None
 
 
 def enhance_config_with_incremental(
@@ -86,16 +109,8 @@ def enhance_config_with_incremental(
             field_type = col.get("type", "").lower()
             break
 
-    # 构建 WHERE 条件
-    if last_value:
-        where = build_incremental_where(incremental_field, field_type, last_value)
-    else:
-        # 默认：最近 7 天
-        if "date" in field_type or "time" in field_type:
-            seven_days_ago = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
-            where = build_incremental_where(incremental_field, field_type, seven_days_ago)
-        else:
-            where = None
+    # 构建 WHERE 条件（日期时间字段按天窗口，无水位默认最近 7 天）
+    where = build_incremental_where(incremental_field, field_type, last_value)
 
     if where:
         # 注入到 reader 参数（table 模式 -> where；querySql 模式 -> 拼进 SQL）

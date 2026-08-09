@@ -85,7 +85,7 @@ def test_incremental_where_injected(monkeypatch):
     result = wf.run("增量同步 MySQL 的 src_user 表到 ES")
 
     assert result["current_step"] == "validation_complete"
-    assert "update_time >" in _get_where(result)
+    assert "update_time >=" in _get_where(result)
     task = get_task_manager().get_task(result["_task_id"])
     assert task["incremental_field"] == "update_time"
     assert task["source_table"] == "src_user"
@@ -99,11 +99,11 @@ def test_watermark_persisted_and_reused(monkeypatch):
 
     result = wf.run("增量同步 MySQL 的 src_user 表到 ES")
     task = get_task_manager().get_task(result["_task_id"])
-    assert task["last_value"] == "2026-08-02 10:00:00"
+    assert task["last_value"] == "2026-08-02"  # 按天窗口：水位只存日期
 
     # 第二次运行应复用上次水位
     result2 = wf.run("增量同步 MySQL 的 src_user 表到 ES")
-    assert "update_time > '2026-08-02 10:00:00'" in _get_where(result2)
+    assert "update_time >= '2026-08-03 00:00:00'" in _get_where(result2)
 
 
 def test_inject_ods_staging():
@@ -196,7 +196,38 @@ def test_enhance_incremental_query_sql_mode():
     }
     out = enhance_config_with_incremental(
         cfg, [{"name": "update_time", "type": "datetime"}],
-        last_value="2026-08-02 10:00:00", incremental_field="update_time",
+        last_value="2026-08-02", incremental_field="update_time",
     )
     sql = out["job"]["content"][0]["reader"]["parameter"]["querySql"][0]
-    assert "WHERE update_time > '2026-08-02 10:00:00'" in sql
+    assert "WHERE update_time >= '2026-08-03 00:00:00'" in sql
+
+
+class TestDayWindowIncremental:
+    """按天窗口增量：水位存日期，where 用 `>= 次日 00:00:00`（索引友好、同秒不漏）。"""
+
+    def test_date_watermark_next_day_window(self):
+        from src.tools.incremental import build_incremental_where
+
+        where = build_incremental_where("update_time", "datetime", "2026-08-02")
+        assert where == "update_time >= '2026-08-03 00:00:00'"
+
+    def test_timestamp_watermark_treated_as_date(self):
+        """老任务遗留的精确时间戳水位（2026-08-02 16:30:09）取日期部分按天窗口。"""
+        from src.tools.incremental import build_incremental_where
+
+        where = build_incremental_where("update_time", "datetime", "2026-08-02 16:30:09")
+        assert where == "update_time >= '2026-08-03 00:00:00'"
+
+    def test_no_watermark_seven_day_window(self):
+        from src.tools.incremental import build_incremental_where
+
+        where = build_incremental_where("update_time", "datetime", None)
+        assert "update_time >= '" in where
+        assert " 00:00:00'" in where
+
+    def test_numeric_field_exact(self):
+        """数值增量字段（自增 ID）保持精确比较。"""
+        from src.tools.incremental import build_incremental_where
+
+        where = build_incremental_where("id", "bigint", "100")
+        assert where == "id > 100"
