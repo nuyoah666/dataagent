@@ -478,3 +478,87 @@ def test_approve_uses_recorded_task_type(monkeypatch):
         r = client.post(f"/tasks/{task_id}/approve")
         assert r.status_code == 200, r.text
     assert seen.get("task_type") == "data_integration"
+
+
+class TestInferTargetType:
+    """目标端类型兜底推断（目标表不存在/缺列时按源类型映射）。"""
+
+    def test_mysql_passthrough(self):
+        from src.tools.config_view import infer_target_type
+
+        assert infer_target_type("bigint unsigned", "mysql") == "bigint unsigned"
+        assert infer_target_type("varchar(32)", "mysql") == "varchar(32)"
+
+    def test_starrocks_mapping(self):
+        from src.tools.config_view import infer_target_type
+
+        assert infer_target_type("varchar(32)", "starrocks") == "VARCHAR(32)"
+        assert infer_target_type("datetime", "starrocks") == "DATETIME"
+        assert infer_target_type("bigint unsigned", "starrocks") == "BIGINT"
+        assert infer_target_type("text", "starrocks") == "STRING"
+        assert infer_target_type("decimal(10,2)", "starrocks") == "DECIMAL(10,2)"
+        assert infer_target_type("tinyint(1)", "starrocks") == "TINYINT"
+        assert infer_target_type("date", "starrocks") == "DATE"
+
+    def test_es_mapping(self):
+        from src.tools.config_view import infer_target_type
+
+        assert infer_target_type("int", "elasticsearch") == "long"
+        assert infer_target_type("varchar(32)", "elasticsearch") == "keyword"
+        assert infer_target_type("datetime", "elasticsearch") == "date"
+        assert infer_target_type("double", "elasticsearch") == "double"
+
+    def test_unknown_or_empty(self):
+        from src.tools.config_view import infer_target_type
+
+        assert infer_target_type("geometry", "starrocks") == ""
+        assert infer_target_type("", "starrocks") == ""
+        assert infer_target_type("int", "unknown_db") == ""
+
+
+def test_enrich_infers_target_type_when_table_missing(monkeypatch):
+    """目标表不存在（schema 为空）时，目标类型按源端类型推断并标注来源。"""
+    from src import api as api_mod
+    from src.tools import db_tool
+
+    view = {
+        "available": True,
+        "source_wildcard": False,
+        "field_mapping": [
+            {"source": "id", "source_type": "bigint unsigned", "target": "id", "target_type": ""},
+            {"source": "event_type", "source_type": "varchar(32)", "target": "event_type", "target_type": ""},
+        ],
+        "source": {"db_type": "mysql", "database": "datax_test", "table": "user_action_log"},
+        "target": {"db_type": "starrocks", "database": "datax_test", "table": "user_action_log"},
+    }
+    task = {"parsed_intent": {"source_db_type": "mysql", "target_db_type": "starrocks"}}
+    monkeypatch.setattr(db_tool, "get_table_schema", lambda cfg, table: {"success": True, "columns": []})
+    out = api_mod._enrich_mapping_with_schemas(view, task)
+    assert out["field_mapping"][0]["target_type"] == "BIGINT"
+    assert out["field_mapping"][0]["target_type_source"] == "inferred"
+    assert out["field_mapping"][1]["target_type"] == "VARCHAR(32)"
+    assert out["field_mapping"][1]["target_type_source"] == "inferred"
+
+
+def test_enrich_keeps_schema_target_type(monkeypatch):
+    """目标表存在（schema 可查）时用真实类型，不打推断标记。"""
+    from src import api as api_mod
+    from src.tools import db_tool
+
+    view = {
+        "available": True,
+        "source_wildcard": False,
+        "field_mapping": [
+            {"source": "id", "source_type": "bigint unsigned", "target": "id", "target_type": ""},
+        ],
+        "source": {"db_type": "mysql", "database": "datax_test", "table": "user_action_log"},
+        "target": {"db_type": "starrocks", "database": "datax_test", "table": "user_action_log"},
+    }
+    task = {"parsed_intent": {"source_db_type": "mysql", "target_db_type": "starrocks"}}
+    monkeypatch.setattr(
+        db_tool, "get_table_schema",
+        lambda cfg, table: {"success": True, "columns": [{"name": "id", "type": "BIGINT"}]},
+    )
+    out = api_mod._enrich_mapping_with_schemas(view, task)
+    assert out["field_mapping"][0]["target_type"] == "BIGINT"
+    assert out["field_mapping"][0]["target_type_source"] == ""

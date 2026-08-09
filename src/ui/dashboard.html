@@ -744,7 +744,7 @@ function renderMapping(view) {
     <tr>
       <td class="src">${escapeHtml(m.source || '—')}${m.source_type ? `<span class="t">${escapeHtml(m.source_type)}</span>` : ''}</td>
       <td class="mid">──▶</td>
-      <td class="dst">${escapeHtml(m.target || '—')}<span class="t">${escapeHtml(m.target_type || '—')}</span></td>
+      <td class="dst">${escapeHtml(m.target || '—')}<span class="t">${escapeHtml(m.target_type || '—')}${m.target_type_source === 'inferred' ? ' (推断)' : ''}</span></td>
     </tr>`).join('');
   const wildcardHint = view.source_wildcard && !(view.source_schema || []).length;
   return `<table class="mapping-table">${rows}</table>

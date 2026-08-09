@@ -5,6 +5,7 @@
 """
 
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -21,6 +22,84 @@ _PLUGIN_DB_TYPE = {
     "starrocksreader": "starrocks",
 }
 
+
+# 目标端类型兜底推断（仅展示参考）：目标表不存在/缺列时按源端类型映射
+_STARROCKS_TYPE_MAP = {
+    "tinyint": "TINYINT",
+    "smallint": "SMALLINT",
+    "mediumint": "INT",
+    "int": "INT",
+    "integer": "INT",
+    "bigint": "BIGINT",
+    "decimal": "DECIMAL",
+    "numeric": "DECIMAL",
+    "float": "FLOAT",
+    "double": "DOUBLE",
+    "char": "CHAR",
+    "varchar": "VARCHAR",
+    "tinytext": "STRING",
+    "text": "STRING",
+    "mediumtext": "STRING",
+    "longtext": "STRING",
+    "date": "DATE",
+    "datetime": "DATETIME",
+    "timestamp": "DATETIME",
+    "time": "TIME",
+    "year": "INT",
+    "json": "JSON",
+    "boolean": "BOOLEAN",
+    "bool": "BOOLEAN",
+    "bit": "STRING",
+    "enum": "VARCHAR",
+    "set": "VARCHAR",
+    "binary": "STRING",
+    "varbinary": "STRING",
+    "blob": "STRING",
+    "tinyblob": "STRING",
+    "mediumblob": "STRING",
+    "longblob": "STRING",
+}
+_INT_NUMERIC = {"tinyint", "smallint", "mediumint", "int", "integer", "bigint", "year"}
+_FLOAT_NUMERIC = {"decimal", "numeric", "float", "double"}
+_DATETIME_TYPES = {"date", "datetime", "timestamp", "time"}
+_STRING_TYPES = {"char", "varchar", "tinytext", "text", "mediumtext", "longtext", "enum", "set"}
+
+
+def infer_target_type(source_type: str, target_db_type: str) -> str:
+    """按源端类型推断目标端展示类型（目标表不存在或缺失列时兜底）。
+
+    仅用于展示与人工审批参考，不保证与目标端 DDL 完全一致。
+    """
+    st = str(source_type or "").strip().lower()
+    if not st:
+        return ""
+    tdb = str(target_db_type or "").lower()
+    if tdb == "mysql":
+        # MySQL -> MySQL 类型体系一致，直接透传（含 unsigned/长度参数）
+        return st
+    base = re.split(r"[( ]", st, maxsplit=1)[0]
+    if tdb == "starrocks":
+        mapped = _STARROCKS_TYPE_MAP.get(base)
+        if not mapped:
+            return ""
+        if base in ("char", "varchar", "decimal", "numeric"):
+            # 保留长度/精度参数：varchar(32) -> VARCHAR(32)
+            arg = re.search(r"\(([^)]+)\)", st)
+            return f"{mapped}({arg.group(1)})" if arg else mapped
+        return mapped
+    if tdb == "elasticsearch":
+        if base in _INT_NUMERIC:
+            return "long"
+        if base in _FLOAT_NUMERIC:
+            return "double"
+        if base in _DATETIME_TYPES:
+            return "date"
+        if base in ("boolean", "bool", "bit"):
+            return "boolean"
+        if base in _STRING_TYPES:
+            return "keyword"
+        return ""
+    return ""
 
 def _first(x) -> Any:
     """取列表/元组第一个元素，非容器原样返回。"""

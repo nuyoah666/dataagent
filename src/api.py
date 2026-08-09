@@ -573,7 +573,9 @@ def _enrich_mapping_with_schemas(view: dict, task: dict = None) -> dict:
     2. 目标端类型缺失时（MySQL/StarRocks writer），查目标表补全目标类型。
     """
     import logging
-    from src.tools.config_view import enrich_target_types, rebuild_mapping_with_schema
+    from src.tools.config_view import (
+        enrich_target_types, infer_target_type, rebuild_mapping_with_schema,
+    )
     from src.tools.db_tool import DatabaseConfig, get_table_schema
 
     if not view.get("available"):
@@ -630,9 +632,11 @@ def _enrich_mapping_with_schemas(view: dict, task: dict = None) -> dict:
             f"补全源表 schema 失败: {e}"
         )
 
-    # 2. 目标端类型缺失 -> 查目标表补类型
-    if any(not m.get("target_type") for m in (view.get("field_mapping") or [])):
-        target = view.get("target") or {}
+    # 2. 目标端类型缺失 -> 查目标表补类型；表不存在/缺列时按源端类型推断兜底
+    target = view.get("target") or {}
+    target_db_type = str(target.get("db_type", "")).lower()
+    missing = [m for m in (view.get("field_mapping") or []) if not m.get("target_type")]
+    if missing and target_db_type in ("mysql", "starrocks"):
         try:
             columns = _query_columns(target)
             if columns:
@@ -643,6 +647,18 @@ def _enrich_mapping_with_schemas(view: dict, task: dict = None) -> dict:
             logging.getLogger(__name__).warning(
                 f"补全目标表类型失败: {e}"
             )
+    # 仍缺失的列（目标表不存在/非 mysql 系引擎）-> 按源端类型推断，标注来源供前端展示
+    view["field_mapping"] = [
+        {
+            **m,
+            "target_type": m.get("target_type")
+            or infer_target_type(m.get("source_type", ""), target_db_type),
+            "target_type_source": "inferred"
+            if (not m.get("target_type") and m.get("source_type"))
+            else m.get("target_type_source", ""),
+        }
+        for m in (view.get("field_mapping") or [])
+    ]
     return view
 
 
