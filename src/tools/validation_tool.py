@@ -39,7 +39,8 @@ class ValidationTool:
         target_config: DatabaseConfig,
         source_table: str,
         target_table: str,
-        primary_key: str = None
+        primary_key: str = None,
+        allow_count_mismatch: bool = False,
     ) -> Dict[str, Any]:
         """
         校验数据质量。
@@ -84,8 +85,10 @@ class ValidationTool:
                 source_count, target_count, count_match, unique_check
             )
             
+            # 全量同步必须行数匹配；增量同步允许 0 条（无新数据合法，count_match 仍返回供展示）
+            success = count_match or allow_count_mismatch
             return {
-                "success": True,
+                "success": success,
                 "source_count": source_count,
                 "target_count": target_count,
                 "count_match": count_match,
@@ -302,10 +305,12 @@ def validate_data_quality(
     target_config: DatabaseConfig,
     source_table: str,
     target_table: str,
-    primary_key: str = None
+    primary_key: str = None,
+    allow_count_mismatch: bool = False,
 ) -> Dict[str, Any]:
     """校验数据质量的包装函数，供 Agent 工具使用。"""
     validation_tool = get_validation_tool()
     return validation_tool.validate_data_quality(
-        source_config, target_config, source_table, target_table, primary_key
+        source_config, target_config, source_table, target_table, primary_key,
+        allow_count_mismatch=allow_count_mismatch,
     )

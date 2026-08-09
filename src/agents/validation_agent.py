@@ -55,12 +55,15 @@ class ValidationAgent(BaseAgent):
                 primary_key = "id" if "id" in col_names else None
 
             # 执行校验
+            sync_type = str(intent.get("sync_type", "")).lower()
             result = validate_data_quality(
                 source_config=source_cfg,
                 target_config=target_cfg,
                 source_table=source_table,
                 target_table=target_table,
                 primary_key=primary_key,
+                # 增量任务无新数据（0 条）是合法结果，不因整表行数不匹配判失败
+                allow_count_mismatch=(sync_type == "incremental"),
             )
 
             logger.info(f"校验结果: success={result.get('success')}")
