@@ -382,7 +382,9 @@ class ConfigAgent(BaseAgent):
             return llm_json(
                 "你是 DataX 配置专家。根据提供的信息生成可直接执行的 DataX JSON。\n"
                 "要求：1) 包含 job.setting 和 job.content；"
-                "2) content 每项必须有 reader 和 writer；3) 仅返回 JSON。",
+                "2) content 每项必须有 reader 和 writer；3) 仅返回 JSON。\n"
+                "重要：不要生成 querySql 字段（增量过滤用 reader.parameter.where，"
+                "reader 用 connection.table 单表同步，禁止 table 与 querySql 共存）。",
                 f"源数据库：\n{intent_str}\n\n源表结构：\n{schema_str}\n\n"
                 f"DataX 文档：\n{rag_ctx}\n\n请生成配置：",
                 llm=self.llm, breaker=llm_circuit_breaker,

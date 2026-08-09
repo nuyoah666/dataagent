@@ -705,3 +705,109 @@ class TestOdsTargetNaming:
         assert out["sync_type"] == "incremental"
         # ODS 命名在源表解析为真实表名后由 config_agent 应用（apply_ods_target_naming 独立测试覆盖）
         assert out["target_table"] == ""
+
+
+class TestQuerySqlCleanup:
+    """LLM/模板残留 querySql 清理（本机 DataX 禁止 table 与 querySql 共存）。"""
+
+    def test_normalize_removes_query_sql_residual(self):
+        from src.tools.config_processor import normalize_datax_config
+
+        cfg = {
+            "job": {"content": [{
+                "reader": {"name": "mysqlreader", "parameter": {
+                    "column": ["id"],
+                    "connection": [{
+                        "jdbcUrl": ["jdbc:mysql://127.0.0.1:3306/db"],
+                        "table": ["t"],
+                        "querySql": ["SELECT id FROM t WHERE update_time >= '${lastDay}'"],
+                    }],
+                }},
+                "writer": {"name": "mysqlwriter", "parameter": {
+                    "column": ["id"],
+                    "connection": [{"jdbcUrl": ["jdbc:mysql://h/db"], "table": ["x"]}],
+                }},
+            }]},
+        }
+        out = normalize_datax_config(
+            cfg, {"source_db_type": "mysql", "target_db_type": "starrocks"},
+        )
+        conn = out["job"]["content"][0]["reader"]["parameter"]["connection"][0]
+        assert "querySql" not in conn
+        assert conn["table"] == ["t"]
+
+    def test_normalize_removes_parameter_query_sql(self):
+        from src.tools.config_processor import normalize_datax_config
+
+        cfg = {
+            "job": {"content": [{
+                "reader": {"name": "mysqlreader", "parameter": {
+                    "column": ["id"], "querySql": ["SELECT id FROM t"],
+                    "connection": [{"jdbcUrl": ["jdbc:mysql://h/db"], "table": ["t"]}],
+                }},
+                "writer": {"name": "mysqlwriter", "parameter": {
+                    "column": ["id"],
+                    "connection": [{"jdbcUrl": ["jdbc:mysql://h/db"], "table": ["x"]}],
+                }},
+            }]},
+        }
+        out = normalize_datax_config(
+            cfg, {"source_db_type": "mysql", "target_db_type": "starrocks"},
+        )
+        param = out["job"]["content"][0]["reader"]["parameter"]
+        assert "querySql" not in param
+
+
+class TestSpeedNormalize:
+    """LLM 生成的 speed.byte/record 限速参数清理（本机 DataX Framework-03 兼容）。"""
+
+    def test_byte_and_record_removed(self):
+        from src.tools.config_processor import normalize_datax_config
+
+        cfg = {
+            "job": {
+                "setting": {"speed": {"channel": 3, "byte": 1048576, "record": 1000}},
+                "content": [{
+                    "reader": {"name": "mysqlreader", "parameter": {
+                        "column": ["id"],
+                        "connection": [{"jdbcUrl": ["jdbc:mysql://h/db"], "table": ["t"]}],
+                    }},
+                    "writer": {"name": "mysqlwriter", "parameter": {
+                        "column": ["id"],
+                        "connection": [{"jdbcUrl": ["jdbc:mysql://h/db"], "table": ["x"]}],
+                    }},
+                }],
+            },
+        }
+        out = normalize_datax_config(
+            cfg, {"source_db_type": "mysql", "target_db_type": "starrocks"},
+        )
+        speed = out["job"]["setting"]["speed"]
+        assert "byte" not in speed
+        assert "record" not in speed
+        assert speed["channel"] == 3
+
+    def test_channel_fallback_when_missing(self):
+        from src.tools.config_processor import normalize_datax_config
+
+        cfg = {
+            "job": {
+                "setting": {"speed": {"byte": 1048576}},
+                "content": [{
+                    "reader": {"name": "mysqlreader", "parameter": {
+                        "column": ["id"],
+                        "connection": [{"jdbcUrl": ["jdbc:mysql://h/db"], "table": ["t"]}],
+                    }},
+                    "writer": {"name": "mysqlwriter", "parameter": {
+                        "column": ["id"],
+                        "connection": [{"jdbcUrl": ["jdbc:mysql://h/db"], "table": ["x"]}],
+                    }},
+                }],
+            },
+        }
+        out = normalize_datax_config(
+            cfg, {"source_db_type": "mysql", "target_db_type": "starrocks"},
+        )
+        speed = out["job"]["setting"]["speed"]
+        assert speed["channel"] == 3
+        assert "byte" not in speed

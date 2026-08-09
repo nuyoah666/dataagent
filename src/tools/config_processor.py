@@ -359,6 +359,15 @@ def normalize_datax_config(config: Dict[str, Any], intent: Dict[str, Any]) -> Di
     # 确保 setting
     if "setting" not in job:
         job["setting"] = {"speed": {"channel": 3}, "errorLimit": {"record": 0, "percentage": 0.02}}
+    else:
+        # LLM 可能生成 speed.byte/record 等总限速参数（本机 DataX 要求每 channel bps，
+        # 且与 channel 数计算不兼容导致 Framework-03），统一移除，只保留 channel
+        speed = job["setting"].get("speed")
+        if isinstance(speed, dict):
+            speed.pop("byte", None)
+            speed.pop("record", None)
+            if not speed.get("channel"):
+                speed["channel"] = 3
 
     # mongodb 源不支持分片，多通道会导致同一批数据被重复读取写入
     if intent.get("source_db_type") == "mongodb":
@@ -374,6 +383,17 @@ def normalize_datax_config(config: Dict[str, Any], intent: Dict[str, Any]) -> Di
         logger.warning("DataX 配置缺少 content，尝试从 intent 构建")
         content = _build_content_from_intent(intent)
         job["content"] = content
+
+    # 清理 LLM/模板残留的 querySql：本机 DataX 禁止 table 与 querySql 共存，
+    # 项目增量机制统一走 parameter.where（按天窗口），querySql 一律移除
+    for item in content:
+        for role in ("reader", "writer"):
+            param = (item.get(role) or {}).get("parameter") or {}
+            if param.pop("querySql", None):
+                logger.warning(f"已移除 {role}.parameter.querySql（本机 DataX 不支持与 table 共存）")
+            for c in param.get("connection") or []:
+                if isinstance(c, dict) and c.pop("querySql", None):
+                    logger.warning(f"已移除 {role}.connection.querySql（本机 DataX 不支持与 table 共存）")
 
     # 修正每个 content 项
     for item in content:

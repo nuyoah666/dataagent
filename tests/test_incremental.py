@@ -231,3 +231,43 @@ class TestDayWindowIncremental:
 
         where = build_incremental_where("id", "bigint", "100")
         assert where == "id > 100"
+
+
+def test_approval_path_persists_watermark(monkeypatch):
+    """审批执行成功的增量任务必须更新水位（原逻辑只在 run() 全流程，审批路径漏掉）。"""
+    from src.workflow import DataIntegrationWorkflow
+    from src.workflow.task_manager import get_task_manager, TaskStatus
+
+    _patch_agents(monkeypatch)
+    wf = DataIntegrationWorkflow(use_checkpointer=False)
+    tm = get_task_manager()
+
+    task_id = tm.create_task("增量同步 MySQL 的 src_user 表到 ES", task_type="data_integration")
+    intent = {
+        "source_db_type": "mysql", "source_host": "127.0.0.1", "source_port": 3306,
+        "source_database": "datax_test", "source_table": "src_user",
+        "target_db_type": "elasticsearch", "target_host": "localhost", "target_port": 9200,
+        "target_table": "es_user", "sync_type": "incremental", "update_cycle": "day",
+    }
+    cfg = {"job": {"content": [{
+        "reader": {"name": "mysqlreader", "parameter": {
+            "connection": [{"jdbcUrl": ["jdbc:mysql://127.0.0.1:3306/datax_test"], "table": ["src_user"]}],
+        }},
+    }]}}
+    tm.update_task(
+        task_id,
+        status=TaskStatus.PENDING_APPROVAL.value,
+        parsed_intent=intent,
+        source_schema={"success": True, "columns": [
+            {"name": "id", "type": "bigint"},
+            {"name": "update_time", "type": "datetime"},
+        ]},
+        datax_config=cfg,
+        incremental_field="update_time",
+    )
+    monkeypatch.setattr(wf, "_query_source_max", lambda state: "2026-08-02 10:00:00")
+
+    result = wf.approve_task(task_id, operator="tester")
+    assert (result.get("validation_result") or {}).get("success")
+    task = tm.get_task(task_id)
+    assert task["last_value"] == "2026-08-02"  # 按天窗口：水位存日期

@@ -414,16 +414,8 @@ class AgentWorkflow:
                 }
                 if any(v is not None for v in ops_fields.values()):
                     self.task_mgr.update_task(task_id, **ops_fields)
-            # 增量任务成功后更新水位
-            if (
-                (final.get("validation_result") or {}).get("success")
-                and final.get("incremental_field")
-            ):
-                new_last = self._query_source_max(final)
-                if new_last is not None:
-                    # 按天窗口增量：水位只存日期（YYYY-MM-DD），避免秒级精度遗漏同秒记录
-                    self.task_mgr.update_task(task_id, last_value=str(new_last)[:10])
-                    self.task_mgr.log(task_id, "INFO", f"增量水位更新: {new_last}")
+            # 增量任务成功后更新水位（按天窗口：存日期）
+            self._persist_incremental_watermark(final, task_id)
             logger.info(f"[task={task_id}] 完成: {final.get('current_step')}")
             return final
         except Exception as e:
@@ -471,7 +463,11 @@ class AgentWorkflow:
         state = self._run_execution(state)
         if state.get("error"):
             return state
-        return self._run_validation(state)
+        final = self._run_validation(state)
+        if (final.get("validation_result") or {}).get("success"):
+            # 审批执行成功的增量任务同样更新水位（原逻辑只在 run() 全流程里，审批路径漏掉）
+            self._persist_incremental_watermark(final, task_id)
+        return final
 
     @staticmethod
     def _config_digest(task: dict) -> str:
@@ -645,6 +641,17 @@ class AgentWorkflow:
             "failed_tables": failed_tables,
             "tasks": results,
         }
+
+    def _persist_incremental_watermark(self, state: dict, task_id: str) -> None:
+        """增量任务成功后更新水位（按天窗口：只存日期 YYYY-MM-DD）。"""
+        if not ((state.get("validation_result") or {}).get("success")):
+            return
+        if not state.get("incremental_field"):
+            return
+        new_last = self._query_source_max(state)
+        if new_last is not None:
+            self.task_mgr.update_task(task_id, last_value=str(new_last)[:10])
+            self.task_mgr.log(task_id, "INFO", f"增量水位更新: {new_last}")
 
     def _query_source_max(self, state: DataIntegrationState) -> Optional[str]:
         """查询源表增量字段最大值，作为新水位（仅 MySQL 源支持）。"""
