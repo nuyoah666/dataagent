@@ -562,3 +562,154 @@ def test_enrich_keeps_schema_target_type(monkeypatch):
     out = api_mod._enrich_mapping_with_schemas(view, task)
     assert out["field_mapping"][0]["target_type"] == "BIGINT"
     assert out["field_mapping"][0]["target_type_source"] == ""
+
+
+class TestBuildTargetDdl:
+    """数据集成一键建表 DDL 生成。"""
+
+    def test_starrocks_ddl(self):
+        from src.tools.config_view import build_target_table_ddl
+
+        mapping = [
+            {"source": "id", "source_type": "bigint unsigned", "target": "id", "target_type": "BIGINT"},
+            {"source": "event_type", "source_type": "varchar(32)", "target": "event_type", "target_type": "VARCHAR(32)"},
+        ]
+        ddl = build_target_table_ddl("user_action_log", mapping, "starrocks")
+        assert ddl.startswith("CREATE TABLE IF NOT EXISTS user_action_log")
+        assert "DUPLICATE KEY(`id`)" in ddl
+        assert "DISTRIBUTED BY HASH" in ddl
+        assert "`event_type` VARCHAR(32)" in ddl
+
+    def test_mysql_ddl(self):
+        from src.tools.config_view import build_target_table_ddl
+
+        mapping = [
+            {"source": "id", "source_type": "bigint unsigned", "target": "id", "target_type": "BIGINT"},
+            {"source": "name", "source_type": "varchar(50)", "target": "name", "target_type": "VARCHAR(50)"},
+        ]
+        ddl = build_target_table_ddl("t_user", mapping, "mysql")
+        assert ddl.startswith("CREATE TABLE IF NOT EXISTS `t_user`")
+        assert "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4" in ddl
+        assert "`name` VARCHAR(50)" in ddl
+
+    def test_unsupported_engine_or_empty(self):
+        from src.tools.config_view import build_target_table_ddl
+
+        assert build_target_table_ddl("t", [{"target": "id", "target_type": "long"}], "elasticsearch") == ""
+        assert build_target_table_ddl("t", [], "mysql") == ""
+
+    def test_starrocks_infers_when_type_missing(self):
+        from src.tools.config_view import build_target_table_ddl
+
+        mapping = [{"source": "dt", "source_type": "datetime", "target": "dt", "target_type": ""}]
+        ddl = build_target_table_ddl("t_dt", mapping, "starrocks")
+        assert "`dt` DATETIME" in ddl
+
+
+class TestCreateTargetTableApi:
+    def _create_pending_task(self, tm):
+        task_id = tm.create_task("把 a 表同步到 starrocks", task_type="data_integration")
+        cfg = {
+            "job": {
+                "setting": {},
+                "content": [{
+                    "reader": {"name": "mysqlreader", "parameter": {
+                        "column": ["id"],
+                        "connection": [{"jdbcUrl": ["jdbc:mysql://127.0.0.1:3306/datax_test"], "table": ["src"]}],
+                    }},
+                    "writer": {"name": "mysqlwriter", "parameter": {
+                        "database": "datax_test", "table": "t_new", "column": ["id"],
+                        "connection": [{"jdbcUrl": ["jdbc:mysql://127.0.0.1:9030/datax_test"]}],
+                    }},
+                }],
+            },
+        }
+        tm.update_task(
+            task_id,
+            status=TaskStatus.PENDING_APPROVAL.value,
+            datax_config=cfg,
+            parsed_intent={"source_db_type": "mysql", "target_db_type": "starrocks"},
+        )
+        return task_id
+
+    def test_create_target_table_success_starrocks(self, monkeypatch):
+        from src import api as api_mod
+        from src.agents import etl_agent
+
+        tm = get_task_manager()
+        task_id = self._create_pending_task(tm)
+        executed = {}
+
+        class FakeCtx:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def cursor(self):
+                return self
+
+            def execute(self, sql):
+                executed["sql"] = sql
+
+            def commit(self):
+                executed["committed"] = True
+
+        monkeypatch.setattr(etl_agent, "_admin_conn", lambda db: FakeCtx())
+        monkeypatch.setattr(
+            "src.tools.db_tool.get_table_schema",
+            lambda cfg, table: {"success": False, "error": "Unknown table"},
+        )
+        with TestClient(api_mod.app) as client:
+            r = client.post(
+                f"/tasks/{task_id}/target-table/create",
+                headers={"X-Operator": "tester"},
+            )
+            assert r.status_code == 200, r.text
+            body = r.json()
+            assert body["created"] is True
+            assert body["target_table"] == "t_new"
+        assert executed.get("committed") is True
+        assert "CREATE TABLE IF NOT EXISTS" in executed["sql"]
+        logs = tm.get_audit_logs(task_id)
+        assert any(l["action"] == "target_table_create" and l["operator"] == "tester" for l in logs)
+
+    def test_create_target_table_already_exists(self, monkeypatch):
+        from src import api as api_mod
+
+        tm = get_task_manager()
+        task_id = self._create_pending_task(tm)
+        monkeypatch.setattr(
+            "src.tools.db_tool.get_table_schema",
+            lambda cfg, table: {"success": True, "columns": [{"name": "id", "type": "bigint"}]},
+        )
+        with TestClient(api_mod.app) as client:
+            r = client.post(f"/tasks/{task_id}/target-table/create")
+            assert r.status_code == 409
+
+    def test_create_target_table_rejected_when_running(self):
+        from src import api as api_mod
+
+        tm = get_task_manager()
+        task_id = self._create_pending_task(tm)
+        tm.update_task(task_id, status=TaskStatus.EXECUTING.value)
+        with TestClient(api_mod.app) as client:
+            r = client.post(f"/tasks/{task_id}/target-table/create")
+            assert r.status_code == 409
+
+    def test_create_target_table_no_admin(self, monkeypatch):
+        from src import api as api_mod
+        from src.agents import etl_agent
+
+        tm = get_task_manager()
+        task_id = self._create_pending_task(tm)
+        monkeypatch.setattr(etl_agent, "_admin_conn", lambda db: None)
+        monkeypatch.setattr(
+            "src.tools.db_tool.get_table_schema",
+            lambda cfg, table: {"success": False, "error": "Unknown table"},
+        )
+        with TestClient(api_mod.app) as client:
+            r = client.post(f"/tasks/{task_id}/target-table/create")
+            assert r.status_code == 409
+            assert "DDL" in r.json()["detail"]

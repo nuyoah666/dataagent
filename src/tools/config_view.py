@@ -180,6 +180,52 @@ def extract_side(cfg: Dict[str, Any], role: str) -> Dict[str, Any]:
     }
 
 
+def build_target_table_ddl(
+    table: str,
+    mapping: List[Dict[str, str]],
+    target_db_type: str,
+) -> str:
+    """为数据集成目标端生成建表 DDL（一键建表预览/执行）。
+
+    - starrocks：DUPLICATE KEY 模型（复用 ETL 建表规则：key 取第一个非文本列，
+      分桶列优先数字列），IF NOT EXISTS 幂等
+    - mysql：InnoDB + utf8mb4，贴源层不强制主键
+    目标库由目标端连接指定（与 schema 探测一致）。不支持的类型返回空串。
+    """
+    tdb = str(target_db_type or "").lower()
+    if tdb not in ("mysql", "starrocks"):
+        return ""
+    cols = [
+        {
+            "name": str(m.get("target", "")).strip(),
+            "type": str(m.get("target_type", "") or "").strip()
+            or infer_target_type(str(m.get("source_type", "") or ""), tdb),
+        }
+        for m in (mapping or [])
+        if str(m.get("target", "")).strip()
+    ]
+    if not cols:
+        return ""
+
+    if tdb == "starrocks":
+        from .etl_builder import build_create_table_sql
+
+        return build_create_table_sql(table, cols, if_not_exists=True)
+
+    defs = []
+    for c in cols:
+        t = str(c["type"]).upper().strip()
+        if not t:
+            continue
+        defs.append(f"  `{c['name']}` {t}")
+    if not defs:
+        return ""
+    return (
+        f"CREATE TABLE IF NOT EXISTS `{table}` (\n"
+        + ",\n".join(defs)
+        + "\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='数据集成自动建表'"
+    )
+
 def extract_field_mapping(cfg: Dict[str, Any]) -> Dict[str, Any]:
     """源/目标字段映射（按位置对齐）。
 

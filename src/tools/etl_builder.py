@@ -208,6 +208,7 @@ def build_create_table_sql(
     partition_date: Optional[str] = None,
     partition_column: str = PARTITION_COLUMN,
     buckets: int = 10,
+    if_not_exists: bool = False,
 ) -> str:
     """生成 StarRocks 建表 DDL（DUPLICATE KEY 模型）。
 
@@ -257,7 +258,7 @@ def build_create_table_sql(
         )
 
     ddl = (
-        f"CREATE TABLE {table} (\n"
+        f"CREATE TABLE {'IF NOT EXISTS ' if if_not_exists else ''}{table} (\n"
         + ",\n".join(f"  {d}" for d in col_defs)
         + f"\n) DUPLICATE KEY({key_def})\n"
         + partition_ddl

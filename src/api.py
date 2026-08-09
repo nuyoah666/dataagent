@@ -574,7 +574,8 @@ def _enrich_mapping_with_schemas(view: dict, task: dict = None) -> dict:
     """
     import logging
     from src.tools.config_view import (
-        enrich_target_types, infer_target_type, rebuild_mapping_with_schema,
+        build_target_table_ddl, enrich_target_types, infer_target_type,
+        rebuild_mapping_with_schema,
     )
     from src.tools.db_tool import DatabaseConfig, get_table_schema
 
@@ -607,6 +608,32 @@ def _enrich_mapping_with_schemas(view: dict, task: dict = None) -> dict:
         schema = get_table_schema(cfg, side["table"])
         return schema.get("columns") or []
 
+    def _query_target(side: dict) -> dict:
+        """检测目标表是否存在并返回其 schema。exists=None 表示检测失败。"""
+        db_type = str(side.get("db_type", "")).lower()
+        if db_type not in ("mysql", "starrocks"):
+            return {"exists": None, "columns": []}
+        if not side.get("table") or not side.get("database"):
+            return {"exists": None, "columns": []}
+        defaults = config.MYSQL_CONFIG if db_type == "mysql" else config.STARROCKS_CONFIG
+        cfg = DatabaseConfig(
+            db_type=db_type,
+            host=side.get("host") or None,
+            port=int(side.get("port") or 0) or None,
+            username=defaults["username"],
+            password=defaults["password"],
+            database=side.get("database"),
+        )
+        try:
+            schema = get_table_schema(cfg, side["table"])
+        except Exception as e:
+            logging.getLogger(__name__).warning(f"检测目标表失败: {e}")
+            return {"exists": None, "columns": []}
+        if not schema.get("success"):
+            return {"exists": False, "columns": []}
+        cols = schema.get("columns") or []
+        return {"exists": bool(cols), "columns": cols}
+
     # 1. 源端可查则补 schema：通配时展开真实列名，非通配时补源类型与下拉选项
     source = view.get("source") or {}
     try:
@@ -632,21 +659,19 @@ def _enrich_mapping_with_schemas(view: dict, task: dict = None) -> dict:
             f"补全源表 schema 失败: {e}"
         )
 
-    # 2. 目标端类型缺失 -> 查目标表补类型；表不存在/缺列时按源端类型推断兜底
+    # 2. 目标端检测：表是否存在（一键建表入口）+ 类型补全
     target = view.get("target") or {}
     target_db_type = str(target.get("db_type", "")).lower()
-    missing = [m for m in (view.get("field_mapping") or []) if not m.get("target_type")]
-    if missing and target_db_type in ("mysql", "starrocks"):
-        try:
-            columns = _query_columns(target)
-            if columns:
-                view["field_mapping"] = enrich_target_types(
-                    view["field_mapping"], columns
-                )
-        except Exception as e:
-            logging.getLogger(__name__).warning(
-                f"补全目标表类型失败: {e}"
+    target_exists = None
+    if target_db_type in ("mysql", "starrocks") and target.get("table") and target.get("database"):
+        tinfo = _query_target(target)
+        target_exists = tinfo.get("exists")
+        if tinfo.get("columns"):
+            view["field_mapping"] = enrich_target_types(
+                view["field_mapping"], tinfo["columns"]
             )
+    view["target_table_exists"] = target_exists
+
     # 仍缺失的列（目标表不存在/非 mysql 系引擎）-> 按源端类型推断，标注来源供前端展示
     view["field_mapping"] = [
         {
@@ -659,8 +684,101 @@ def _enrich_mapping_with_schemas(view: dict, task: dict = None) -> dict:
         }
         for m in (view.get("field_mapping") or [])
     ]
+
+    # 目标表不存在 -> 生成一键建表 DDL 预览（审批人可见、可执行）
+    view["target_ddl"] = ""
+    if target_exists is False and target.get("table"):
+        try:
+            view["target_ddl"] = build_target_table_ddl(
+                str(target.get("table")),
+                view["field_mapping"],
+                target_db_type,
+            )
+        except Exception as e:
+            logging.getLogger(__name__).warning(f"生成目标建表 DDL 失败: {e}")
     return view
 
+
+@app.post("/tasks/{task_id}/target-table/create")
+async def create_target_table(task_id: str, request: Request):
+    """目标表不存在时一键建表（仅待审批/配置完成阶段，写操作记录审计）。
+
+    支持 mysql/starrocks 目标端；StarRocks 使用管理账号执行，
+    未配置管理账号时返回 DDL 供手动执行。
+    """
+    import logging
+    from src.tools.config_view import build_config_view, build_target_table_ddl
+
+    tm = get_task_manager()
+    task = tm.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if task.get("status") not in (
+        TaskStatus.PENDING_APPROVAL.value,
+        TaskStatus.CONFIG_DONE.value,
+    ):
+        raise HTTPException(status_code=409, detail="仅待审批/配置完成阶段可一键建表")
+
+    view = build_config_view(task.get("datax_config"))
+    view = _enrich_mapping_with_schemas(view, task)
+    target = view.get("target") or {}
+    target_db_type = str(target.get("db_type", "")).lower()
+    table = str(target.get("table", "") or "").strip()
+    database = str(target.get("database", "") or "").strip()
+    if target_db_type not in ("mysql", "starrocks") or not table:
+        raise HTTPException(
+            status_code=422,
+            detail=f"暂不支持 {target_db_type or '未知'} 目标端自动建表",
+        )
+    if view.get("target_table_exists") is True:
+        raise HTTPException(status_code=409, detail="目标表已存在，无需建表")
+    ddl = build_target_table_ddl(table, view.get("field_mapping") or [], target_db_type)
+    if not ddl:
+        raise HTTPException(status_code=422, detail="字段映射无有效列，无法生成建表 DDL")
+
+    operator = request.headers.get("X-Operator", "system")[:50]
+    try:
+        if target_db_type == "starrocks":
+            from src.agents.etl_agent import _admin_conn
+
+            ctx = _admin_conn(database)
+            if ctx is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="未配置 StarRocks 管理账号（STARROCKS_ADMIN_USERNAME），"
+                    "请手动执行以下 DDL：\n" + ddl,
+                )
+            with ctx as conn:
+                with conn.cursor() as cur:
+                    cur.execute(ddl)
+                conn.commit()
+        else:  # mysql
+            from src.tools.db import mysql_conn
+
+            with mysql_conn(
+                "mysql",
+                host=target.get("host") or None,
+                port=int(target.get("port") or 0) or None,
+                database=database,
+            ) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(ddl)
+                conn.commit()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.getLogger(__name__).exception("一键建表失败")
+        raise HTTPException(status_code=500, detail=f"建表失败: {e}")
+
+    tm.audit(task_id, "target_table_create", operator, detail=ddl)
+    tm.log(task_id, "INFO", f"一键建表成功: {database}.{table}（{target_db_type}）")
+    return {
+        "task_id": task_id,
+        "created": True,
+        "target_table": table,
+        "database": database,
+        "ddl": ddl,
+    }
 
 @app.put("/tasks/{task_id}/config")
 async def update_task_config(task_id: str, req: ConfigUpdateRequest, request: Request):

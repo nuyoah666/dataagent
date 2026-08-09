@@ -857,7 +857,16 @@ function renderConfigSection(cfg) {
         : `<pre class="audit-detail" style="white-space:pre-wrap">${escapeHtml(cfg.etl_sql || '')}</pre>`}
     </div>`);
   }
+  const targetCheck = view.target_table_exists === false ? `
+    <div class="section-title">目标端检测</div>
+    <div class="muted-flag" style="margin-bottom:6px">⚠ 目标表 <b>${escapeHtml((view.target || {}).table || '')}</b> 不存在（${escapeHtml((view.target || {}).db_type || '')}），执行前需先建表，DDL 预览：</div>
+    <pre class="audit-detail" style="white-space:pre-wrap">${escapeHtml(view.target_ddl || '（无法生成 DDL，请检查字段映射）')}</pre>
+    ${view.target_ddl && cfg.editable ? `<div class="cfg-actions"><button class="btn btn-action" onclick="doCreateTargetTable('${_detailTaskId}')">一键建表</button></div>` : ''}`
+    : view.target_table_exists === true ? `
+    <div class="section-title">目标端检测</div>
+    <div class="muted-flag" style="margin-bottom:6px">✅ 目标表已存在</div>` : '';
   return `
+    ${targetCheck}
     <div class="section-title">同步配置${cfg.editable ? ' <span class="tag" style="background:rgba(234,179,8,.15);color:var(--warn)">可编辑</span>' : ''}</div>
     <div class="cfg-tabs">${tabBtns}</div>
     ${panes.join('')}`;
