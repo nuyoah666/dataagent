@@ -178,7 +178,8 @@ async function openHistory(taskId) {
       <div class="meta">任务 ${t.task_id} · 识别为 <b>${escapeHtml(t.task_type || '—')}</b></div>
       <div class="history-q" style="margin-bottom:8px;color:var(--text)">${escapeHtml(t.user_query || '')}</div>
       <div id="card-${t.task_id}">${renderTask(t, logs.logs || [])}</div>`, 'assistant');
-    if (!TERMINAL.includes(t.status) && t.status !== 'pending_approval') {
+    // 非终态都启动轮询（含待审批）：外部页面审批/拒绝后卡片自动更新
+    if (!TERMINAL.includes(t.status)) {
       pollTask(t.task_id, card);
     }
   } catch (e) { addMsg('❌ ' + escapeHtml(e.message), 'assistant'); }
@@ -221,7 +222,9 @@ async function pollTask(taskId, card) {
         api('/tasks/' + taskId + '/logs'),
       ]);
       box().innerHTML = renderTask(t, logs.logs || []);
-      if (TERMINAL.includes(t.status) || t.status === 'pending_approval') return;
+      // 仅终态停止轮询；待审批/执行中继续轮询，
+      // 这样即使在别的页面（全链路监控）审批，chat 卡片也会自动更新到最新状态
+      if (TERMINAL.includes(t.status)) return;
     } catch (e) { /* 轮询失败继续 */ }
     await sleep(2000);
   }
@@ -308,6 +311,7 @@ $('apiToken').onchange = e => localStorage.setItem(TOKEN_KEY, e.target.value);
 initTheme();
 $('chips').innerHTML = EXAMPLES.map(e => `<span class="chip" onclick="$('query').value='${escapeHtml(e)}';$('query').focus()">${escapeHtml(e)}</span>`).join('');
 loadHistory();
+setInterval(loadHistory, 10000);
 addMsg('👋 你好！输入自然语言指令即可驱动数仓 Agent 协作：<b>数据集成</b>（同步/增量）、<b>ETL 开发</b>（加工）、<b>运维</b>（诊断/重试）。也可以点下面的示例。', 'assistant');
 </script>
 </body>
