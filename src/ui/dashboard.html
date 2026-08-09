@@ -973,6 +973,15 @@ async function showDetail(taskId) {
 }
 function closeModal() { $('modal').style.display = 'none'; }
 
+async function doCreateTargetTable(id) {
+  if (!confirm('确认在目标端创建缺失的表？DDL 为幂等创建，可重复点击。')) return;
+  try {
+    const r = await api('/tasks/' + id + '/target-table/create', {method:'POST'});
+    alert('建表成功：' + (r.target_table || '') + '\n' + (r.ddl || ''));
+    showDetail(id);
+  } catch(e) { alert(e.message); }
+  loadAll();
+}
 async function doApprove(id) { if (!confirm('确认执行该任务？')) return;
   try { const r = await api('/tasks/' + id + '/approve', {method:'POST'}); alert('已通过并执行: ' + (r.status || '')); } catch(e) { alert(e.message); } loadAll(); }
 async function doReject(id) { if (!confirm('确认拒绝执行该任务？')) return;

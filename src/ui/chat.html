@@ -22,6 +22,22 @@
   header .token-box { display:flex; gap:6px; align-items:center; font-size:12px; color:var(--muted); }
   header input { background:var(--card); border:1px solid var(--border); color:var(--text);
                  border-radius:6px; padding:4px 8px; width:160px; }
+  .layout { flex:1; display:flex; min-height:0; }
+  .history { width:250px; flex-shrink:0; background:var(--card); border-right:1px solid var(--border);
+             display:flex; flex-direction:column; min-height:0; }
+  .history-head { padding:12px 14px; font-size:13px; font-weight:600; border-bottom:1px solid var(--border);
+                  display:flex; align-items:center; justify-content:space-between; }
+  .history-refresh { background:none; border:none; color:var(--muted); cursor:pointer; font-size:12px; }
+  .history-refresh:hover { color:var(--accent); }
+  .history-list { flex:1; overflow-y:auto; padding:8px; }
+  .history-item { padding:8px 10px; border-radius:8px; cursor:pointer; font-size:12.5px;
+                  border:1px solid var(--border); margin-bottom:6px; background:rgba(148,163,184,.05); }
+  .history-item:hover { border-color:var(--accent); }
+  .history-item .q { color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .history-item .meta { font-size:11px; color:var(--muted); margin-top:4px; display:flex; gap:6px; align-items:center; }
+  .history-item .meta .id { overflow:hidden; text-overflow:ellipsis; }
+  .history-empty { padding:14px; font-size:12px; color:var(--muted); }
+  .main { flex:1; display:flex; flex-direction:column; min-width:0; }
   #conv { flex:1; overflow-y:auto; padding:20px 22px; display:flex; flex-direction:column; gap:14px; }
   .msg { max-width:760px; width:fit-content; border-radius:12px; padding:10px 14px; font-size:13.5px; line-height:1.6; }
   .msg.user { align-self:flex-end; background:rgba(56,189,248,.15); border:1px solid rgba(56,189,248,.3); }
@@ -72,16 +88,25 @@
     </span>
   </header>
 
-  <div id="conv"></div>
-
-  <footer>
+  <div class="layout">
+    <aside class="history">
+      <div class="history-head">历史任务
+        <button class="history-refresh" onclick="loadHistory()">⟳</button>
+      </div>
+      <div class="history-list" id="historyList"></div>
+    </aside>
+    <main class="main">
+      <div id="conv"></div>
+      <footer>
     <div class="chips" id="chips"></div>
     <div class="input-row">
       <input id="query" placeholder="输入自然语言指令，例如：把 MySQL 的 src_user 表同步到 ES 的 src_user_index"
              autocomplete="off" onkeydown="if(event.key==='Enter') send()">
       <button id="sendBtn" onclick="send()">发送</button>
-    </div>
-  </footer>
+        </div>
+      </footer>
+    </main>
+  </div>
 
 <script>
 const $ = id => document.getElementById(id);
@@ -131,6 +156,34 @@ const STAGE_LABEL = {
   approved:'审批通过', config:'配置生成', done:'完成',
 };
 
+async function loadHistory() {
+  try {
+    const data = await api('/tasks?limit=30');
+    const tasks = data.tasks || [];
+    $('historyList').innerHTML = tasks.map(t => `
+      <div class="history-item" onclick="openHistory('${t.task_id}')">
+        <div class="q">${escapeHtml(t.user_query || '（无查询）')}</div>
+        <div class="meta"><span class="tag ${t.status}">${STAGE_LABEL[t.status] || t.status}</span><span class="id">${escapeHtml(t.task_id)}</span></div>
+      </div>`).join('') || '<div class="history-empty">暂无历史任务</div>';
+  } catch (e) { $('historyList').innerHTML = '<div class="history-empty">加载失败</div>'; }
+}
+
+async function openHistory(taskId) {
+  $('conv').innerHTML = '';
+  try {
+    const [t, logs] = await Promise.all([
+      api('/tasks/' + taskId), api('/tasks/' + taskId + '/logs'),
+    ]);
+    const card = addMsg(`
+      <div class="meta">任务 ${t.task_id} · 识别为 <b>${escapeHtml(t.task_type || '—')}</b></div>
+      <div class="history-q" style="margin-bottom:8px;color:var(--text)">${escapeHtml(t.user_query || '')}</div>
+      <div id="card-${t.task_id}">${renderTask(t, logs.logs || [])}</div>`, 'assistant');
+    if (!TERMINAL.includes(t.status) && t.status !== 'pending_approval') {
+      pollTask(t.task_id, card);
+    }
+  } catch (e) { addMsg('❌ ' + escapeHtml(e.message), 'assistant'); }
+}
+
 function addMsg(html, cls) {
   const div = document.createElement('div');
   div.className = 'msg ' + cls;
@@ -152,6 +205,7 @@ async function send() {
       <div class="meta">任务 ${r.task_id} · 识别为 <b>${escapeHtml(r.task_type)}</b></div>
       <div id="card-${r.task_id}"><span class="spinner"></span> 处理中…</div>`, 'assistant');
     pollTask(r.task_id, card);
+    loadHistory();
   } catch (e) {
     addMsg('❌ ' + escapeHtml(e.message), 'assistant');
   }
@@ -253,6 +307,7 @@ $('apiToken').value = localStorage.getItem(TOKEN_KEY) || '';
 $('apiToken').onchange = e => localStorage.setItem(TOKEN_KEY, e.target.value);
 initTheme();
 $('chips').innerHTML = EXAMPLES.map(e => `<span class="chip" onclick="$('query').value='${escapeHtml(e)}';$('query').focus()">${escapeHtml(e)}</span>`).join('');
+loadHistory();
 addMsg('👋 你好！输入自然语言指令即可驱动数仓 Agent 协作：<b>数据集成</b>（同步/增量）、<b>ETL 开发</b>（加工）、<b>运维</b>（诊断/重试）。也可以点下面的示例。', 'assistant');
 </script>
 </body>
