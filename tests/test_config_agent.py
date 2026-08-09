@@ -3,6 +3,25 @@ from src.agents.config_agent import ConfigAgent
 from src.config import config
 
 
+def test_fallback_target_parsing():
+    """LLM 不可用时的 fallback 必须跟随用户指定的目标端（曾硬编码 ES）。"""
+    agent = ConfigAgent()
+    cases = [
+        ("把 用户行为日志表 同步到 starrocks 中", "starrocks", ""),
+        ("把 a 表同步到 es 的 idx_x", "elasticsearch", "idx_x"),
+        ("同步 b 到 mongodb", "mongodb", ""),
+        ("同步 c 到 mysql 的 dwd 库", "mysql", "dwd"),
+    ]
+    for query, db_type, table in cases:
+        intent = agent._fallback_intent(query)
+        assert intent["target_db_type"] == db_type, (
+            f"{query} -> {intent['target_db_type']}"
+        )
+        assert intent["target_table"] == table, (
+            f"{query} -> {intent['target_table']!r}"
+        )
+
+
 def _intent(**overrides):
     base = {
         "source_db_type": "mysql",

@@ -198,6 +198,41 @@ class ConfigAgent(BaseAgent):
             intent["source_host"] = config.MONGODB_CONFIG["host"]
             intent["source_port"] = config.MONGODB_CONFIG["port"]
             intent["source_database"] = config.MONGODB_CONFIG["database"]
+
+        # 目标端解析：fallback 不能只认源端——用户明确说 starrocks/es/mongo/mysql 时必须跟随
+        # （曾出现：用户说"同步到 starrocks"，LLM 配额用尽走 fallback，目标被硬编码为 ES）
+        low = clean.lower()
+        for keywords, db_type, cfg in [
+            (("starrocks", "sr"), "starrocks", config.STARROCKS_CONFIG),
+            (("elasticsearch", "es"), "elasticsearch", config.ES_CONFIG),
+            (("mongodb", "mongo"), "mongodb", config.MONGODB_CONFIG),
+            (("mysql",), "mysql", config.MYSQL_CONFIG),
+        ]:
+            hit = any(
+                re.search(rf"(?:到|同步到|写入|导入|进|至)\s*{kw}\b|\b{kw}(?:库|中|里|索引)", low)
+                for kw in keywords
+            )
+            if hit:
+                intent["target_db_type"] = db_type
+                intent["target_host"] = cfg["host"]
+                intent["target_port"] = cfg["port"]
+                intent["target_database"] = cfg.get("database", "")
+                break
+        # 目标表：分层匹配，避免把目标类型词/连接词当表名
+        _stop = ("中", "里", "的", "库", "索引", "表", "后")
+        _types = r"starrocks|elasticsearch|es|mongodb|mongo|mysql|sr"
+        m2 = re.search(
+            rf"到\s*(?:{_types})\b\s*(?:的|中|里)?\s*([\w.]+)", low
+        )
+        if m2 and m2.group(1) not in _stop:
+            intent["target_table"] = m2.group(1)
+        else:
+            m2 = re.search(rf"到\s*([\w.]+)", low)
+            if m2 and m2.group(1).lower() not in _stop and not re.fullmatch(
+                rf"(?:{_types})", m2.group(1).lower()
+            ):
+                intent["target_table"] = m2.group(1)
+
         m = re.search(r"数据源[：:\s]*([\w\u4e00-\u9fa5-]+)", text or "")
         if m:
             intent["source_name"] = m.group(1)
