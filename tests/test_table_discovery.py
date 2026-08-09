@@ -283,3 +283,24 @@ class TestOdsNamingCycle:
         assert "ods_user_log_hour_inc" in names
         assert "ods_user_log_hour_snapshot" in names
         assert "ods_user_log" in names
+
+
+class TestLayerWordResolveTarget:
+    """resolve_target_table 对层级指示词 hint 的防御（LLM 也可能把 dwd 当表名）。"""
+
+    def test_layer_hint_ignored(self):
+        from src.tools.ods_naming import resolve_target_table
+
+        class _FakeConn:
+            def cursor(self):
+                class _C:
+                    def __enter__(self): return self
+                    def __exit__(self, *a): return False
+                    def execute(self, sql, params=None): pass
+                    def fetchall(self): return []
+                return _C()
+
+        conn = _FakeConn()
+        r = resolve_target_table(conn, "datax_test", "ods_user_action_log_day_inc", "inc", "dwd")
+        assert r["table"] == "dwd_user_action_log_day_inc"
+        assert r["kind"] == "inc"

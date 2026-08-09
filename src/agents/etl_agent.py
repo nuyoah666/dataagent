@@ -92,6 +92,10 @@ def _rule_intent(text: str) -> dict:
             if m3:
                 intent["source_table"] = m3.group(1)
 
+    # "加工到 dwd 层" 的层级指示词（dwd/ods/dws）不是目标表名，置空走同形态默认
+    if intent["target_table"].lower() in ("dwd", "ods", "dws"):
+        intent["target_table"] = ""
+
     for kind, pattern in _KIND_RE.items():
         if pattern.search(text or ""):
             intent["source_kind"] = kind

@@ -195,6 +195,14 @@ def resolve_target_table(
       2. 缺省 -> 与源表同形态的 DWD 表（ods_x_day_inc -> dwd_x_day_inc）
     """
     base = strip_prefixes(source_table)
+    # 层级指示词（"加工到 dwd 层"的 dwd/ods/dws 等）不是目标表名，忽略走默认生成
+    _LAYER_WORDS = {
+        "dwd", "ods", "dws", "数仓", "仓库", "明细层", "贴源层", "汇总层",
+        "dwd层", "ods层", "dws层", "dwd表", "ods表", "dws表",
+    }
+    hint = str(target_hint or "").strip().lower()
+    if hint in _LAYER_WORDS:
+        target_hint = ""
     if target_hint:
         t = validate_table_name(target_hint)
         if not t.startswith(DWD_PREFIX):

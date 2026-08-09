@@ -283,3 +283,20 @@ class TestETLValidationAgent:
         }
         result = ETLValidationAgent().run(state)
         assert result["validation_result"]["success"] is False
+
+
+class TestLayerWordTarget:
+    """"加工到 dwd 层" 的层级指示词不能被当成目标表名。"""
+
+    def test_rule_intent_layer_word_cleared(self):
+        from src.agents.etl_agent import _rule_intent
+
+        intent = _rule_intent("把 ods_user_action_log_day_inc 加工到 dwd 层")
+        assert intent["source_table"] == "ods_user_action_log_day_inc"
+        assert intent["target_table"] == ""  # "dwd" 是层指示，不是表名
+
+    def test_rule_intent_real_table_kept(self):
+        from src.agents.etl_agent import _rule_intent
+
+        intent = _rule_intent("把 ods_user 加工到 dwd_user")
+        assert intent["target_table"] == "dwd_user"
