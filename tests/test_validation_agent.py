@@ -113,3 +113,26 @@ def test_incremental_zero_new_rows_allowed(monkeypatch):
     )
     assert r["success"] is True
     assert r["count_match"] is False  # 仍如实返回供 UI 展示
+
+
+def test_incremental_unique_failure_fails(monkeypatch):
+    """增量同步发现重复数据必须失败（不能因 allow_count_mismatch 掩盖）。"""
+    from src.tools.db_tool import DatabaseConfig
+    from src.tools.validation_tool import ValidationTool
+
+    tool = ValidationTool()
+    monkeypatch.setattr(
+        tool, "_get_record_count",
+        lambda cfg, t: 102 if "src" in t else 204,
+    )
+    monkeypatch.setattr(tool, "_check_uniqueness", lambda cfg, t, k: {
+        "supported": True, "is_unique": False,
+        "total_records": 204, "unique_records": 102, "duplicate_count": 102,
+    })
+    cfg = DatabaseConfig(db_type="mysql", host="127.0.0.1", port=3306,
+                         username="root", password="", database="db")
+    r = tool.validate_data_quality(
+        cfg, cfg, "src_user", "ods_x_day_inc", primary_key="id",
+        allow_count_mismatch=True,
+    )
+    assert r["success"] is False  # 有重复必须失败

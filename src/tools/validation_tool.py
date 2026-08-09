@@ -85,8 +85,14 @@ class ValidationTool:
                 source_count, target_count, count_match, unique_check
             )
             
-            # 全量同步必须行数匹配；增量同步允许 0 条（无新数据合法，count_match 仍返回供展示）
-            success = count_match or allow_count_mismatch
+            # 全量必须行数匹配；增量允许 0 条（无新数据合法，count_match 仍返回供展示）。
+            # 唯一性失败（重复数据）无论哪种同步类型都判失败，绝不掩盖。
+            unique_ok = (
+                unique_check is None
+                or not unique_check.get("supported", True)
+                or unique_check.get("is_unique", True)
+            )
+            success = (count_match or allow_count_mismatch) and unique_ok
             return {
                 "success": success,
                 "source_count": source_count,

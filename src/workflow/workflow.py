@@ -288,14 +288,22 @@ class AgentWorkflow:
         }
 
     def _prepare_ods_staging(self, task_id: str, load_info: dict) -> None:
-        """确保 staging 表存在（管理账号 CREATE TABLE IF NOT EXISTS）。"""
+        """重建 staging 表（先 DROP 再 CREATE，保证每次执行干净）。
+
+        不能只用 CREATE TABLE IF NOT EXISTS：若上次任务失败残留了非空 staging，
+        DataX 会追加写入导致装载重复。
+        """
         from ..agents.etl_agent import _admin_conn
         from ..tools.incremental import build_ods_staging_ddl
 
-        ddl = build_ods_staging_ddl(load_info["staging"], load_info["columns"])
-        self._exec_starrocks_sql(task_id, [ddl], load_info.get("database", ""))
+        staging = load_info["staging"]
+        ddl = build_ods_staging_ddl(staging, load_info["columns"])
+        self._exec_starrocks_sql(
+            task_id, [f"DROP TABLE IF EXISTS {staging}", ddl],
+            load_info.get("database", ""),
+        )
         self.task_mgr.log(
-            task_id, "INFO", f"staging 表就绪: {load_info['staging']}",
+            task_id, "INFO", f"staging 表已重建: {staging}",
         )
 
     def _load_ods_partition(self, task_id: str, load_info: dict) -> None:
