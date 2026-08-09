@@ -60,12 +60,12 @@ class Config:
     STARROCKS_ADMIN_USERNAME: str = os.getenv("STARROCKS_ADMIN_USERNAME", "")
     STARROCKS_ADMIN_PASSWORD: str = os.getenv("STARROCKS_ADMIN_PASSWORD", "")
 
-    # ---- LLM (MiMo) ----
+    # ---- LLM (火山引擎 Coding Plan) ----
     LLM_API_KEY: str = os.getenv("LLM_API_KEY", "")
     LLM_BASE_URL: str = os.getenv(
-        "LLM_BASE_URL", "https://token-plan-cn.xiaomimimo.com/v1"
+        "LLM_BASE_URL", "https://ark.cn-beijing.volces.com/api/coding/v3"
     )
-    LLM_MODEL: str = os.getenv("LLM_MODEL", "mimo-v2.5-pro")
+    LLM_MODEL: str = os.getenv("LLM_MODEL", "deepseek-v4-flash-ga-260731")
     # ---- RAG ----
     RAG_COLLECTION: str = os.getenv("RAG_COLLECTION", "datax_docs")
     # 数据集成 Agent 是否启用 DataX 文档检索（模板命中自动跳过，仅在模板缺失/校验失败时兜底）

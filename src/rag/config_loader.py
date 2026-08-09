@@ -65,10 +65,10 @@ def _fill_env(cfg: dict) -> dict:
     - elasticsearch：hosts 以 dataagent 的 ES_HOST / ES_PORT 为准（单源）
     """
     mimo = cfg.setdefault("mimo", {})
-    if not str(mimo.get("api_key", "")).strip():
-        mimo["api_key"] = app_config.LLM_API_KEY
-    mimo.setdefault("base_url", app_config.LLM_BASE_URL)
-    mimo.setdefault("model", app_config.LLM_MODEL)
+    # 单源配置：LLM 的 key/地址/模型一律以 dataagent 的 .env 为准（避免 .env 更换后旧值残留）
+    mimo["api_key"] = app_config.LLM_API_KEY
+    mimo["base_url"] = app_config.LLM_BASE_URL
+    mimo["model"] = app_config.LLM_MODEL
 
     sf = cfg.setdefault("siliconflow", {})
     if app_config.SILICONFLOW_API_KEY:
