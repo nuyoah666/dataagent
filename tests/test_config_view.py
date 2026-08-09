@@ -713,3 +713,27 @@ class TestCreateTargetTableApi:
             r = client.post(f"/tasks/{task_id}/target-table/create")
             assert r.status_code == 409
             assert "DDL" in r.json()["detail"]
+
+
+class TestBuildTargetDdlPartition:
+    """分区形态 ODS 表（_day_inc/_day_snapshot）DDL 生成。"""
+
+    def test_inc_partition_ddl(self):
+        from src.tools.config_view import build_target_table_ddl
+
+        mapping = [
+            {"source": "id", "source_type": "bigint", "target": "id", "target_type": "BIGINT"},
+        ]
+        ddl = build_target_table_ddl("ods_user_log_day_inc", mapping, "starrocks")
+        assert ddl.startswith("CREATE TABLE IF NOT EXISTS ods_user_log_day_inc")
+        assert "PARTITION BY RANGE(`dt`)" in ddl
+        assert "`dt` DATE" in ddl
+        assert "DUPLICATE KEY(`id`)" in ddl
+        assert "VALUES LESS THAN" in ddl
+
+    def test_base_non_partition_ddl(self):
+        from src.tools.config_view import build_target_table_ddl
+
+        mapping = [{"source": "id", "source_type": "bigint", "target": "id", "target_type": "BIGINT"}]
+        ddl = build_target_table_ddl("ods_user_log", mapping, "starrocks")
+        assert "PARTITION BY RANGE" not in ddl

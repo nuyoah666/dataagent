@@ -254,3 +254,32 @@ def test_discover_tables_registered():
     from src.tools.registry import TOOL_REGISTRY
 
     assert "discover_tables" in TOOL_REGISTRY
+
+
+class TestOdsNamingCycle:
+    """ODS 命名周期参数化（day 默认 / hour 可选，向后兼容 ETL 调用）。"""
+
+    def test_kind_suffix(self):
+        from src.tools.ods_naming import kind_suffix
+
+        assert kind_suffix("base") == ""
+        assert kind_suffix("inc") == "_day_inc"
+        assert kind_suffix("snapshot", "hour") == "_hour_snapshot"
+        assert kind_suffix("inc", "invalid") == "_day_inc"  # 非法周期回退 day
+
+    def test_strip_prefixes_and_kind(self):
+        from src.tools.ods_naming import kind_from_table, strip_prefixes
+
+        assert strip_prefixes("ods_user_log_hour_inc") == "user_log"
+        assert strip_prefixes("dwd_user_log_day_snapshot") == "user_log"
+        assert kind_from_table("ods_user_log_hour_inc") == "inc"
+        assert kind_from_table("ods_user_log_day_snapshot") == "snapshot"
+        assert kind_from_table("ods_user_log") == "base"
+
+    def test_ods_candidates_cycle(self):
+        from src.tools.ods_naming import ods_candidates
+
+        names = [c["table"] for c in ods_candidates("user_log", "hour")]
+        assert "ods_user_log_hour_inc" in names
+        assert "ods_user_log_hour_snapshot" in names
+        assert "ods_user_log" in names

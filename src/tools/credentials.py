@@ -82,16 +82,18 @@ def apply_intent_defaults(intent: Dict[str, Any]) -> Dict[str, Any]:
             result[f"{side}_port"] = defaults["port"]
             result[f"{side}_database"] = defaults.get("database", "")
 
-        # 用户名/密码：按本地实例回填（密码属于 host+port+user，不属于库）
+        # 用户名/密码：本地默认实例（host+port 匹配）按用户类型回填。
+        # - 用户名空/脱敏：整体回填默认凭据
+        # - 用户名=默认用户：密码一律以 .env 为准（LLM 可能编造非空密码）
+        # - 自定义用户名（如 readonly）：保留意图凭据，不适用默认实例
         if same_host and same_port:
-            user_matches_default = (
-                username in _MISSING
-                or username == str(defaults.get("username", ""))
-            )
             if username in _MISSING:
                 result[f"{side}_username"] = defaults.get("username", "")
-            if user_matches_default and str(
-                result.get(f"{side}_password") or ""
-            ) in _MISSING:
+                result[f"{side}_password"] = defaults.get("password", "")
+            elif username == str(defaults.get("username", "")):
+                result[f"{side}_password"] = defaults.get("password", "")
+            elif str(result.get(f"{side}_password") or "") in _MISSING:
+                # 编造用户名且密码缺失（如 LLM 猜 root 但无密码）：回填默认实例凭据
+                result[f"{side}_username"] = defaults.get("username", "")
                 result[f"{side}_password"] = defaults.get("password", "")
     return result

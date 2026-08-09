@@ -27,12 +27,19 @@ class SyncIntent(BaseModel):
     target_database: str = Field(default="")
     target_table: str = Field(default="")
     sync_type: str = Field(default="full", description="full | incremental")
+    update_cycle: str = Field(default="day", description="更新周期: day | hour")
 
     @field_validator("sync_type")
     @classmethod
     def _normalize_sync_type(cls, v: str) -> str:
         v = (v or "").strip().lower()
         return "incremental" if v in ("增量", "incremental", "delta") else "full"
+
+    @field_validator("update_cycle")
+    @classmethod
+    def _normalize_update_cycle(cls, v: str) -> str:
+        v = (v or "").strip().lower()
+        return v if v in ("day", "hour") else "day"
 
     @field_validator("source_port", "target_port")
     @classmethod

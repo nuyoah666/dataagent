@@ -248,6 +248,51 @@ def normalize_jdbc_url(url: str, db_type: str, host: str, port: int, database: s
     return url
 
 
+def apply_ods_target_naming(intent: Dict[str, Any]) -> Dict[str, Any]:
+    """数据集成到数仓（StarRocks）时应用 ODS 分层命名规范。
+
+    - 目标端非 starrocks -> 原样返回（ES/MySQL/Mongo 目标不强制 ODS）
+    - 目标表未显式指定：增量 -> ods_<业务>_<周期>_inc；全量 -> ods_<业务>_<周期>_snapshot
+    - 目标表显式指定：以 ods_ 开头 -> 尊重；带形态后缀（缺前缀）-> 自动补 ods_；
+      普通业务名 -> 按 sync_type 形态生成
+    业务名 = 源表名去掉 ods_/dwd_ 前缀与形态后缀。
+    """
+    result = copy.deepcopy(intent)
+    if str(result.get("target_db_type", "")).lower() != "starrocks":
+        return result
+    source_table = str(result.get("source_table", "") or "").strip()
+    if not source_table:
+        return result
+    from .ods_naming import ODS_PREFIX, kind_from_table, kind_suffix, strip_prefixes
+
+    cycle = str(result.get("update_cycle") or "day").lower()
+    sync_type = str(result.get("sync_type") or "full").lower()
+    kind = "inc" if sync_type == "incremental" else "snapshot"
+    target = str(result.get("target_table", "") or "").strip()
+    if target.endswith("表") and "." not in target:
+        target = target[:-1]
+    # LLM 常把中文业务描述填入 target_table（如"用户行为日志"）；
+    # 中文/非法表名无法通过建表校验，回退用源表名生成 ODS 名
+    if not re.fullmatch(r"[A-Za-z0-9_]+", target):
+        target = ""
+
+    if not target:
+        base = strip_prefixes(source_table)
+        result["target_table"] = f"{ODS_PREFIX}{base}{kind_suffix(kind, cycle)}"
+        return result
+
+    # 显式目标表：已带 ods_ 前缀 -> 尊重（含形态后缀）
+    if target.startswith(ODS_PREFIX):
+        return result
+    # 带形态后缀（如 user_log_day_inc）-> 自动补 ods_ 前缀
+    if kind_from_table(target) != "base":
+        result["target_table"] = f"{ODS_PREFIX}{target}"
+        return result
+    # 普通业务名 -> 按 sync_type 形态生成
+    base = strip_prefixes(target) or strip_prefixes(source_table)
+    result["target_table"] = f"{ODS_PREFIX}{base}{kind_suffix(kind, cycle)}"
+    return result
+
 def normalize_intent(intent: Dict[str, Any]) -> Dict[str, Any]:
     """标准化意图解析结果。"""
     result = copy.deepcopy(intent)
@@ -272,10 +317,13 @@ def normalize_intent(intent: Dict[str, Any]) -> Dict[str, Any]:
         if key in result and isinstance(result[key], str):
             result[key] = result[key].lstrip("/")
 
-    # 标准化 table
+    # 标准化 table（中文业务名常带"表"字，如"用户行为日志表"，去掉后交给表发现兜底）
     for key in ["source_table", "target_table"]:
         if key in result and isinstance(result[key], str):
-            result[key] = result[key].strip().strip("`").strip('"').strip("'")
+            t = result[key].strip().strip("`").strip('"').strip("'")
+            if key == "source_table" and t.endswith("表") and "." not in t:
+                t = t[:-1]
+            result[key] = t
 
     # sync_type 默认值
     if not result.get("sync_type"):
@@ -283,6 +331,10 @@ def normalize_intent(intent: Dict[str, Any]) -> Dict[str, Any]:
     else:
         sync_type = str(result["sync_type"]).strip().lower()
         result["sync_type"] = "incremental" if sync_type in ("增量", "incremental", "delta") else "full"
+
+    # update_cycle 标准化（day | hour，非法值回退 day）
+    cycle = str(result.get("update_cycle") or "day").strip().lower()
+    result["update_cycle"] = cycle if cycle in ("day", "hour") else "day"
 
     # ES 没有 database 概念：LLM 常把索引名填进 database 字段，转回 table
     for side in ("source", "target"):

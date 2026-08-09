@@ -13,7 +13,7 @@ from ..tools import (
     search_datax_docs, get_table_schema, DatabaseConfig, discover_tables,
     process_config, normalize_intent,
 )
-from ..tools.config_processor import get_template
+from ..tools.config_processor import apply_ods_target_naming, get_template
 from ..utils import llm_circuit_breaker, rag_circuit_breaker
 from ..utils.llm import get_agent_llm, llm_json, LLMJsonError
 from ..config import config
@@ -93,6 +93,9 @@ class ConfigAgent(BaseAgent):
                     "current_step": "config_error",
                 }
             intent = resolved
+
+        # 源表已解析为真实表名后，数仓目标（StarRocks）应用 ODS 分层命名
+        intent = apply_ods_target_naming(intent)
         logger.info(f"意图: table={intent.get('source_table')}, "
                      f"{intent.get('source_db_type')}->{intent.get('target_db_type')}")
 
@@ -147,11 +150,12 @@ class ConfigAgent(BaseAgent):
                 "字段：source_name, source_db_type, source_host, source_port, source_username, "
                 "source_password, source_database, source_table, target_db_type, "
                 "target_host, target_port, target_username, target_password, "
-                "target_database, target_table, sync_type。\n"
+                "target_database, target_table, sync_type, update_cycle。\n"
                 "source_name：用户提到命名数据源（如「数据源 生产MySQL」/「用 XX 同步」）"
                 "时填写，否则空字符串。\n"
                 "重要：不要编造账号密码。source_password/target_password 仅在指令中"
                 "明确出现时填写，否则一律返回空字符串。\n"
+                "sync_type: full 或 incremental（增量）；update_cycle: day 或 hour（默认 day，指令含“每小时”时为 hour）。\n"
                 "默认值：MySQL 127.0.0.1:3306 root/datax_test；"
                 "MongoDB 127.0.0.1:27017 无鉴权/datax_test；ES localhost:9200",
                 f"指令：{user_query}",
@@ -177,7 +181,7 @@ class ConfigAgent(BaseAgent):
             "target_db_type": "elasticsearch", "target_host": config.ES_CONFIG["host"],
             "target_port": config.ES_CONFIG["port"],
             "target_username": "", "target_password": "", "target_database": "",
-            "target_table": "", "sync_type": "full",
+            "target_table": "", "sync_type": "full", "update_cycle": "day",
         }
         # 去掉引导动词，避免"把"被误抓进表名（如"把用户表"）
         clean = re.sub(r"^\s*(?:把|将|请|帮我|帮忙|对|给)\s*", "", text or "")
@@ -193,6 +197,8 @@ class ConfigAgent(BaseAgent):
                 break
         if "增量" in clean:
             intent["sync_type"] = "incremental"
+        if re.search(r"每\s*(?:个)?\s*小时|每小时|每\s*\d+\s*小时", clean):
+            intent["update_cycle"] = "hour"
         if "mongo" in clean.lower():
             intent["source_db_type"] = "mongodb"
             intent["source_host"] = config.MONGODB_CONFIG["host"]
@@ -266,10 +272,10 @@ class ConfigAgent(BaseAgent):
             return intent, [], ""
 
         # 3) 跨库发现（表名精确/LIKE + 表注释 LIKE）
-        cands = self._discover_candidates(table, db_type, intent)
+        cands, discover_err = self._discover_candidates(table, db_type, intent)
         # 4) 兜底：去掉"表"后缀再查（用户表 -> 用户，匹配注释）
         if not cands and table.endswith("表") and len(table) > 1:
-            cands = self._discover_candidates(table[:-1], db_type, intent)
+            cands, discover_err = self._discover_candidates(table[:-1], db_type, intent)
         if len(cands) == 1:
             c = cands[0]
             logger.info("源表唯一命中: %s.%s（%s）", c["database"], c["table"], c["match_type"])
@@ -279,20 +285,25 @@ class ConfigAgent(BaseAgent):
         if len(cands) > 1:
             return intent, cands, ""
         # 零候选：明确报错，避免一路跑到 DataX 执行才失败
+        if discover_err:
+            return intent, [], f"表发现失败：{discover_err}（请检查源端连接或表名「{table}」）"
         return intent, [], f"在可访问的数据库中找不到表「{table}」（已按表名与表注释检索）"
 
     @staticmethod
-    def _discover_candidates(table: str, db_type: str, intent: Dict[str, Any]) -> list:
-        """跨库发现候选表（用意图已解析的连接，支持命名数据源）。"""
+    def _discover_candidates(table: str, db_type: str, intent: Dict[str, Any]) -> tuple:
+        """跨库发现候选表（用意图已解析的连接，支持命名数据源）。
+
+        Returns: (candidates, error)；error 非空表示连接/查询失败。
+        """
         r = discover_tables(
             table, db_type=db_type, limit=20,
             host=intent.get("source_host"), port=intent.get("source_port"),
             username=intent.get("source_username"),
             password=intent.get("source_password"),
         )
-        if not r.get("success"):
-            return []
-        return r.get("candidates") or []
+        if not r or not r.get("success"):
+            return [], str((r or {}).get("error") or "表发现失败")
+        return r.get("candidates") or [], ""
 
     @staticmethod
     def _format_candidates(keyword: str, candidates: list) -> str:

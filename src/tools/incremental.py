@@ -98,15 +98,125 @@ def enhance_config_with_incremental(
             where = None
 
     if where:
-        # 注入到 reader 参数
+        # 注入到 reader 参数（table 模式 -> where；querySql 模式 -> 拼进 SQL）
         for item in cfg.get("job", {}).get("content", []):
             reader = item.get("reader", {})
             param = reader.get("parameter", {})
-            param["where"] = where
+            query_sql = param.get("querySql")
+            if isinstance(query_sql, list) and query_sql:
+                sql = str(query_sql[0])
+                if re.search(r"\bWHERE\b", sql, re.IGNORECASE):
+                    sql = f"{sql} AND {where}"
+                else:
+                    sql = f"{sql} WHERE {where}"
+                param["querySql"] = [sql]
+            else:
+                param["where"] = where
             logger.info(f"增量查询: WHERE {where}")
 
     return cfg
 
+
+def _staging_table_for(real_table: str) -> str:
+    """staging 表名：stg_ + 真实表名（真实表已含 ods_ 前缀）。"""
+    t = str(real_table or "").strip()
+    return f"stg_{t}" if t and not t.startswith("stg_") else t
+
+
+def _starrocks_ddl_type(raw_type: str) -> str:
+    """规整源端类型为 StarRocks 可用的 DDL 类型（去掉 UNSIGNED 等修饰）。"""
+    t = str(raw_type or "").upper().strip()
+    t = re.sub(r"\s+UNSIGNED\s*$", "", t)
+    return t or "STRING"
+
+
+def build_ods_staging_ddl(
+    staging_table: str,
+    columns: List[Dict[str, Any]],
+) -> str:
+    """staging 表建表 DDL（仅源列，无 dt；StarRocks DUPLICATE KEY）。"""
+    from .etl_builder import build_create_table_sql
+
+    cols = [
+        {"name": str(c.get("name", "")), "type": _starrocks_ddl_type(c.get("type", ""))}
+        for c in (columns or [])
+        if str(c.get("name", "")).strip()
+    ]
+    if not cols:
+        raise ValueError("源表无列信息，无法创建 staging 表")
+    return build_create_table_sql(staging_table, cols, if_not_exists=True)
+
+
+def build_ods_partition_load_sql(
+    real_table: str,
+    staging_table: str,
+    columns: List[Dict[str, Any]],
+    dt: str,
+) -> List[str]:
+    """分区装载 SQL：清当日分区 -> INSERT SELECT（带 dt）-> DROP staging。
+
+    DataX 无法在 SELECT 中注入常量列（本机 mysqlreader 忽略 querySql），
+    因此走数仓标准 staging 装载，全程幂等（DELETE + INSERT 可重复执行）。
+    """
+    cols = [
+        str(c.get("name", "")).strip()
+        for c in (columns or [])
+        if str(c.get("name", "")).strip()
+    ]
+    if not cols:
+        raise ValueError("源表无列信息，无法生成分区装载 SQL")
+    col_sql = ", ".join(f"`{c}`" for c in cols)
+    return [
+        f"DELETE FROM {real_table} WHERE `dt` = '{dt}'",
+        f"INSERT INTO {real_table} ({col_sql}, `dt`) "
+        f"SELECT {col_sql}, '{dt}' FROM {staging_table}",
+        f"DROP TABLE IF EXISTS {staging_table}",
+    ]
+
+
+def inject_ods_partition_column(
+    config: Dict[str, Any],
+    columns: List[Dict[str, Any]],
+    dt: str,
+) -> Dict[str, Any]:
+    """分区形态 ODS 表：writer 目标切换到 staging 表（dt 由项目层分区装载补齐）。
+
+    本机 DataX mysqlreader 忽略 querySql，无法在 SELECT 注入 dt 常量列；
+    改为 DataX 写 stg_<真实表>（仅源列），执行完成后由 workflow 执行
+    build_ods_partition_load_sql（DELETE 当日分区 -> INSERT SELECT 带 dt -> DROP）。
+    """
+    import copy
+    cfg = copy.deepcopy(config)
+    content = cfg.get("job", {}).get("content", [])
+    if not content:
+        return cfg
+    item = content[0]
+    reader = item.get("reader") or {}
+    writer = item.get("writer") or {}
+    if str(reader.get("name", "")).lower() != "mysqlreader":
+        return cfg
+    wname = str(writer.get("name", "")).lower()
+    if wname not in ("mysqlwriter", "starrockswriter"):
+        return cfg
+    wparam = writer.get("parameter") or {}
+
+    # 真实目标表：优先顶层 table，其次 connection[0].table（starrockswriter 形态）
+    real_table = str(wparam.get("table") or "").strip()
+    if not real_table:
+        for c in wparam.get("connection") or []:
+            if isinstance(c, dict) and c.get("table"):
+                t = c["table"]
+                real_table = str(t[0] if isinstance(t, list) and t else t or "")
+                break
+    if not real_table:
+        return cfg
+    staging = _staging_table_for(real_table)
+    wparam["table"] = staging
+    for c in wparam.get("connection") or []:
+        if isinstance(c, dict) and c.get("table"):
+            c["table"] = [staging]
+    logger.info(f"ODS 分区装载: 真实表 {real_table}，staging={staging}，dt={dt}")
+    return cfg
 
 # ================================================================== #
 #  多表批量支持

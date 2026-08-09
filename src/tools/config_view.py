@@ -170,13 +170,17 @@ def extract_side(cfg: Dict[str, Any], role: str) -> Dict[str, Any]:
         else:
             host = str(a0)
 
+    table_name = str(tables or "")
+    # staging 装载方案：展示层剥掉 stg_ 前缀，显示真实目标表
+    if table_name.startswith("stg_"):
+        table_name = table_name[4:]
     return {
         "plugin": name,
         "db_type": db_type,
         "host": host,
         "port": port,
         "database": str(database or ""),
-        "table": str(tables or ""),
+        "table": table_name,
     }
 
 
@@ -192,6 +196,9 @@ def build_target_table_ddl(
     - mysql：InnoDB + utf8mb4，贴源层不强制主键
     目标库由目标端连接指定（与 schema 探测一致）。不支持的类型返回空串。
     """
+    table = str(table or "").strip()
+    if table.startswith("stg_"):
+        table = table[4:]  # staging 装载方案：只建真实目标表
     tdb = str(target_db_type or "").lower()
     if tdb not in ("mysql", "starrocks"):
         return ""
@@ -208,8 +215,23 @@ def build_target_table_ddl(
         return ""
 
     if tdb == "starrocks":
-        from .etl_builder import build_create_table_sql
+        from datetime import datetime
 
+        from .etl_builder import build_create_table_sql
+        from .ods_naming import kind_from_table
+
+        if kind_from_table(table) in ("inc", "snapshot"):
+            # 分区形态（ods_x_day_inc / _day_snapshot）：dt 分区列类型统一 DATE + 当日 RANGE 分区
+            for c in cols:
+                if str(c["name"]).lower() == "dt" and not str(c.get("type") or "").strip():
+                    c["type"] = "DATE"
+            if not any(str(c["name"]).lower() == "dt" for c in cols):
+                cols = [*cols, {"name": "dt", "type": "DATE"}]
+            return build_create_table_sql(
+                table, cols, if_not_exists=True,
+                partition_column="dt",
+                partition_date=datetime.now().strftime("%Y-%m-%d"),
+            )
         return build_create_table_sql(table, cols, if_not_exists=True)
 
     defs = []

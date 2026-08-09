@@ -10,6 +10,7 @@ from .web_search_tool import search_web
 from .config_processor import process_config, normalize_intent
 from .incremental import (
     detect_incremental_field, enhance_config_with_incremental,
+    inject_ods_partition_column,
     analyze_table_dependencies, build_execution_order, build_batch_configs,
 )
 
@@ -30,3 +31,4 @@ register_tool("web_search")(search_web)
 register_tool("process_config")(process_config)
 register_tool("detect_incremental_field")(detect_incremental_field)
 register_tool("enhance_config_with_incremental")(enhance_config_with_incremental)
+register_tool("inject_ods_partition_column")(inject_ods_partition_column)

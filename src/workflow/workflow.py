@@ -11,7 +11,7 @@ from langgraph.graph import StateGraph, END
 
 from ..state import DataIntegrationState
 from ..agents import get_step_agents, get_task_approval
-from ..tools import detect_incremental_field, enhance_config_with_incremental
+from ..tools import detect_incremental_field, enhance_config_with_incremental, inject_ods_partition_column
 from ..tools.db_tool import validate_identifier
 from .checkpointer import create_checkpointer
 from .task_manager import get_task_manager, TaskStatus
@@ -118,8 +118,26 @@ class AgentWorkflow:
                               "incremental_field": incremental_field,
                               "last_value": last_value}
 
+            # 分区形态 ODS 表（ods_<x>_day_inc / _day_snapshot）：写入带 dt 分区列
+            if cfg and str(intent.get("target_db_type", "")).lower() == "starrocks":
+                from ..tools.ods_naming import kind_from_table
+
+                if kind_from_table(str(intent.get("target_table", ""))) != "base":
+                    from datetime import datetime
+
+                    dt = datetime.now().strftime("%Y-%m-%d")
+                    cfg = inject_ods_partition_column(
+                        cfg, (schema or {}).get("columns") or [], dt,
+                    )
+                    result = {**result, "datax_config": cfg}
+                    self.task_mgr.log(
+                        task_id, "INFO",
+                        f"ODS 分区表: {intent.get('target_table')}，写入分区 dt={dt}",
+                    )
+
             self.task_mgr.update_task(task_id, status=TaskStatus.CONFIG_DONE.value,
                                        parsed_intent=result.get("parsed_intent"),
+                                       source_schema=result.get("source_schema"),
                                        datax_config=result.get("datax_config"),
                                        etl_sql=result.get("etl_sql"),
                                        etl_source_table=result.get("etl_source_table"),
@@ -169,7 +187,35 @@ class AgentWorkflow:
         self.task_mgr.update_task(task_id, status=TaskStatus.EXECUTING.value)
         self.task_mgr.log(task_id, "INFO", "ExecutionAgent 开始执行")
 
+        # 分区形态 ODS（ods_x_day_inc/_day_snapshot）：先确保 staging 表存在
+        load_info = self._partition_load_info(state)
+        if load_info:
+            try:
+                self._prepare_ods_staging(task_id, load_info)
+            except Exception as e:
+                self.task_mgr.log(task_id, "ERROR", f"staging 表准备失败: {e}")
+                self.task_mgr.complete_task(
+                    task_id, TaskStatus.FAILED, error=f"staging 表准备失败: {e}"
+                )
+                return {**state, "error": f"staging 表准备失败: {e}",
+                        "current_step": "execution_error"}
+
         result = self.execution_agent.run(state)
+
+        # 执行成功且为分区形态：staging -> 分区装载（DELETE 当日分区 -> INSERT SELECT -> DROP）
+        if result.get("execution_status", {}).get("success") and load_info:
+            try:
+                self._load_ods_partition(task_id, load_info)
+                result = {**result, "ods_partition_load": {"success": True,
+                                                          "table": load_info["real_table"],
+                                                          "dt": load_info["dt"]}}
+            except Exception as e:
+                self.task_mgr.log(task_id, "ERROR", f"分区装载失败: {e}")
+                self.task_mgr.complete_task(
+                    task_id, TaskStatus.FAILED, error=f"分区装载失败: {e}"
+                )
+                return {**result, "error": f"分区装载失败: {e}",
+                        "current_step": "execution_error"}
 
         if result.get("execution_status", {}).get("cancelled"):
             self.task_mgr.complete_task(task_id, TaskStatus.CANCELLED, error="任务已取消")
@@ -186,6 +232,76 @@ class AgentWorkflow:
             )
 
         return result
+
+    @staticmethod
+    def _partition_load_info(state: dict) -> Optional[dict]:
+        """分区形态 ODS（StarRocks）：返回 {real_table, staging, columns, dt}，非分区返回 None。"""
+        from datetime import datetime
+
+        from ..tools.incremental import _staging_table_for
+        from ..tools.ods_naming import kind_from_table
+
+        intent = state.get("parsed_intent") or {}
+        if str(intent.get("target_db_type", "")).lower() != "starrocks":
+            return None
+        real_table = str(intent.get("target_table") or "")
+        if kind_from_table(real_table) == "base":
+            return None
+        columns = ((state.get("source_schema") or {}).get("columns")) or []
+        if not columns:
+            return None
+        return {
+            "real_table": real_table,
+            "staging": _staging_table_for(real_table),
+            "columns": columns,
+            "dt": datetime.now().strftime("%Y-%m-%d"),
+            "database": str(intent.get("target_database") or "").strip()
+            or config.STARROCKS_CONFIG.get("database", ""),
+        }
+
+    def _prepare_ods_staging(self, task_id: str, load_info: dict) -> None:
+        """确保 staging 表存在（管理账号 CREATE TABLE IF NOT EXISTS）。"""
+        from ..agents.etl_agent import _admin_conn
+        from ..tools.incremental import build_ods_staging_ddl
+
+        ddl = build_ods_staging_ddl(load_info["staging"], load_info["columns"])
+        self._exec_starrocks_sql(task_id, [ddl], load_info.get("database", ""))
+        self.task_mgr.log(
+            task_id, "INFO", f"staging 表就绪: {load_info['staging']}",
+        )
+
+    def _load_ods_partition(self, task_id: str, load_info: dict) -> None:
+        """staging -> 分区装载（幂等：DELETE 当日分区 -> INSERT SELECT 带 dt -> DROP）。"""
+        from ..tools.incremental import build_ods_partition_load_sql
+
+        sqls = build_ods_partition_load_sql(
+            load_info["real_table"], load_info["staging"],
+            load_info["columns"], load_info["dt"],
+        )
+        self._exec_starrocks_sql(task_id, sqls, load_info.get("database", ""))
+        self.task_mgr.log(
+            task_id, "INFO",
+            f"分区装载完成: {load_info['real_table']} dt={load_info['dt']}",
+        )
+
+    def _exec_starrocks_sql(self, task_id: str, sqls: list, database: str = "") -> None:
+        """在 StarRocks 上顺序执行 SQL（管理账号优先，失败抛异常）。"""
+        from ..agents.etl_agent import _admin_conn
+        from ..tools.db import mysql_conn
+
+        db = database or config.STARROCKS_CONFIG["database"]
+        ctx = _admin_conn(db)
+        if ctx is None:
+            ctx = mysql_conn(
+                "starrocks", database=db,
+                username=config.STARROCKS_CONFIG["username"],
+                password=config.STARROCKS_CONFIG["password"],
+            )
+        with ctx as conn:
+            with conn.cursor() as cur:
+                for sql in sqls:
+                    cur.execute(sql)
+                conn.commit()
 
     def _run_validation(self, state: DataIntegrationState) -> DataIntegrationState:
         task_id = state.get("_task_id", "")
@@ -445,7 +561,7 @@ class AgentWorkflow:
                     continue
                 real = str(intent.get(f"{side}_password", "") or "")
                 for key, value in param.items():
-                    if value == "***" and _is_secret_key(key):
+                    if value in ("", "***") and _is_secret_key(key):
                         param[key] = real
         return cfg
 

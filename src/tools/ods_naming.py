@@ -30,6 +30,20 @@ KIND_SUFFIXES = {
 }
 KIND_PRIORITY = ["inc", "snapshot", "base"]  # auto 探测优先级
 
+# 更新周期（同步调度频率，体现在形态后缀：_day_inc / _hour_inc ...）
+SUPPORTED_CYCLES = ("day", "hour")
+_CYCLE_SUFFIX_RE = re.compile(r"_(day|hour)_(inc|snapshot)$")
+
+
+def kind_suffix(kind: str, cycle: str = "day") -> str:
+    """形态后缀：base -> ""，inc -> _<cycle>_inc，snapshot -> _<cycle>_snapshot。"""
+    cycle = cycle if cycle in SUPPORTED_CYCLES else "day"
+    if kind == "inc":
+        return f"_{cycle}_inc"
+    if kind == "snapshot":
+        return f"_{cycle}_snapshot"
+    return ""
+
 _SAFE_IDENT_RE = re.compile(r"^[A-Za-z0-9_]+$")
 
 
@@ -48,20 +62,18 @@ def strip_prefixes(table: str) -> str:
         if t.startswith(prefix):
             t = t[len(prefix):]
             break
-    for suffix in ("_day_inc", "_day_snapshot"):
-        if t.endswith(suffix):
-            t = t[: -len(suffix)]
-            break
+    m = _CYCLE_SUFFIX_RE.search(t)
+    if m:
+        t = t[: m.start()]
     return t
 
 
 def kind_from_table(table: str) -> str:
     """根据表名后缀判断形态；无后缀按 base 处理。"""
     t = (table or "").strip()
-    if t.endswith("_day_inc"):
-        return "inc"
-    if t.endswith("_day_snapshot"):
-        return "snapshot"
+    m = _CYCLE_SUFFIX_RE.search(t)
+    if m:
+        return m.group(2)
     return "base"
 
 
@@ -73,21 +85,21 @@ def layer_from_table(table: str) -> str:
     return "ods"
 
 
-def ods_candidates(base: str) -> List[Dict[str, str]]:
-    """给定业务名，列出全部 ODS 候选形态。"""
+def ods_candidates(base: str, cycle: str = "day") -> List[Dict[str, str]]:
+    """给定业务名，列出全部 ODS 候选形态（按更新周期生成后缀）。"""
     base = strip_prefixes(base)
     return [
-        {"kind": kind, "table": f"{ODS_PREFIX}{base}{suffix}", "label": label}
-        for kind, (suffix, label) in KIND_SUFFIXES.items()
+        {"kind": kind, "table": f"{ODS_PREFIX}{base}{kind_suffix(kind, cycle)}", "label": label}
+        for kind, (_, label) in KIND_SUFFIXES.items()
     ]
 
 
-def dwd_candidates(base: str) -> List[Dict[str, str]]:
+def dwd_candidates(base: str, cycle: str = "day") -> List[Dict[str, str]]:
     """给定业务名，列出全部 DWD 候选形态（与 ODS 形态一一对应）。"""
     base = strip_prefixes(base)
     return [
-        {"kind": kind, "table": f"{DWD_PREFIX}{base}{suffix}", "label": label}
-        for kind, (suffix, label) in KIND_SUFFIXES.items()
+        {"kind": kind, "table": f"{DWD_PREFIX}{base}{kind_suffix(kind, cycle)}", "label": label}
+        for kind, (_, label) in KIND_SUFFIXES.items()
     ]
 
 

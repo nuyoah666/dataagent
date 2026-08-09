@@ -372,6 +372,7 @@ class TestStarRocks:
         assert writer["name"] == "mysqlwriter"
         conn = writer["parameter"]["connection"][0]
         assert "127.0.0.1:9030" in conn["jdbcUrl"]
+        # process_config 层不做 ODS 化（由 config_agent 在源表解析后应用，见 TestOdsTargetNaming）
         assert conn["table"] == ["src_user_sr"]
 
     def test_starrocks_forces_insert_write_mode(self):
@@ -633,3 +634,73 @@ class TestIncremental:
         layers = build_execution_order(deps)
         assert layers[0] == ["a"]
         assert layers[-1] == ["c"]
+
+
+class TestOdsTargetNaming:
+    """StarRocks 目标自动应用 ODS 分层命名。"""
+
+    def _intent(self, **kw):
+        base = dict(
+            source_db_type="mysql", source_table="user_action_log",
+            target_db_type="starrocks", target_table="",
+            sync_type="full", update_cycle="day",
+        )
+        base.update(kw)
+        return base
+
+    def test_full_default_snapshot(self):
+        from src.tools.config_processor import apply_ods_target_naming
+
+        out = apply_ods_target_naming(self._intent())
+        assert out["target_table"] == "ods_user_action_log_day_snapshot"
+
+    def test_incremental_default_inc(self):
+        from src.tools.config_processor import apply_ods_target_naming
+
+        out = apply_ods_target_naming(self._intent(sync_type="incremental"))
+        assert out["target_table"] == "ods_user_action_log_day_inc"
+
+    def test_hour_cycle(self):
+        from src.tools.config_processor import apply_ods_target_naming
+
+        out = apply_ods_target_naming(self._intent(update_cycle="hour"))
+        assert out["target_table"] == "ods_user_action_log_hour_snapshot"
+
+    def test_explicit_ods_name_respected(self):
+        from src.tools.config_processor import apply_ods_target_naming
+
+        out = apply_ods_target_naming(self._intent(target_table="ods_user_log_day_inc"))
+        assert out["target_table"] == "ods_user_log_day_inc"
+
+    def test_explicit_suffix_gets_prefix(self):
+        from src.tools.config_processor import apply_ods_target_naming
+
+        out = apply_ods_target_naming(self._intent(target_table="user_log_day_snapshot"))
+        assert out["target_table"] == "ods_user_log_day_snapshot"
+
+    def test_explicit_business_name_gets_form(self):
+        from src.tools.config_processor import apply_ods_target_naming
+
+        out = apply_ods_target_naming(self._intent(target_table="my_biz"))
+        assert out["target_table"] == "ods_my_biz_day_snapshot"
+
+    def test_chinese_target_falls_back_to_source(self):
+        from src.tools.config_processor import apply_ods_target_naming
+
+        out = apply_ods_target_naming(self._intent(target_table="用户行为日志"))
+        assert out["target_table"] == "ods_user_action_log_day_snapshot"
+
+    def test_non_starrocks_unchanged(self):
+        from src.tools.config_processor import apply_ods_target_naming
+
+        out = apply_ods_target_naming(self._intent(target_db_type="elasticsearch", target_table="es_idx"))
+        assert out["target_table"] == "es_idx"
+
+    def test_normalize_intent_standardizes_cycle(self):
+        from src.tools.config_processor import normalize_intent
+
+        out = normalize_intent(self._intent(sync_type="incremental"))
+        assert out["update_cycle"] == "day"
+        assert out["sync_type"] == "incremental"
+        # ODS 命名在源表解析为真实表名后由 config_agent 应用（apply_ods_target_naming 独立测试覆盖）
+        assert out["target_table"] == ""
