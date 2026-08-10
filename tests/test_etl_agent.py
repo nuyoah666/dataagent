@@ -158,7 +158,10 @@ class TestETLConfigAgent:
         )
         assert result["current_step"] == "config_complete", result.get("error")
         sql = result["etl_sql"]
-        assert "PARTITION(p20260805)" in sql
+        # 表达式分区表：DELETE + INSERT 两段式，不再使用显式 PARTITION(p...)
+        assert "PARTITION(" not in sql
+        assert "DELETE FROM dwd_user_day_inc WHERE `dt` = '2026-08-05'" in sql
+        assert "INSERT INTO dwd_user_day_inc SELECT" in sql
         assert "WHERE s.`dt` = '2026-08-05'" in sql
         assert result["etl_source_table"] == "ods_user_day_inc"
 

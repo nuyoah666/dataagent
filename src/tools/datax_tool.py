@@ -125,7 +125,8 @@ class DataXTool:
         cancel_event = self._cancel_events.setdefault(job_name, threading.Event())
 
         # 使用当前 Python 解释器执行，避免 PATH 中 python 指向错误版本
-        cmd = [sys.executable, self.datax_py, config_path]
+        # 显式传 JVM 参数（本机内存紧张，默认 1g 可能申请失败）
+        cmd = [sys.executable, self.datax_py, "-j", config.DATAX_JVM, config_path]
 
         start_time = datetime.now()
         logger.info(f"执行 DataX: {' '.join(cmd)}")

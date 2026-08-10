@@ -90,6 +90,8 @@ class Config:
         "data_analysis": os.getenv("AGENT_DATA_ANALYSIS_MODEL", ""),
     }
 
+    # DataX JVM 参数（本机内存紧张时降低堆，避免 Could not reserve enough space）
+    DATAX_JVM: str = os.getenv("DATAX_JVM", "-Xms512m -Xmx512m")
     # ---- DataX 执行超时（秒），防止任务挂死 ----
     DATAX_TIMEOUT: int = int(os.getenv("DATAX_TIMEOUT", "3600"))
 

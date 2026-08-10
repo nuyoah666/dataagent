@@ -726,14 +726,14 @@ class TestBuildTargetDdlPartition:
         ]
         ddl = build_target_table_ddl("ods_user_log_day_inc", mapping, "starrocks")
         assert ddl.startswith("CREATE TABLE IF NOT EXISTS ods_user_log_day_inc")
-        assert "PARTITION BY RANGE(`dt`)" in ddl
+        assert "PARTITION BY date_trunc('day', `dt`)" in ddl
         assert "`dt` DATE" in ddl
         assert "DUPLICATE KEY(`id`)" in ddl
-        assert "VALUES LESS THAN" in ddl
+        assert "VALUES LESS THAN" not in ddl  # 表达式分区自动建，无需预设分区
 
     def test_base_non_partition_ddl(self):
         from src.tools.config_view import build_target_table_ddl
 
         mapping = [{"source": "id", "source_type": "bigint", "target": "id", "target_type": "BIGINT"}]
         ddl = build_target_table_ddl("ods_user_log", mapping, "starrocks")
-        assert "PARTITION BY RANGE" not in ddl
+        assert "PARTITION BY" not in ddl  # 非分区形态

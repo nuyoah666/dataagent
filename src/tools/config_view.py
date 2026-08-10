@@ -215,23 +215,17 @@ def build_target_table_ddl(
         return ""
 
     if tdb == "starrocks":
-        from datetime import datetime
-
         from .etl_builder import build_create_table_sql
         from .ods_naming import kind_from_table
 
         if kind_from_table(table) in ("inc", "snapshot"):
-            # 分区形态（ods_x_day_inc / _day_snapshot）：dt 分区列类型统一 DATE + 当日 RANGE 分区
+            # 分区形态（ods_x_day_inc / _day_snapshot）：dt 分区列统一 DATE + 表达式分区（自动建分区）
             for c in cols:
                 if str(c["name"]).lower() == "dt" and not str(c.get("type") or "").strip():
                     c["type"] = "DATE"
             if not any(str(c["name"]).lower() == "dt" for c in cols):
                 cols = [*cols, {"name": "dt", "type": "DATE"}]
-            return build_create_table_sql(
-                table, cols, if_not_exists=True,
-                partition_column="dt",
-                partition_date=datetime.now().strftime("%Y-%m-%d"),
-            )
+            return build_create_table_sql(table, cols, if_not_exists=True, partitioned=True)
         return build_create_table_sql(table, cols, if_not_exists=True)
 
     defs = []

@@ -119,20 +119,35 @@ def build_insert_sql(
     joins: Optional[List[str]] = None,
     partition: Optional[str] = None,
     where: Optional[str] = None,
+    *,
+    partitioned: bool = False,
+    partition_date: Optional[str] = None,
 ) -> str:
-    """拼装 INSERT OVERWRITE ... SELECT。"""
+    """拼装 ETL 写入 SQL。
+
+    - partitioned=False（非分区表）：INSERT OVERWRITE ... SELECT（覆盖全表，幂等）
+    - partitioned=True（表达式分区表）：DELETE 当天分区数据 + INSERT INTO ...
+      （表达式分区不支持显式 PARTITION(p...)，写入按 dt 自动建分区；
+       先删后插保证幂等，且不会覆盖其他天分区）
+    """
     validate_table_name(target_table)
     validate_table_name(source_table)
-    partition_clause = f" PARTITION({partition})" if partition else ""
     join_clause = " " + " ".join(joins) if joins else ""
     where_clause = f" WHERE {where}" if where else ""
     # 注意：StarRocks 语法是 INSERT OVERWRITE <表> [PARTITION(...)] SELECT ...
     # 不兼容 MySQL 的 INSERT OVERWRITE TABLE 写法
-    sql = (
-        f"INSERT OVERWRITE {target_table}{partition_clause} "
+    select_sql = (
         f"SELECT {select_exprs} FROM {source_table} s{join_clause}{where_clause}"
     )
-    return sql.strip()
+    if partitioned:
+        if not partition_date:
+            raise ValueError("表达式分区表需要 partition_date 生成 DELETE 语句")
+        return (
+            f"DELETE FROM {target_table} WHERE `dt` = '{partition_date}'; "
+            f"INSERT INTO {target_table} {select_sql}"
+        )
+    partition_clause = f" PARTITION({partition})" if partition else ""
+    return f"INSERT OVERWRITE {target_table}{partition_clause} {select_sql}".strip()
 
 
 def build_passthrough_sql(
@@ -143,6 +158,7 @@ def build_passthrough_sql(
     partition: Optional[str] = None,
     partition_date: Optional[str] = None,
     source_partitioned: bool = False,
+    target_partitioned: bool = False,
 ) -> str:
     """纯透传：所有列同名透传。"""
     exprs = build_select_exprs(columns)
@@ -153,6 +169,7 @@ def build_passthrough_sql(
     return build_insert_sql(
         target_table, source_table, exprs["select"],
         partition=partition, where=where,
+        partitioned=target_partitioned, partition_date=partition_date,
     )
 
 
@@ -165,6 +182,7 @@ def build_field_mapping_sql(
     partition: Optional[str] = None,
     partition_date: Optional[str] = None,
     source_partitioned: bool = False,
+    target_partitioned: bool = False,
 ) -> str:
     """字段映射：指定列改名，未指定列保留原样。"""
     exprs = build_select_exprs(columns, field_mappings=field_mappings)
@@ -175,6 +193,7 @@ def build_field_mapping_sql(
     return build_insert_sql(
         target_table, source_table, exprs["select"],
         partition=partition, where=where,
+        partitioned=target_partitioned, partition_date=partition_date,
     )
 
 
@@ -187,6 +206,7 @@ def build_enum_mapping_sql(
     partition: Optional[str] = None,
     partition_date: Optional[str] = None,
     source_partitioned: bool = False,
+    target_partitioned: bool = False,
     code_map_table: str = DEFAULT_CODE_MAP_TABLE,
 ) -> str:
     """枚举映射：LEFT JOIN dim_code_map 输出 <col>_name 可读名列。"""
@@ -205,14 +225,15 @@ def build_create_table_sql(
     table: str,
     columns: List[Dict[str, str]],
     *,
-    partition_date: Optional[str] = None,
-    partition_column: str = PARTITION_COLUMN,
+    partitioned: bool = False,
     buckets: int = 10,
     if_not_exists: bool = False,
 ) -> str:
     """生成 StarRocks 建表 DDL（DUPLICATE KEY 模型）。
 
-    partition_date 非空时创建 RANGE 分区表（当日分区），否则非分区表。
+    partitioned=True 时创建按 dt 的表达式分区表（date_trunc('day', dt)，
+    写入时自动创建分区，无需预设/ADD PARTITION），否则非分区表。
+    列定义中必须包含 dt 列（调用方负责补）。
     """
     validate_table_name(table)
     if not columns:
@@ -244,18 +265,8 @@ def build_create_table_sql(
         key_col,
     )
 
-    partition_ddl = ""
-    if partition_date:
-        from datetime import datetime, timedelta
-
-        d = datetime.strptime(partition_date, "%Y-%m-%d")
-        upper = d + timedelta(days=1)
-        partition_ddl = (
-            f"PARTITION BY RANGE({_quote_ident(partition_column)}) (\n"
-            f"  PARTITION p{partition_date.replace('-', '')} "
-            f"VALUES LESS THAN ('{upper.strftime('%Y-%m-%d')}')\n"
-            f")\n"
-        )
+    # 表达式分区：按 dt 天级自动建分区（StarRocks 2.5+，写入自动创建，无需预设分区）
+    partition_ddl = f"PARTITION BY date_trunc('day', `{PARTITION_COLUMN}`)\n" if partitioned else ""
 
     ddl = (
         f"CREATE TABLE {'IF NOT EXISTS ' if if_not_exists else ''}{table} (\n"

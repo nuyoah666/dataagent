@@ -28,10 +28,8 @@ from ..tools.etl_builder import (
 )
 from ..tools.ods_naming import (
     describe_table,
-    is_partitioned,
-    list_partitions,
+    kind_from_table,
     list_tables,
-    partition_name_for_date,
     resolve_source_table,
     resolve_target_table,
     validate_table_name,
@@ -161,13 +159,10 @@ class ETLConfigAgent(BaseAgent):
             )
             tables = set(list_tables(conn, database))
             target_exists = target["table"] in tables
-            source_partitioned = is_partitioned(conn, database, source["table"])
-
-            # 目标分区表：分区名统一 p<yyyymmdd>；新建分区表只有当天分区
-            target_partitioned = (
-                is_partitioned(conn, database, target["table"])
-                if target_exists else source_partitioned
-            )
+            # 分区判断基于表名形态（_day_inc/_day_snapshot），不依赖 SHOW PARTITIONS：
+            # 表达式分区表在无数据写入时没有任何分区，SHOW PARTITIONS 返回空集会误判为非分区表
+            source_partitioned = kind_from_table(source["table"]) in ("inc", "snapshot")
+            target_partitioned = kind_from_table(target["table"]) in ("inc", "snapshot")
             partition_name = None
             if target_partitioned and source["kind"] in ("inc", "snapshot"):
                 partition_name = f"p{partition_date.replace('-', '')}"
@@ -177,6 +172,7 @@ class ETLConfigAgent(BaseAgent):
                 partition_name=partition_name,
                 partition_date=partition_date,
                 source_partitioned=source_partitioned,
+                target_partitioned=target_partitioned,
             )
 
         ok, reason = validate_etl_sql(sql)
@@ -202,7 +198,7 @@ class ETLConfigAgent(BaseAgent):
                     field_mappings=intent.get("field_mappings"),
                     enum_mappings=intent.get("enum_mappings"),
                 ),
-                partition_date=partition_date if target_partitioned else None,
+                partitioned=target_partitioned,
             )
         logger.info(
             f"ETL 配置完成: {source['table']}({source['kind']}) -> "
@@ -265,6 +261,7 @@ class ETLConfigAgent(BaseAgent):
         partition_name: Optional[str],
         partition_date: str,
         source_partitioned: bool,
+        target_partitioned: bool = False,
     ) -> str:
         transform = intent.get("transform_type", "passthrough")
         if transform == "enum_mapping":
@@ -274,6 +271,7 @@ class ETLConfigAgent(BaseAgent):
                 partition=partition_name,
                 partition_date=partition_date,
                 source_partitioned=source_partitioned,
+                target_partitioned=target_partitioned,
             )
         if transform == "field_mapping":
             return build_field_mapping_sql(
@@ -282,12 +280,14 @@ class ETLConfigAgent(BaseAgent):
                 partition=partition_name,
                 partition_date=partition_date,
                 source_partitioned=source_partitioned,
+                target_partitioned=target_partitioned,
             )
         return build_passthrough_sql(
             target["table"], source["table"], columns,
             partition=partition_name,
             partition_date=partition_date,
             source_partitioned=source_partitioned,
+            target_partitioned=target_partitioned,
         )
 
 
@@ -338,28 +338,12 @@ class ETLEExecutionAgent(BaseAgent):
                     aconn.commit()
                 logger.info(f"ETL 已创建目标表 {target_table}")
 
-            # 2. 分区表 -> 确保目标分区存在
-            if is_partitioned(conn, database, target_table):
-                pname = f"p{partition_date.replace('-', '')}"
-                partitions = list_partitions(conn, database, target_table)
-                if not partition_name_for_date(partitions, partition_date):
-                    from ..tools.ods_naming import build_add_partition_sql
-
-                    admin_ctx = _admin_conn(database)
-                    if admin_ctx is None:
-                        raise ValueError(
-                            f"目标分区 {pname} 不存在且未配置管理账号，"
-                            f"请手动执行：\n{build_add_partition_sql(target_table, partition_date)}"
-                        )
-                    with admin_ctx as aconn:
-                        with aconn.cursor() as cur:
-                            cur.execute(build_add_partition_sql(target_table, partition_date))
-                        aconn.commit()
-                    logger.info(f"ETL 已创建目标分区 {pname}")
-
-            # 3. 执行透传 SQL
+            # 2. 表达式分区表写入时自动创建分区，无需 ADD PARTITION
+            # 3. 执行透传 SQL（表达式分区表为 DELETE+INSERT 两条，分号拼接后逐条执行）
             with conn.cursor() as cur:
-                affected = cur.execute(sql)
+                affected = 0
+                for stmt in [s.strip() for s in sql.split(";") if s.strip()]:
+                    affected = cur.execute(stmt)
             conn.commit()
 
         logger.info(f"ETL SQL 执行成功，影响 {affected} 行")
@@ -394,8 +378,8 @@ class ETLValidationAgent(BaseAgent):
         validate_table_name(database)
 
         with mysql_conn("starrocks", database=database) as conn:
-            source_partitioned = is_partitioned(conn, database, source_table)
-            target_partitioned = is_partitioned(conn, database, target_table)
+            source_partitioned = kind_from_table(source_table) in ("inc", "snapshot")
+            target_partitioned = kind_from_table(target_table) in ("inc", "snapshot")
             source_count = self._count(
                 conn, source_table, source_partitioned and source_kind in ("inc", "snapshot"), partition_date
             )
