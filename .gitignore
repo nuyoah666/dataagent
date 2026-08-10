@@ -30,3 +30,6 @@ build/
 
 # 个人面试资产，不进远程仓库
 INTERVIEW.md
+INTERVIEW_QUICK.md
+OPTIMIZATION.md
+SUMMARY.md
