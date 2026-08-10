@@ -27,3 +27,6 @@ build/
 
 # 备份文件
 *.bak
+
+# 个人面试资产，不进远程仓库
+INTERVIEW.md
