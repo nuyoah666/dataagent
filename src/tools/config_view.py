@@ -188,6 +188,7 @@ def build_target_table_ddl(
     table: str,
     mapping: List[Dict[str, str]],
     target_db_type: str,
+    primary_key: str = "",
 ) -> str:
     """为数据集成目标端生成建表 DDL（一键建表预览/执行）。
 
@@ -217,6 +218,12 @@ def build_target_table_ddl(
     if tdb == "starrocks":
         from .etl_builder import build_create_table_sql
         from .ods_naming import kind_from_table
+
+        if primary_key:
+            # 有主键业务表 -> 主键镜像表（非分区，upsert）
+            return build_create_table_sql(
+                table, cols, if_not_exists=True, primary_key=primary_key,
+            )
 
         if kind_from_table(table) in ("inc", "snapshot"):
             # 分区形态（ods_x_day_inc / _day_snapshot）：dt 分区列统一 DATE + 表达式分区（自动建分区）

@@ -248,13 +248,16 @@ def normalize_jdbc_url(url: str, db_type: str, host: str, port: int, database: s
     return url
 
 
-def apply_ods_target_naming(intent: Dict[str, Any]) -> Dict[str, Any]:
-    """数据集成到数仓（StarRocks）时应用 ODS 分层命名规范。
+def apply_ods_target_naming(intent: Dict[str, Any], primary_key: str = "") -> Dict[str, Any]:
+    """数据集成到数仓（StarRocks）时应用 ODS 命名规范。
 
     - 目标端非 starrocks -> 原样返回（ES/MySQL/Mongo 目标不强制 ODS）
-    - 目标表未显式指定：增量 -> ods_<业务>_<周期>_inc；全量 -> ods_<业务>_<周期>_snapshot
+    - 源表有主键（primary_key 非空）-> 统一 ods_<业务> 主键镜像表（非分区，upsert），
+      不区分增量/全量形态（"最新状态镜像"，接受无历史）
+    - 源表无主键（明细/流水）-> 保留分区形态：增量 -> ods_<业务>_<周期>_inc；
+      全量 -> ods_<业务>_<周期>_snapshot
     - 目标表显式指定：以 ods_ 开头 -> 尊重；带形态后缀（缺前缀）-> 自动补 ods_；
-      普通业务名 -> 按 sync_type 形态生成
+      普通业务名 -> 按上述规则生成
     业务名 = 源表名去掉 ods_/dwd_ 前缀与形态后缀。
     """
     result = copy.deepcopy(intent)
@@ -265,9 +268,6 @@ def apply_ods_target_naming(intent: Dict[str, Any]) -> Dict[str, Any]:
         return result
     from .ods_naming import ODS_PREFIX, kind_from_table, kind_suffix, strip_prefixes
 
-    cycle = str(result.get("update_cycle") or "day").lower()
-    sync_type = str(result.get("sync_type") or "full").lower()
-    kind = "inc" if sync_type == "incremental" else "snapshot"
     target = str(result.get("target_table", "") or "").strip()
     if target.endswith("表") and "." not in target:
         target = target[:-1]
@@ -275,6 +275,22 @@ def apply_ods_target_naming(intent: Dict[str, Any]) -> Dict[str, Any]:
     # 中文/非法表名无法通过建表校验，回退用源表名生成 ODS 名
     if not re.fullmatch(r"[A-Za-z0-9_]+", target):
         target = ""
+
+    # 有主键业务表 -> 统一 ods_<业务>（主键镜像，忽略 sync_type/周期形态）
+    if primary_key:
+        if target and target.startswith(ODS_PREFIX):
+            return result  # 显式指定，尊重
+        if target and kind_from_table(target) != "base":
+            result["target_table"] = f"{ODS_PREFIX}{target}"
+            return result
+        base = strip_prefixes(target) or strip_prefixes(source_table)
+        result["target_table"] = f"{ODS_PREFIX}{base}"
+        return result
+
+    # 无主键明细 -> 保留分区形态（增量 inc / 全量 snapshot）
+    cycle = str(result.get("update_cycle") or "day").lower()
+    sync_type = str(result.get("sync_type") or "full").lower()
+    kind = "inc" if sync_type == "incremental" else "snapshot"
 
     if not target:
         base = strip_prefixes(source_table)

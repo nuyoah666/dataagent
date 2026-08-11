@@ -223,6 +223,7 @@ def build_create_table_sql(
     partitioned: bool = False,
     buckets: int = 10,
     if_not_exists: bool = False,
+    primary_key: str = "",
 ) -> str:
     """生成 StarRocks 建表 DDL（DUPLICATE KEY 模型）。
 
@@ -254,11 +255,20 @@ def build_create_table_sql(
     key_columns = [key_col]
     key_def = ", ".join(_quote_ident(k) for k in key_columns)
 
-    # 分桶列：key 之外优先数字列；否则用第一个 key 列
-    hash_col = next(
-        (c["name"] for c in columns if c["name"] not in key_columns and _base_type(c["type"]) in ("BIGINT", "INT", "LARGEINT")),
-        key_col,
-    )
+    if primary_key:
+        # 主键镜像表：主键列做 key 与分桶（必须存在于列定义）
+        pk_col = str(primary_key).strip().strip("`")
+        if pk_col not in names:
+            raise ValueError(f"主键列 {pk_col} 不在列定义中")
+        key_clause = f"PRIMARY KEY({_quote_ident(pk_col)})"
+        hash_col = pk_col
+    else:
+        key_clause = f"DUPLICATE KEY({key_def})"
+        # 分桶列：key 之外优先数字列；否则用第一个 key 列
+        hash_col = next(
+            (c["name"] for c in columns if c["name"] not in key_columns and _base_type(c["type"]) in ("BIGINT", "INT", "LARGEINT")),
+            key_col,
+        )
 
     # 表达式分区：按 dt 天级自动建分区（StarRocks 2.5+，写入自动创建，无需预设分区）
     partition_ddl = f"PARTITION BY date_trunc('day', `{PARTITION_COLUMN}`)\n" if partitioned else ""
@@ -266,7 +276,7 @@ def build_create_table_sql(
     ddl = (
         f"CREATE TABLE {'IF NOT EXISTS ' if if_not_exists else ''}{table} (\n"
         + ",\n".join(f"  {d}" for d in col_defs)
-        + f"\n) DUPLICATE KEY({key_def})\n"
+        + f"\n) {key_clause}\n"
         + partition_ddl
         + f"DISTRIBUTED BY HASH({_quote_ident(hash_col)}) BUCKETS {buckets}\n"
         + f'PROPERTIES ("replication_num" = "1")'

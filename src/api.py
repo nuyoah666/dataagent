@@ -693,6 +693,7 @@ def _enrich_mapping_with_schemas(view: dict, task: dict = None) -> dict:
                 str(target.get("table")),
                 view["field_mapping"],
                 target_db_type,
+                primary_key=str(((task or {}).get("source_schema") or {}).get("primary_key") or ""),
             )
         except Exception as e:
             logging.getLogger(__name__).warning(f"生成目标建表 DDL 失败: {e}")
@@ -732,7 +733,10 @@ async def create_target_table(task_id: str, request: Request):
         )
     if view.get("target_table_exists") is True:
         raise HTTPException(status_code=409, detail="目标表已存在，无需建表")
-    ddl = build_target_table_ddl(table, view.get("field_mapping") or [], target_db_type)
+    ddl = build_target_table_ddl(
+        table, view.get("field_mapping") or [], target_db_type,
+        primary_key=str((task.get("source_schema") or {}).get("primary_key") or ""),
+    )
     if not ddl:
         raise HTTPException(status_code=422, detail="字段映射无有效列，无法生成建表 DDL")
 

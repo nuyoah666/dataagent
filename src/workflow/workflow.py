@@ -122,7 +122,10 @@ class AgentWorkflow:
             if cfg and str(intent.get("target_db_type", "")).lower() == "starrocks":
                 from ..tools.ods_naming import kind_from_table
 
-                if kind_from_table(str(intent.get("target_table", ""))) != "base":
+                kind = kind_from_table(str(intent.get("target_table", "")))
+                primary_key = str((schema or {}).get("primary_key") or "")
+                # 分区明细表或主键镜像表都走 staging 装载（base 无主键的显式表除外）
+                if kind != "base" or primary_key:
                     from datetime import datetime
 
                     dt = datetime.now().strftime("%Y-%m-%d")
@@ -132,7 +135,8 @@ class AgentWorkflow:
                     result = {**result, "datax_config": cfg}
                     self.task_mgr.log(
                         task_id, "INFO",
-                        f"ODS 分区表: {intent.get('target_table')}，写入分区 dt={dt}",
+                        f"ODS 装载: {intent.get('target_table')}"
+                        + (f"（主键镜像 {primary_key}）" if primary_key else f"，分区 dt={dt}"),
                     )
 
             self.task_mgr.update_task(task_id, status=TaskStatus.CONFIG_DONE.value,
@@ -250,11 +254,12 @@ class AgentWorkflow:
             return None
         real_table = str(intent.get("target_table") or "")
         kind = kind_from_table(real_table)
-        if kind == "base":
-            return None
         columns = ((state.get("source_schema") or {}).get("columns")) or []
         if not columns:
             return None
+        primary_key = str((state.get("source_schema") or {}).get("primary_key") or "")
+        if kind == "base" and not primary_key:
+            return None  # 无主键显式 base 表：DataX 直写
 
         today = datetime.now()
         dt = today.strftime("%Y-%m-%d")
@@ -276,12 +281,15 @@ class AgentWorkflow:
                     start = today - timedelta(days=7)
                 dt = start.strftime("%Y-%m-%d")
 
+        load_mode = str(intent.get("sync_type") or "full").lower()
         return {
             "real_table": real_table,
             "staging": _staging_table_for(real_table),
             "columns": columns,
             "dt": dt,
             "date_field": date_field,
+            "primary_key": primary_key,
+            "load_mode": load_mode,
             "database": str(intent.get("target_database") or "").strip()
             or config.STARROCKS_CONFIG.get("database", ""),
         }
@@ -313,6 +321,8 @@ class AgentWorkflow:
             load_info["real_table"], load_info["staging"],
             load_info["columns"], load_info["dt"],
             date_field=load_info.get("date_field", ""),
+            primary_key=load_info.get("primary_key", ""),
+            load_mode=load_info.get("load_mode", "full"),
         )
         self._exec_starrocks_sql(task_id, sqls, load_info.get("database", ""))
         self.task_mgr.log(

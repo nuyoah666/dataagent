@@ -173,6 +173,8 @@ def build_ods_partition_load_sql(
     columns: List[Dict[str, Any]],
     dt: str,
     date_field: str = "",
+    primary_key: str = "",
+    load_mode: str = "full",
 ) -> List[str]:
     """分区装载 SQL：清窗口分区 -> INSERT SELECT（带 dt）-> DROP staging。
 
@@ -190,6 +192,18 @@ def build_ods_partition_load_sql(
     if not cols:
         raise ValueError("源表无列信息，无法生成分区装载 SQL")
     col_sql = ", ".join(f"`{c}`" for c in cols)
+    if primary_key:
+        # 主键镜像表（非分区）：全量 TRUNCATE+重灌（同步删除），增量 INSERT upsert（同 key 覆盖）
+        if load_mode == "incremental":
+            return [
+                f"INSERT INTO {real_table} ({col_sql}) SELECT {col_sql} FROM {staging_table}",
+                f"DROP TABLE IF EXISTS {staging_table}",
+            ]
+        return [
+            f"TRUNCATE TABLE {real_table}",
+            f"INSERT INTO {real_table} ({col_sql}) SELECT {col_sql} FROM {staging_table}",
+            f"DROP TABLE IF EXISTS {staging_table}",
+        ]
     if date_field:
         return [
             f"DELETE FROM {real_table} WHERE `dt` >= '{dt}'",

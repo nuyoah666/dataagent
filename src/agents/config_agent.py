@@ -93,14 +93,16 @@ class ConfigAgent(BaseAgent):
                 }
             intent = resolved
 
-        # 源表已解析为真实表名后，数仓目标（StarRocks）应用 ODS 分层命名
-        intent = apply_ods_target_naming(intent)
-        logger.info(f"意图: table={intent.get('source_table')}, "
-                     f"{intent.get('source_db_type')}->{intent.get('target_db_type')}")
-
-        # 4. 获取源表结构
+        # 4. 获取源表结构（主键信息用于 ODS 命名：有主键 -> 镜像表，无主键 -> 分区表）
         schema_result = self._get_source_schema(intent)
         logger.info(f"表结构: success={schema_result.get('success')}")
+
+        # 源表已解析为真实表名后，数仓目标（StarRocks）应用 ODS 命名规范
+        intent = apply_ods_target_naming(
+            intent, primary_key=str(schema_result.get("primary_key") or ""),
+        )
+        logger.info(f"意图: table={intent.get('source_table')}, "
+                     f"{intent.get('source_db_type')}->{intent.get('target_db_type')}")
 
         # 5. RAG 检索（按需触发：模板已覆盖的插件对不查文档，快乐路径零 RAG 依赖）
         rag_context = self._search_docs(intent) if self._should_search_docs(intent) else ""

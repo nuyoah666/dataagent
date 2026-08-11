@@ -811,3 +811,94 @@ class TestSpeedNormalize:
         speed = out["job"]["setting"]["speed"]
         assert speed["channel"] == 3
         assert "byte" not in speed
+
+
+class TestPrimaryMirrorNaming:
+    """ODS 主键镜像：有主键统一 ods_<业务>，无主键保留分区形态。"""
+
+    def _intent(self, **kw):
+        base = dict(
+            source_db_type="mysql", source_table="user_action_log",
+            target_db_type="starrocks", target_table="",
+            sync_type="full", update_cycle="day",
+        )
+        base.update(kw)
+        return base
+
+    def test_with_primary_key_full_ignores_form(self):
+        from src.tools.config_processor import apply_ods_target_naming
+
+        out = apply_ods_target_naming(self._intent(), primary_key="id")
+        assert out["target_table"] == "ods_user_action_log"
+
+    def test_with_primary_key_incremental_same_table(self):
+        from src.tools.config_processor import apply_ods_target_naming
+
+        out = apply_ods_target_naming(self._intent(sync_type="incremental"), primary_key="id")
+        assert out["target_table"] == "ods_user_action_log"
+
+    def test_without_primary_key_keeps_partition_form(self):
+        from src.tools.config_processor import apply_ods_target_naming
+
+        assert apply_ods_target_naming(self._intent(), primary_key="")["target_table"] == "ods_user_action_log_day_snapshot"
+        assert apply_ods_target_naming(self._intent(sync_type="incremental"), primary_key="")["target_table"] == "ods_user_action_log_day_inc"
+
+    def test_explicit_target_respected_with_primary(self):
+        from src.tools.config_processor import apply_ods_target_naming
+
+        out = apply_ods_target_naming(self._intent(target_table="ods_custom"), primary_key="id")
+        assert out["target_table"] == "ods_custom"
+
+
+class TestPrimaryMirrorDdl:
+    """主键镜像表 DDL：PRIMARY KEY 模型，非分区。"""
+
+    def test_build_create_table_primary_key(self):
+        from src.tools.etl_builder import build_create_table_sql
+
+        ddl = build_create_table_sql(
+            "ods_user", [{"name": "id", "type": "bigint"}, {"name": "name", "type": "varchar(50)"}],
+            primary_key="id",
+        )
+        assert "PRIMARY KEY(`id`)" in ddl
+        assert "DUPLICATE KEY" not in ddl
+        assert "PARTITION BY" not in ddl
+        assert "DISTRIBUTED BY HASH(`id`)" in ddl
+
+    def test_build_target_ddl_primary_key(self):
+        from src.tools.config_view import build_target_table_ddl
+
+        ddl = build_target_table_ddl(
+            "ods_user", [{"source": "id", "source_type": "bigint", "target": "id", "target_type": "BIGINT"}],
+            "starrocks", primary_key="id",
+        )
+        assert "PRIMARY KEY(`id`)" in ddl
+        assert "PARTITION BY" not in ddl
+
+
+class TestPrimaryMirrorLoad:
+    """主键镜像装载：全量 TRUNCATE+重灌，增量 upsert。"""
+
+    def test_full_truncate_then_insert(self):
+        from src.tools.incremental import build_ods_partition_load_sql
+
+        sqls = build_ods_partition_load_sql(
+            "ods_user", "stg_ods_user",
+            [{"name": "id", "type": "bigint"}, {"name": "name", "type": "varchar(50)"}],
+            "2026-08-11", primary_key="id", load_mode="full",
+        )
+        assert sqls[0] == "TRUNCATE TABLE ods_user"
+        assert "INSERT INTO ods_user (`id`, `name`) SELECT `id`, `name` FROM stg_ods_user" in sqls[1]
+        assert sqls[2] == "DROP TABLE IF EXISTS stg_ods_user"
+
+    def test_incremental_upsert(self):
+        from src.tools.incremental import build_ods_partition_load_sql
+
+        sqls = build_ods_partition_load_sql(
+            "ods_user", "stg_ods_user",
+            [{"name": "id", "type": "bigint"}, {"name": "name", "type": "varchar(50)"}],
+            "2026-08-11", primary_key="id", load_mode="incremental",
+        )
+        assert "TRUNCATE" not in sqls[0]
+        assert sqls[0].startswith("INSERT INTO ods_user")
+        assert len(sqls) == 2  # INSERT + DROP，无 DELETE/TRUNCATE
