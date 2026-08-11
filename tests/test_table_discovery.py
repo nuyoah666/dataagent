@@ -190,7 +190,7 @@ class TestConfigAgentAmbiguityGate:
         })
         assert state["current_step"] == "config_error"
         assert "明确指定 库.表" in state["error"]
-        assert len(state["table_candidates"]) == 2
+        assert "2 个候选" in state["error"]  # 候选通过错误提示引导用户明确选库.表
 
     def test_not_found_blocks_before_execution(self, monkeypatch):
         state = _run_config(monkeypatch, {"success": True, "candidates": []})

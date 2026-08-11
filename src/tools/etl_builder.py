@@ -117,7 +117,6 @@ def build_insert_sql(
     source_table: str,
     select_exprs: str,
     joins: Optional[List[str]] = None,
-    partition: Optional[str] = None,
     where: Optional[str] = None,
     *,
     partitioned: bool = False,
@@ -146,8 +145,7 @@ def build_insert_sql(
             f"DELETE FROM {target_table} WHERE `dt` = '{partition_date}'; "
             f"INSERT INTO {target_table} {select_sql}"
         )
-    partition_clause = f" PARTITION({partition})" if partition else ""
-    return f"INSERT OVERWRITE {target_table}{partition_clause} {select_sql}".strip()
+    return f"INSERT OVERWRITE {target_table} {select_sql}".strip()
 
 
 def build_passthrough_sql(
@@ -155,7 +153,6 @@ def build_passthrough_sql(
     source_table: str,
     columns: List[Dict[str, str]],
     *,
-    partition: Optional[str] = None,
     partition_date: Optional[str] = None,
     source_partitioned: bool = False,
     target_partitioned: bool = False,
@@ -168,7 +165,7 @@ def build_passthrough_sql(
     )
     return build_insert_sql(
         target_table, source_table, exprs["select"],
-        partition=partition, where=where,
+        where=where,
         partitioned=target_partitioned, partition_date=partition_date,
     )
 
@@ -179,7 +176,6 @@ def build_field_mapping_sql(
     columns: List[Dict[str, str]],
     field_mappings: List[Dict[str, str]],
     *,
-    partition: Optional[str] = None,
     partition_date: Optional[str] = None,
     source_partitioned: bool = False,
     target_partitioned: bool = False,
@@ -192,7 +188,7 @@ def build_field_mapping_sql(
     )
     return build_insert_sql(
         target_table, source_table, exprs["select"],
-        partition=partition, where=where,
+        where=where,
         partitioned=target_partitioned, partition_date=partition_date,
     )
 
@@ -203,7 +199,6 @@ def build_enum_mapping_sql(
     columns: List[Dict[str, str]],
     enum_mappings: List[Dict[str, str]],
     *,
-    partition: Optional[str] = None,
     partition_date: Optional[str] = None,
     source_partitioned: bool = False,
     target_partitioned: bool = False,
@@ -217,7 +212,7 @@ def build_enum_mapping_sql(
     )
     return build_insert_sql(
         target_table, source_table, exprs["select"], joins=exprs["joins"],
-        partition=partition, where=where,
+        where=where,
     )
 
 

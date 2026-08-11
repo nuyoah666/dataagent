@@ -177,7 +177,6 @@ class AgentWorkflow:
         logger.info(f"[task={task_id}] 进入人工审批等待")
         return {
             **state,
-            "awaiting_approval": True,
             "current_step": "awaiting_approval",
             "error": None,
         }

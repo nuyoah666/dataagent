@@ -163,13 +163,8 @@ class ETLConfigAgent(BaseAgent):
             # 表达式分区表在无数据写入时没有任何分区，SHOW PARTITIONS 返回空集会误判为非分区表
             source_partitioned = kind_from_table(source["table"]) in ("inc", "snapshot")
             target_partitioned = kind_from_table(target["table"]) in ("inc", "snapshot")
-            partition_name = None
-            if target_partitioned and source["kind"] in ("inc", "snapshot"):
-                partition_name = f"p{partition_date.replace('-', '')}"
-
             sql = self._build_sql(
                 intent, source, target, columns,
-                partition_name=partition_name,
                 partition_date=partition_date,
                 source_partitioned=source_partitioned,
                 target_partitioned=target_partitioned,
@@ -258,7 +253,6 @@ class ETLConfigAgent(BaseAgent):
         target: dict,
         columns: List[dict],
         *,
-        partition_name: Optional[str],
         partition_date: str,
         source_partitioned: bool,
         target_partitioned: bool = False,
@@ -268,7 +262,6 @@ class ETLConfigAgent(BaseAgent):
             return build_enum_mapping_sql(
                 target["table"], source["table"], columns,
                 intent.get("enum_mappings") or [],
-                partition=partition_name,
                 partition_date=partition_date,
                 source_partitioned=source_partitioned,
                 target_partitioned=target_partitioned,
@@ -277,14 +270,12 @@ class ETLConfigAgent(BaseAgent):
             return build_field_mapping_sql(
                 target["table"], source["table"], columns,
                 intent.get("field_mappings") or [],
-                partition=partition_name,
                 partition_date=partition_date,
                 source_partitioned=source_partitioned,
                 target_partitioned=target_partitioned,
             )
         return build_passthrough_sql(
             target["table"], source["table"], columns,
-            partition=partition_name,
             partition_date=partition_date,
             source_partitioned=source_partitioned,
             target_partitioned=target_partitioned,

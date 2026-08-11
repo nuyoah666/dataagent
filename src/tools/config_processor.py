@@ -620,7 +620,7 @@ def _build_content_from_intent(intent: Dict[str, Any]) -> List[Dict[str, Any]]:
             "password": intent.get("source_password", ""),
             "column": ["*"],
             "connection": [{
-                "jdbcUrl": [f"jdbc:mysql://{intent.get('source_host', '127.0.0.1')}:{intent.get('source_port', 3306)}/{intent.get('source_database', '')}?useSSL=false&serverTimezone=UTC"],
+                "jdbcUrl": [normalize_jdbc_url("", "mysql", intent.get('source_host', '127.0.0.1'), intent.get('source_port', 3306), intent.get('source_database', ''))],
                 "table": [intent.get("source_table", "")]
             }]
         }
@@ -656,10 +656,7 @@ def _build_content_from_intent(intent: Dict[str, Any]) -> List[Dict[str, Any]]:
             "password": intent.get("target_password", ""),
             "column": ["*"],
             "connection": [{
-                "jdbcUrl": (
-                    f"jdbc:mysql://{intent.get('target_host', '127.0.0.1')}:{intent.get('target_port', 3306)}/"
-                    f"{intent.get('target_database', '')}?useSSL=false&serverTimezone=UTC"
-                ),
+                "jdbcUrl": normalize_jdbc_url("", "mysql", intent.get('target_host', '127.0.0.1'), intent.get('target_port', 3306), intent.get('target_database', '')),
                 "table": [intent.get("target_table", "") or intent.get("source_table", "")]
             }]
         }

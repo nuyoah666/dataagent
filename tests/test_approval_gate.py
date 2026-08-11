@@ -111,7 +111,6 @@ def test_submit_pauses_at_approval(gate_agents):
     wf, task_id, result = _submit(gate_agents)
     # 挂起：未执行、状态 pending_approval
     assert result["current_step"] == "awaiting_approval"
-    assert result.get("awaiting_approval") is True
     assert gate_agents["exec"].calls == 0
     assert gate_agents["val"].calls == 0
     task = get_task_manager().get_task(task_id)

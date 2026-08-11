@@ -89,7 +89,6 @@ class ConfigAgent(BaseAgent):
                     "error": resolve_err or self._format_candidates(
                         intent.get("source_table", ""), candidates
                     ),
-                    "table_candidates": candidates or None,
                     "current_step": "config_error",
                 }
             intent = resolved
