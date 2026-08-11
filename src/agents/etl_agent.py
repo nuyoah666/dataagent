@@ -157,6 +157,30 @@ class ETLConfigAgent(BaseAgent):
             target = resolve_target_table(
                 conn, database, source["table"], source["kind"], intent.get("target_table", "")
             )
+
+            # 自动枚举识别：扫描源表结构（DDL），码值表有对应 code_type 才关联
+            # （避免误关联：识别只是候选，是否生效以 dim_mapping 数据为准）
+            if not intent.get("enum_mappings"):
+                from ..tools.code_map import list_code_types
+                from ..tools.etl_builder import detect_enum_columns
+
+                try:
+                    auto_enums = detect_enum_columns(columns)
+                    existing = set(list_code_types(conn) or [])
+                    mapped = [e for e in auto_enums if e["code_type"] in existing]
+                except Exception as e:
+                    logger.warning("自动枚举识别跳过: %s", e)
+                    mapped = []
+                if mapped:
+                    intent["enum_mappings"] = [
+                        {"column": e["column"], "code_type": e["code_type"]}
+                        for e in mapped
+                    ]
+                    if intent.get("transform_type", "passthrough") == "passthrough":
+                        intent["transform_type"] = "enum_mapping"
+                    logger.info(
+                        "自动枚举映射: %s", [e["code_type"] for e in mapped],
+                    )
             tables = set(list_tables(conn, database))
             target_exists = target["table"] in tables
             # 分区判断基于表名形态（_day_inc/_day_snapshot），不依赖 SHOW PARTITIONS：

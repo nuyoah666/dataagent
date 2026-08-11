@@ -12,6 +12,7 @@ SQL 由代码拼装，LLM 只负责解析"用户想怎么映射"。
 """
 
 import logging
+import re
 from datetime import datetime
 from typing import Dict, List, Optional
 
@@ -19,7 +20,7 @@ from .ods_naming import PARTITION_COLUMN, validate_table_name
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_CODE_MAP_TABLE = "dim_code_map"
+DEFAULT_CODE_MAP_TABLE = "dim_mapping"
 
 
 def default_partition_date() -> str:
@@ -284,15 +285,72 @@ def build_create_table_sql(
     return ddl
 
 
+_ENUM_COLUMN_KEYWORDS = (
+    "sex", "gender", "status", "state", "type", "category", "level",
+    "flag", "code", "product", "income", "biz", "source", "channel",
+)
+_NON_ENUM_KEYWORDS = ("name", "remark", "desc", "comment", "amount", "price",
+                      "money", "count", "num", "qty", "time", "date")
+
+
+def detect_enum_columns(
+    columns: List[Dict[str, str]],
+    primary_key: str = "",
+) -> List[Dict[str, str]]:
+    """扫描表结构（DDL/DESCRIBE），返回疑似枚举列 [{column, code_type}]。
+
+    确定性规则：
+      - 列类型必须是整数系（tinyint/smallint/int/bigint）或短字符串（char/varchar<=32）
+      - 列名（小写）含枚举语义关键词：sex/gender/status/type/category/level/code/product/income 等
+      - 排除主键、排除明显非码值列（name/amount/time/id 等）
+    仅产出"候选"，是否真正关联由码值表是否有对应 code_type 决定（避免误关联）。
+    """
+    pks = {str(primary_key or "").strip().lower()}
+    out = []
+    for col in (columns or []):
+        name = str(col.get("name", "") or "").strip()
+        raw_type = str(col.get("type", "") or "").lower()
+        base = raw_type.split("(")[0].strip()
+        if not name:
+            continue
+        name_l = name.lower()
+        if name_l in pks:
+            continue
+        # 类型闸门：整数系或短字符串
+        if base in ("tinyint", "smallint", "int", "integer", "bigint"):
+            pass
+        elif base in ("char", "varchar"):
+            m = re.search(r"\((\d+)\)", raw_type)
+            if m and int(m.group(1)) > 32:
+                continue
+        else:
+            continue
+        # 语义闸门：列名含枚举关键词，且不含明显的非码值词
+        if not any(k in name_l for k in _ENUM_COLUMN_KEYWORDS):
+            continue
+        if any(k in name_l for k in _NON_ENUM_KEYWORDS) and not any(
+            k in name_l for k in ("status", "type", "code", "level")
+        ):
+            continue
+        out.append({"column": name, "code_type": name_l})
+    return out
+
+
 def build_code_map_ddl(table: str = DEFAULT_CODE_MAP_TABLE) -> str:
-    """码值映射表 DDL（StarRocks）。"""
+    """码值映射表 DDL（StarRocks）。
+
+    id 自增主键，code_type+code 承载多枚举（sex/product_id/income...），
+    inserttime/updatetime 记录维护时间（upsert 时更新 updatetime）。
+    """
     return (
         f"CREATE TABLE IF NOT EXISTS {table} (\n"
-        f"  `code_type` VARCHAR(64) COMMENT '枚举类型，如 gender/status',\n"
+        f"  `id` BIGINT AUTO_INCREMENT COMMENT '自增主键',\n"
+        f"  `code_type` VARCHAR(64) COMMENT '枚举类型，如 sex/product_id/income',\n"
         f"  `code` VARCHAR(64) COMMENT '代码值',\n"
-        f"  `name` VARCHAR(128) COMMENT '可读名（中文）',\n"
-        f"  `remark` VARCHAR(255) COMMENT '备注'\n"
-        f") DUPLICATE KEY(`code_type`, `code`)\n"
-        f"DISTRIBUTED BY HASH(`code_type`) BUCKETS 10\n"
+        f"  `name` VARCHAR(128) COMMENT '中文名',\n"
+        f"  `inserttime` DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '插入时间',\n"
+        f"  `updatetime` DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '更新时间'\n"
+        f") PRIMARY KEY(`id`)\n"
+        f"DISTRIBUTED BY HASH(`id`) BUCKETS 10\n"
         f'PROPERTIES ("replication_num" = "1")'
     )

@@ -21,7 +21,11 @@ def ensure_code_map_table(conn, table: str = DEFAULT_CODE_MAP_TABLE) -> bool:
 
 
 def upsert_code_map(conn, entries: List[Dict[str, str]], table: str = DEFAULT_CODE_MAP_TABLE) -> int:
-    """全量刷新码值表（幂等）。entries: [{code_type, code, name, remark?}]。"""
+    """全量刷新码值表（幂等）。entries: [{code_type, code, name}]。
+
+    dim_mapping 为 PRIMARY KEY 模型：TRUNCATE + INSERT（全量覆盖），
+    inserttime 由表默认值填充，updatetime 同步刷新。
+    """
     if not entries:
         return 0
     ensure_code_map_table(conn, table)
@@ -30,20 +34,20 @@ def upsert_code_map(conn, entries: List[Dict[str, str]], table: str = DEFAULT_CO
         code_type = str(e.get("code_type", "")).strip()
         code = str(e.get("code", "")).strip()
         name = str(e.get("name", "")).strip()
-        remark = str(e.get("remark", "") or "")
         if not code_type or not code:
             continue
         value_rows.append(
-            f"('{code_type}', '{code}', '{name}', '{remark}')"
+            f"('{code_type}', '{code}', '{name}')"
         )
     if not value_rows:
         return 0
-    sql = (
-        f"INSERT OVERWRITE {table} (code_type, code, name, remark) "
-        f"VALUES {', '.join(value_rows)}"
-    )
+    sqls = [
+        f"TRUNCATE TABLE {table}",
+        f"INSERT INTO {table} (code_type, code, name) VALUES {', '.join(value_rows)}",
+    ]
     with conn.cursor() as cur:
-        cur.execute(sql)
+        for sql in sqls:
+            cur.execute(sql)
     conn.commit()
     return len(value_rows)
 

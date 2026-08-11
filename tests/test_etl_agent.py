@@ -178,7 +178,7 @@ class TestETLConfigAgent:
         )
         assert result["current_step"] == "config_complete", result.get("error")
         sql = result["etl_sql"]
-        assert "LEFT JOIN dim_code_map cm_0" in sql
+        assert "LEFT JOIN dim_mapping cm_0" in sql
         assert "cm_0.name AS `gender_name`" in sql
         assert "cm_0.code_type = 'gender'" in sql
         # 目标表不存在 -> DDL 需包含可读名列，保证 SELECT 列数与表结构一致
@@ -303,3 +303,39 @@ class TestLayerWordTarget:
 
         intent = _rule_intent("把 ods_user 加工到 dwd_user")
         assert intent["target_table"] == "dwd_user"
+
+
+class TestEnumAutoDetect:
+    """DDL 扫描自动识别枚举列（sex/product_id/income 等）。"""
+
+    def test_detect_enum_columns(self):
+        from src.tools.etl_builder import detect_enum_columns
+
+        columns = [
+            {"name": "id", "type": "bigint"},
+            {"name": "sex", "type": "tinyint"},
+            {"name": "product_id", "type": "bigint"},
+            {"name": "income", "type": "int"},
+            {"name": "amount", "type": "decimal(10,2)"},   # 金额，非码值
+            {"name": "create_time", "type": "datetime"},   # 时间，非码值
+            {"name": "remark", "type": "varchar(200)"},    # 备注，非码值
+        ]
+        out = detect_enum_columns(columns, primary_key="id")
+        types = {e["code_type"] for e in out}
+        assert types == {"sex", "product_id", "income"}
+        assert "amount" not in types and "create_time" not in types
+
+    def test_long_varchar_not_enum(self):
+        from src.tools.etl_builder import detect_enum_columns
+
+        out = detect_enum_columns([{"name": "status", "type": "varchar(100)"}])
+        assert out == []  # 长字符串按文本处理，不识别为码值
+
+    def test_code_map_ddl_new_structure(self):
+        from src.tools.etl_builder import build_code_map_ddl
+
+        ddl = build_code_map_ddl("dim_mapping")
+        assert "PRIMARY KEY(`id`)" in ddl
+        assert "`code_type`" in ddl
+        assert "`inserttime`" in ddl
+        assert "`updatetime`" in ddl
