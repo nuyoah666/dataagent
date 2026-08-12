@@ -12,13 +12,11 @@ import hashlib
 from datetime import datetime, timedelta
 import logging
 
-import jieba
 from elasticsearch import Elasticsearch
 from elasticsearch.helpers import bulk
 
 from ..base_rag import BaseRAG
 from . import register
-from ..stopwords import STOP_WORDS
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +44,6 @@ class ElasticsearchRAG(BaseRAG):
             "mappings": {
                 "properties": {
                     "text": {"type": "text", "analyzer": "ik_max_word", "search_analyzer": "ik_smart"},
-                    "text_jieba": {"type": "text", "analyzer": "ik_max_word", "search_analyzer": "ik_smart"},  # jieba 分词后的文本
                     "source": {"type": "keyword"},
                     "chunk_idx": {"type": "integer"},
                     "ingested_at": {"type": "date"},
@@ -93,10 +90,6 @@ class ElasticsearchRAG(BaseRAG):
     def _load_all_docs(self) -> list[dict]:
         from ..chunker import load_all_docs
         return load_all_docs(self.pdf_dir, self.corpus_dir, self.corpus_text_field)
-
-    def _tokenize_jieba(self, text: str) -> str:
-        words = jieba.cut_for_search(text)
-        return " ".join(w.strip() for w in words if w.strip() and w.strip() not in STOP_WORDS)
 
     def _hash_docs(self, source: str, docs: list[dict]) -> str:
         texts = [d["text"] for d in docs if d["source"] == source]
@@ -175,7 +168,6 @@ class ElasticsearchRAG(BaseRAG):
             count += 1
             source = {
                 "text": c["text"],
-                "text_jieba": self._tokenize_jieba(c["text"]),
                 "source": c["source"],
                 "heading": c.get("heading", ""),
                 "position": c.get("position", 0),
@@ -370,7 +362,7 @@ class ElasticsearchRAG(BaseRAG):
             "query": {
                 "multi_match": {
                     "query": query,
-                    "fields": ["text^1", "text_jieba^2"],
+                    "fields": ["text"],
                     "type": "best_fields",
                 }
             },
