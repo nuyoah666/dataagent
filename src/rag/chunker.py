@@ -136,6 +136,7 @@ def split_docs(docs: list[dict], chunk_size: int = 600, chunk_overlap: int = 120
                 "heading": heading,
                 "position": position,
                 "char_count": len(chunk_text),
+                "meta": doc.get("meta") or {},
             })
 
     return all_chunks
@@ -184,7 +185,10 @@ def _load_json_docs(directory: str, text_field: str = "text") -> list[dict]:
                     if text.strip():
                         src = obj.get("source", obj.get("title", obj.get("id", fname)))
                         heading = obj.get("heading", obj.get("section", ""))
-                        results.append({"text": text, "source": str(src), "heading": str(heading)})
+                        doc = {"text": text, "source": str(src), "heading": str(heading)}
+                        if obj.get("meta") is not None:
+                            doc["meta"] = obj["meta"]
+                        results.append(doc)
             except Exception:
                 pass
     return results

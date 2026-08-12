@@ -53,6 +53,13 @@ class ElasticsearchRAG(BaseRAG):
                     "heading": {"type": "keyword"},
                     "position": {"type": "integer"},
                     "char_count": {"type": "integer"},
+                    "meta_version": {"type": "integer"},
+                    "meta_supersedes_version": {"type": "integer"},
+                    "meta_severity": {"type": "keyword"},
+                    "meta_impact": {"type": "text"},
+                    "meta_root_cause": {"type": "text"},
+                    "meta_solution": {"type": "text"},
+                    "meta_updated_at": {"type": "keyword"},
                     "embedding": {
                         "type": "dense_vector",
                         "dims": self.emb_dim,
@@ -176,6 +183,16 @@ class ElasticsearchRAG(BaseRAG):
                 "ingested_at": datetime.now().isoformat(),
                 "chunk_idx": count,
             }
+            # 结构化元数据（事故版本/根因/处置），由 corpus meta 透传
+            meta = c.get("meta") or {}
+            if meta:
+                source["meta_version"] = meta.get("version")
+                source["meta_supersedes_version"] = meta.get("supersedes_version")
+                source["meta_severity"] = meta.get("severity", "")
+                source["meta_impact"] = meta.get("impact", "")
+                source["meta_root_cause"] = meta.get("root_cause", "")
+                source["meta_solution"] = meta.get("solution", "")
+                source["meta_updated_at"] = meta.get("updated_at", "")
             if self.embeddings is not None:
                 source["embedding"] = self.embeddings.embed_documents([c["text"]])[0]
             actions.append({"_index": self.index_name, "_id": str(count), "_source": source})

@@ -147,6 +147,16 @@ def build_corpus(store: Path, out: Path) -> dict:
             "source": f"ops_incident/{rec['incident_id']}",
             "heading": f"运维事故 - {rec['incident_id']} - {rec.get('title', '')[:60]}",
             "text": incident_to_text(rec),
+            # 结构化元数据（最新版）：灌库时透传到 ES，检索结果可显示版本/根因/处置
+            "meta": {
+                "version": int(rec.get("version") or 1),
+                "supersedes_version": rec.get("supersedes_version"),
+                "severity": rec.get("severity", ""),
+                "impact": rec.get("impact", ""),
+                "root_cause": rec.get("root_cause", ""),
+                "solution": rec.get("solution", ""),
+                "updated_at": rec.get("updated_at", ""),
+            },
         }
         for rec in records
     ]
