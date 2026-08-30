@@ -713,22 +713,26 @@ def _apply_schema_columns(config: Dict[str, Any], schema: Dict[str, Any]) -> Dic
             if spec is None or spec.column_style not in ("plain", "typed"):
                 continue
             if spec.column_style == "plain":
-                if role == "writer":
-                    _fill_plain_columns(plugin, columns)
+                # reader（mysqlreader 读源表）与 writer（ODS 镜像同构）都按源表
+                # 结构回填列名；此前只回填 writer，导致 starrocks->ES 等路径 reader
+                # 列为空、DataX 运行期才报 DBUtilErrorCode-03
+                _fill_plain_columns(plugin, columns, role)
             else:
                 _fill_typed_columns(plugin, columns, spec)
     return config
 
 
-def _fill_plain_columns(plugin: Dict[str, Any], columns: List[Dict[str, Any]]) -> None:
-    """plain 风格（mysqlwriter）：按源表结构重建列名。"""
+def _fill_plain_columns(
+    plugin: Dict[str, Any], columns: List[Dict[str, Any]], role: str = "writer",
+) -> None:
+    """plain 风格（mysqlreader/mysqlwriter）：按源表结构重建列名。"""
     col_names = [
         c.get("name", "") for c in columns
         if c.get("name") and c.get("name") != "_id"
     ]
     if col_names:
         plugin["parameter"]["column"] = col_names
-        logger.info(f"已根据表结构重建 {len(col_names)} 个 writer 字段")
+        logger.info(f"已根据表结构重建 {len(col_names)} 个 {role} 字段")
 
 
 def _fill_typed_columns(

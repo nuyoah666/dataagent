@@ -943,8 +943,13 @@ async function showDetail(taskId) {
       `<div class="tl-item"><span class="t">${fmtTime(l.created_at)}</span>${escapeHtml(l.action)}
        <span class="d">${escapeHtml(l.operator)}</span><div class="audit-detail">${escapeHtml(l.detail || '')}</div></div>`).join('');
     const type = TYPE_LABELS[task.task_type] || escapeHtml(task.task_type || '—');
+    const diagSrc = task.ops_diagnosis && task.ops_diagnosis.task_id && task.ops_diagnosis.task_id !== task.task_id
+      ? `<div style="margin-bottom:6px">诊断对象：<a href="#" onclick="showDetail('${escapeHtml(task.ops_diagnosis.task_id)}');return false;" style="font-family:monospace">${escapeHtml(task.ops_diagnosis.task_id)}</a> <span style="color:var(--muted)">（点击查看原任务）</span></div>` : '';
+    const diagOps = task.ops_diagnosis && task.ops_diagnosis.ops_task_id
+      ? `<div style="margin-bottom:6px">诊断任务：<a href="#" onclick="showDetail('${escapeHtml(task.ops_diagnosis.ops_task_id)}');return false;" style="font-family:monospace">${escapeHtml(task.ops_diagnosis.ops_task_id)}</a> <span style="color:var(--muted)">（运维 Agent）</span></div>` : '';
     const diag = task.ops_diagnosis ? `
       <div class="section-title">运维诊断</div>
+      ${diagSrc}${diagOps}
       <div>根因：<b>${escapeHtml(task.ops_diagnosis.root_cause || '')}</b></div>
       <div style="margin-top:4px">影响：${escapeHtml(task.ops_diagnosis.impact || '')}</div>
       <div>置信度：${task.ops_diagnosis.confidence ?? ''}（来源：${escapeHtml(task.ops_diagnosis.source || '')}）</div>

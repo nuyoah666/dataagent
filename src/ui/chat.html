@@ -371,6 +371,7 @@ async function diagnose(taskId) {
   try {
     const r = await api('/ops/diagnose', {method:'POST', headers:Object.assign({'Content-Type':'application/json'}, headers()), body: JSON.stringify({task_id: taskId})});
     card.innerHTML = `<div class="meta">运维诊断完成</div>
+      <div style="color:var(--muted);font-size:12px;margin-bottom:4px">诊断对象：<span style="font-family:monospace">${escapeHtml(r.diagnose_task_id || taskId)}</span>（运维任务 <span style="font-family:monospace">${escapeHtml(r.task_id || '—')}</span>）</div>
       <b>根因：</b>${escapeHtml((r.diagnosis||{}).root_cause || '—')}<br>
       <b>处置建议：</b>${escapeHtml(((r.diagnosis||{}).solution_steps||[]).join('；') || '—')}<br>
       <b>事故沉淀：</b>${escapeHtml((r.record||{}).summary || '—')}`;

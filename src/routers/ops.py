@@ -47,11 +47,20 @@ async def ops_diagnose(req: OpsDiagnoseRequest):
         result = await asyncio.to_thread(
             _run_with_slot, wf.run, query,
             diagnose_task_id=task_id,
+            parent_task_id=task_id,  # 运维任务挂到被诊断任务下，便于串联追溯
         )
         diagnosis = result.get("ops_diagnosis") or {}
         record = result.get("ops_record_result") or {}
+        ops_task_id = result.get("_task_id")
+        # 回写诊断结果到被诊断的源任务：在源任务详情页即可查看根因/处置，
+        # 并带上运维任务 ID 形成双向链接
+        if diagnosis:
+            tm.update_task(
+                task_id,
+                ops_diagnosis={**diagnosis, "ops_task_id": ops_task_id},
+            )
         return {
-            "task_id": result.get("_task_id"),
+            "task_id": ops_task_id,
             "diagnose_task_id": task_id,
             "status": result.get("current_step"),
             "error": result.get("error"),

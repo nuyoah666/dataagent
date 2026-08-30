@@ -15,7 +15,7 @@ def _cfg():
         "job": {
             "setting": {"speed": {"channel": 1}},
             "content": [{
-                "reader": {"name": "mysqlreader", "parameter": {"username": "root"}},
+                "reader": {"name": "mysqlreader", "parameter": {"username": "root", "column": ["id"]}},
                 "writer": {"name": "elasticsearchwriter", "parameter": {"endpoint": "http://localhost:9200"}},
             }],
         }

@@ -72,6 +72,17 @@ class DataXTool:
                     "job_name": job_name,
                 }
 
+            # 预检：最终配置缺 reader 读取列时快速失败，避免启动 JVM 跑一分钟
+            # 才抛 DataX 退出码 1（DBUtilErrorCode-03）。这是配置管线的最后防线。
+            preflight = _preflight_readable(datax_config)
+            if preflight:
+                self._cancel_events.pop(job_name, None)
+                return {
+                    "success": False,
+                    "error": preflight,
+                    "job_name": job_name,
+                }
+
             # 写入配置文件：同目录临时文件 + fsync + 原子替换，避免半截 JSON。
             config_path = os.path.join(self.work_dir, f"{job_name}.json")
             self._atomic_write_json(config_path, datax_config)
@@ -342,6 +353,33 @@ class DataXTool:
 # ---- 单例 ----
 
 _datax_tool: Optional[DataXTool] = None
+
+
+def _preflight_readable(datax_config: Dict[str, Any]) -> str:
+    """执行前预检：reader 必须有可读取的列（或自定义 SQL）。
+
+    返回非空字符串表示不可执行（错误信息）；返回空串表示通过。
+    DataX mysqlreader 在 column/querySql 皆空时会运行期报
+    DBUtilErrorCode-03「您未配置读取数据库表的列信息」。
+    """
+    try:
+        contents = datax_config["job"]["content"]
+    except (KeyError, TypeError):
+        return ""  # 结构问题交给 Pydantic/校验层，这里只管列缺失
+    for idx, item in enumerate(contents):
+        reader = (item or {}).get("reader") or {}
+        name = reader.get("name", "")
+        param = reader.get("parameter") or {}
+        if name in ("mysqlreader",):
+            cols = [c for c in (param.get("column") or []) if str(c).strip()]
+            extra = param if isinstance(param, dict) else {}
+            has_sql = bool(extra.get("querySql") or extra.get("querySqls"))
+            if not cols and not has_sql:
+                return (
+                    f"reader[{idx}] 缺少读取列：mysqlreader 必须配置非空 column 或 querySql"
+                    "（请检查表结构是否成功获取）"
+                )
+    return ""
 
 
 def get_datax_tool() -> DataXTool:

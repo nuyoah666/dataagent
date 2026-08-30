@@ -528,6 +528,38 @@ class TestSchemaColumns:
         assert types["name"] == "keyword"
         assert types["desc"] == "text"
 
+    def test_reader_columns_backfilled_from_schema(self):
+        # 回归：starrocks(mysqlreader) -> elasticsearch 走 intent 兜底构建时，
+        # reader plain 列此前不回填，导致 DataX 运行期报 DBUtilErrorCode-03
+        # 「您未配置读取数据库表的列信息」（退出码 1）。
+        schema = {
+            "success": True,
+            "columns": [
+                {"name": "id", "type": "bigint"},
+                {"name": "event_type", "type": "varchar(32)"},
+                {"name": "event_time", "type": "datetime"},
+            ],
+        }
+        intent = _intent(source_db_type="starrocks", source_port=9031,
+                         source_username="datax", source_password="pw",
+                         source_table="ods_user_action_log",
+                         target_table="test_user_action_log")
+        result = process_config(intent, schema, llm_config=None)
+        assert result["success"] is True, result.get("errors")
+        reader = result["config"]["job"]["content"][0]["reader"]
+        assert reader["name"] == "mysqlreader"
+        assert reader["parameter"]["column"] == ["id", "event_type", "event_time"]
+        # 执行预检也应通过（最终配置可读）
+        from src.tools.datax_tool import _preflight_readable
+        assert _preflight_readable(result["config"]) == ""
+
+    def test_preflight_rejects_empty_reader_columns(self):
+        from src.tools.datax_tool import _preflight_readable
+        bad = {"job": {"content": [{
+            "reader": {"name": "mysqlreader", "parameter": {"username": "u", "column": []}}
+        }]}}
+        assert "缺少读取列" in _preflight_readable(bad)
+
     def test_mysql_writer_connection_filled(self):
         intent = _intent(
             target_db_type="mysql",

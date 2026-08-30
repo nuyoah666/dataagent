@@ -138,7 +138,7 @@ def test_retry_rejects_running_task(monkeypatch):
 def _datax_cfg():
     return {
         "job": {"content": [{
-            "reader": {"name": "mysqlreader", "parameter": {}},
+            "reader": {"name": "mysqlreader", "parameter": {"column": ["id"]}},
             "writer": {"name": "elasticsearchwriter", "parameter": {}},
         }]}
     }
