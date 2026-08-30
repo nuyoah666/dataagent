@@ -497,8 +497,10 @@ def _fix_writer(item: Dict[str, Any], intent: Dict[str, Any]):
         if not isinstance(param.get("dynamic"), bool):
             param["dynamic"] = True
         # cleanup=true 会删除并重建目标索引（数据丢失风险，见事故库 incident-005），
-        # 一律强制关闭；同索引重复全量同步会累积数据，但不破坏已有数据
+        # 一律强制关闭。幂等性改由 primaryKeyInfo + actionType=index 保证：
+        # 文档 _id=业务主键，重复写入按 _id 覆盖、不累积（见 _apply_es_primary_key）
         param["cleanup"] = False
+        param.setdefault("actionType", "index")
 
     elif spec.name == "mongodbwriter":
         param["address"] = [
@@ -719,7 +721,52 @@ def _apply_schema_columns(config: Dict[str, Any], schema: Dict[str, Any]) -> Dic
                 _fill_plain_columns(plugin, columns, role)
             else:
                 _fill_typed_columns(plugin, columns, spec)
+    _apply_es_primary_key(config, schema)
     return config
+
+
+def _detect_pk_columns(schema: Dict[str, Any]) -> List[str]:
+    """探测源表主键列（用于 ES 文档 _id / StarRocks 主键表）。
+
+    依次：schema.primary_key -> 列标记（MySQL 的 key=PRI / StarRocks 的 key=true）
+    -> 兜底列名 id。StarRocks 的 DESCRIBE Key 列返回 'true'/'false' 而非 'PRI'。
+    """
+    schema = schema or {}
+    pk = str(schema.get("primary_key") or "").strip()
+    if pk and pk.lower() != "_id":
+        return [pk]
+    for col in schema.get("columns") or []:
+        name = str(col.get("name", "")).strip()
+        if not name or name.lower() == "_id":
+            continue
+        if str(col.get("key", "")).strip().upper() in ("PRI", "TRUE", "YES", "1"):
+            return [name]
+    names = {str(c.get("name", "")).lower() for c in (schema.get("columns") or [])}
+    return ["id"] if "id" in names else []
+
+
+def _apply_es_primary_key(config: Dict[str, Any], schema: Dict[str, Any]) -> None:
+    """ES writer：用业务主键作为文档 _id，actionType=index 按 _id upsert。
+
+    不配置时 ES 自动生成随机 _id，全量重跑/增量回灌会产生重复文档（同一份数据
+    累积成多份）。配置后同一主键重复写入即覆盖，天然幂等（等价 DataWorks 的
+    primaryKeyInfo）。无主键表（纯流水）保留 ES 自动 _id。
+    """
+    pk_cols = _detect_pk_columns(schema)
+    for item in config.get("job", {}).get("content", []):
+        writer = item.get("writer") or {}
+        if writer.get("name") != "elasticsearchwriter":
+            continue
+        param = writer.setdefault("parameter", {})
+        param["actionType"] = "index"  # 按 _id index=upsert
+        if pk_cols:
+            param["primaryKeyInfo"] = {
+                "column": pk_cols,
+                "fieldDelimiter": ",",
+                "type": "specific",
+            }
+        else:
+            param.pop("primaryKeyInfo", None)
 
 
 def _fill_plain_columns(

@@ -259,13 +259,51 @@ class ValidationTool:
             }
     
     def _check_es_uniqueness(self, config: DatabaseConfig, table_name: str, primary_key: str) -> Dict[str, Any]:
-        """检查 Elasticsearch 主键唯一性。"""
-        # ES 使用 _id 作为主键，天然唯一
-        return {
-            "supported": True,
-            "is_unique": True,
-            "message": "Elasticsearch 使用 _id 作为主键，天然唯一"
-        }
+        """检查 Elasticsearch 主键唯一性。
+
+        配置了 primaryKeyInfo 后，ES 文档 _id = 业务主键（写入按 _id upsert，
+        天然幂等）。这里按业务主键字段做 terms 聚合，找出重复桶作为纵深校验
+        （也能兜住未配主键映射、随机 _id 导致的重复写入）。
+        """
+        from .db import es_client
+
+        validate_identifier(table_name, allow_qualified=False, field="索引名")
+        if not primary_key or primary_key == "_id":
+            return {
+                "supported": True, "is_unique": True,
+                "message": "Elasticsearch 文档 _id 天然唯一（未按业务主键映射）",
+            }
+        validate_identifier(primary_key, allow_qualified=False, field="主键列名")
+        try:
+            with es_client(
+                host=config.host, port=config.port,
+                username=config.username, password=config.password,
+            ) as es:
+                total = es.count(index=table_name)["count"]
+                res = es.search(
+                    index=table_name, size=0,
+                    aggregations={
+                        "dup": {"terms": {
+                            "field": primary_key, "min_doc_count": 2, "size": 20}}
+                    },
+                )
+                duplicate_groups = len(res["aggregations"]["dup"]["buckets"])
+            is_unique = duplicate_groups == 0
+            return {
+                "supported": True,
+                "is_unique": is_unique,
+                "total_records": total,
+                "duplicate_groups": duplicate_groups,
+                "message": (
+                    f"Elasticsearch 主键 {primary_key} 唯一性通过（{total} 条文档无重复）"
+                    if is_unique else
+                    f"Elasticsearch 主键 {primary_key} 存在 {duplicate_groups} 组重复"
+                ),
+            }
+        except Exception as e:
+            # 字段未建索引/映射缺失等：标记不支持，跳过而非误判
+            logger.warning(f"ES 唯一性校验跳过: {e}")
+            return {"supported": False, "message": f"ES 唯一性校验不可用: {e}"}
     
     def _generate_summary(
         self,

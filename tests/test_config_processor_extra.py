@@ -553,6 +553,41 @@ class TestSchemaColumns:
         from src.tools.datax_tool import _preflight_readable
         assert _preflight_readable(result["config"]) == ""
 
+    def test_es_writer_uses_business_pk_as_doc_id(self):
+        # ES 目标：用业务主键作为文档 _id（primaryKeyInfo + actionType=index），
+        # 否则 ES 随机 _id 导致全量重跑/增量回灌产生重复文档。
+        schema = {
+            "success": True,
+            "primary_key": "id",
+            "columns": [
+                {"name": "id", "type": "bigint", "key": "PRI"},
+                {"name": "event_type", "type": "varchar(32)", "key": ""},
+            ],
+        }
+        intent = _intent(source_db_type="mysql", target_db_type="elasticsearch",
+                         target_table="es_idx")
+        result = process_config(intent, schema, llm_config=None)
+        assert result["success"] is True, result.get("errors")
+        w = result["config"]["job"]["content"][0]["writer"]["parameter"]
+        assert w["actionType"] == "index"
+        assert w["primaryKeyInfo"] == {"column": ["id"], "fieldDelimiter": ",", "type": "specific"}
+
+    def test_es_pk_detected_from_starrocks_key_flag(self):
+        # StarRocks DESCRIBE 的 Key 列返回 'true' 而非 'PRI'，主键探测需兼容。
+        from src.tools.config_processor import _detect_pk_columns
+        schema = {
+            "primary_key": None,
+            "columns": [
+                {"name": "id", "type": "bigint", "key": "true"},
+                {"name": "uid", "type": "bigint", "key": "false"},
+            ],
+        }
+        assert _detect_pk_columns(schema) == ["id"]
+        # 无主键、无 id 列 -> 空（保留 ES 自动 _id）
+        schema2 = {"primary_key": None, "columns": [
+            {"name": "event", "type": "varchar", "key": "false"}]}
+        assert _detect_pk_columns(schema2) == []
+
     def test_preflight_rejects_empty_reader_columns(self):
         from src.tools.datax_tool import _preflight_readable
         bad = {"job": {"content": [{
