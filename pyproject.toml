@@ -18,7 +18,6 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "pydantic>=2.6.0",
     "requests>=2.31.0",
-    "jsonschema>=4.20.0",
     "loguru>=0.7.0",
 
     # Web API

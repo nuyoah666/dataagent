@@ -7,7 +7,9 @@ LLM 输出 → 字段标准化 → JSON Schema 校验 → 模板兜底
 import copy
 import json
 import logging
-import jsonschema
+from pydantic import ValidationError
+
+from .datax_models import DataXConfig
 from ..config import config
 from .intent_rules import normalize_db_type  # noqa: F401  re-export
 import re
@@ -804,114 +806,54 @@ def _normalize_mongo_write_mode(param: Dict[str, Any]) -> None:
 
 
 # ================================================================== #
-#  2. JSON Schema 校验
+#  2. Pydantic 严格校验
 # ================================================================== #
 
-_DATAX_SCHEMA = {
-    "type": "object",
-    "required": ["job"],
-    "properties": {
-        "job": {
-            "type": "object",
-            "required": ["content"],
-            "properties": {
-                "setting": {
-                    "type": "object",
-                    "properties": {
-                        "speed": {"type": "object"},
-                        "errorLimit": {"type": "object"},
-                    }
-                },
-                "content": {
-                    "type": "array",
-                    "minItems": 1,
-                    "items": {
-                        "type": "object",
-                        "required": ["reader", "writer"],
-                        "properties": {
-                            "reader": {
-                                "type": "object",
-                                "required": ["name", "parameter"],
-                            },
-                            "writer": {
-                                "type": "object",
-                                "required": ["name", "parameter"],
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
+# 判别联合中用于「插件名」的 Literal，出现在错误路径里时折叠掉，让路径更短更可读
+_PLUGIN_TAGS = {
+    "mysqlreader", "mongodbreader", "mysqlwriter",
+    "elasticsearchwriter", "mongodbwriter",
 }
 
 
+def _format_error_path(loc) -> str:
+    """把 pydantic 错误元组路径转成 datax 风格：job.content[0].reader.parameter.password。"""
+    parts = []
+    for seg in loc:
+        if isinstance(seg, int):
+            parts.append(f"[{seg}]")
+        elif isinstance(seg, str) and seg in _PLUGIN_TAGS:
+            continue  # 折叠判别联合插入的插件名标签
+        else:
+            parts.append(str(seg))
+    path = ""
+    for part in parts:
+        if part.startswith("["):
+            path += part
+        else:
+            path = f"{path}.{part}" if path else part
+    return path
+
+
 def validate_datax_config(config: Dict[str, Any]) -> Tuple[bool, List[str]]:
-    """校验 DataX 配置是否符合 Schema。
+    """用 Pydantic 严格模型校验 DataX 配置（判别联合 + 类型 + 跨字段业务规则）。
 
     Returns:
         (is_valid, error_messages)
     """
-    errors = []
+    if not isinstance(config, dict):
+        return False, ["DataX 配置必须是 JSON 对象"]
 
-    # 基本结构检查
-    if "job" not in config:
-        errors.append("缺少顶层 'job' 字段")
-        return False, errors
-
-    job = config["job"]
-    content = job.get("content", [])
-    if not content:
-        errors.append("'job.content' 为空")
-        return False, errors
-
-    for i, item in enumerate(content):
-        if "reader" not in item:
-            errors.append(f"content[{i}] 缺少 'reader'")
-        else:
-            reader = item["reader"]
-            if not reader.get("name"):
-                errors.append(f"content[{i}].reader.name 为空")
-            if not reader.get("parameter"):
-                errors.append(f"content[{i}].reader.parameter 为空")
-
-        if "writer" not in item:
-            errors.append(f"content[{i}] 缺少 'writer'")
-        else:
-            writer = item["writer"]
-            if not writer.get("name"):
-                errors.append(f"content[{i}].writer.name 为空")
-            if not writer.get("parameter"):
-                errors.append(f"content[{i}].writer.parameter 为空")
-
-        # DataX JDBC 插件硬性要求非空用户名/密码（getNecessaryValue），
-        # 空密码会在引擎启动后报 DBUtilErrorCode-03，提前到配置阶段给出可操作提示
-        for role_name, plugin in (("reader", item.get("reader")), ("writer", item.get("writer"))):
-            name = str((plugin or {}).get("name", "")).lower()
-            if name in ("mysqlreader", "mysqlwriter", "rdbmsreader", "rdbmswriter"):
-                param = plugin.get("parameter") or {}
-                if not str(param.get("username", "")).strip():
-                    errors.append(
-                        f"content[{i}].{role_name} 用户名为空：DataX {name} 要求非空用户名"
-                    )
-                if not str(param.get("password", "")).strip():
-                    hint = (
-                        "目标端为 StarRocks 时，root 无密码账号不被 DataX 接受，"
-                        "需创建带密码的专用同步账号并在 .env 配置 STARROCKS_USERNAME/PASSWORD"
-                        if name == "mysqlwriter" else
-                        "请在 .env 配置源库凭据（MYSQL_USERNAME/MYSQL_PASSWORD）"
-                    )
-                    errors.append(
-                        f"content[{i}].{role_name} 密码为空：DataX {name} 要求非空密码。{hint}"
-                    )
-
-    # jsonschema 校验（硬依赖）
     try:
-        jsonschema.validate(config, _DATAX_SCHEMA)
-    except jsonschema.ValidationError as e:
-        errors.append(f"Schema 校验失败: {e.message}")
-
-    return len(errors) == 0, errors
+        DataXConfig.model_validate(config)
+        return True, []
+    except ValidationError as exc:
+        errors: List[str] = []
+        for err in exc.errors():
+            path = _format_error_path(err.get("loc", ()))
+            msg = err.get("msg", "").removeprefix("Value error, ")
+            errors.append(f"{path}: {msg}" if path else msg)
+        return False, errors
 
 
 # ================================================================== #
