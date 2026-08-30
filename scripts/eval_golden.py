@@ -121,6 +121,37 @@ def eval_ops() -> Tuple[int, int, List[str]]:
     return total, failed, errors
 
 
+def eval_trajectory() -> Tuple[int, int, List[str]]:
+    """轨迹（过程层）评测：对任务日志序列做确定性断言。
+
+    与结果层评测互补：同样"成功"的任务，也要验证审批先于执行、
+    拒绝后不执行、增量必更新水位等过程约束。负样本验证检查器自身有效。
+    """
+    from src.eval.trajectory import check_trajectory
+
+    total = failed = 0
+    errors: List[str] = []
+    for case in _load("trajectory_cases.json"):
+        total += 1
+        violations = check_trajectory(case["rules"], case["logs"])
+        expect_pass = case.get("expect_pass", True)
+        if expect_pass:
+            if violations:
+                failed += 1
+                errors.append(f"{case['id']}: 期望通过但有违规: {violations}")
+        else:
+            needle = case.get("expected_error_contains", "")
+            if not violations:
+                failed += 1
+                errors.append(f"{case['id']}: 负样本未被检查器拦住")
+            elif needle and needle not in violations[0]:
+                failed += 1
+                errors.append(
+                    f"{case['id']}: 违规信息不含 {needle!r}: {violations[0]}"
+                )
+    return total, failed, errors
+
+
 def run_all() -> Dict[str, Any]:
     report = {}
     for name, fn in [
@@ -128,6 +159,7 @@ def run_all() -> Dict[str, Any]:
         ("integration", eval_integration),
         ("etl", eval_etl),
         ("ops", eval_ops),
+        ("trajectory", eval_trajectory),
     ]:
         total, failed, errors = fn()
         report[name] = {"total": total, "failed": failed, "errors": errors}

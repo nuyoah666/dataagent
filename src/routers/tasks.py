@@ -164,6 +164,46 @@ async def reject_task(task_id: str, request: Request):
         raise HTTPException(status_code=409, detail="只有待审批任务可以拒绝")
     return {"task_id": task_id, "status": result.get("status"), "message": "已拒绝执行"}
 
+class BadCaseRequest(BaseModel):
+    """Bad case 回流备注。"""
+
+    note: str = ""
+
+
+@router.post("/tasks/{task_id}/badcase")
+async def reap_badcase(task_id: str, req: BadCaseRequest, request: Request):
+    """把失败/取消任务沉淀为 Bad Case（评测数据飞轮入口）。
+
+    素材写入 evals/backlog/bad_cases.jsonl，人工分诊后转入 golden cases。
+    """
+    tm = get_task_manager()
+    task = tm.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if task.get("status") not in ("failed", "cancelled"):
+        raise HTTPException(status_code=409, detail="只有失败/已取消的任务可以沉淀为 Bad Case")
+    from src.eval.badcase import reap_bad_case
+
+    operator = request.headers.get("X-Operator", "system")[:50]
+    logs = await asyncio.to_thread(tm.get_task_logs, task_id)
+    case = await asyncio.to_thread(reap_bad_case, task, logs, (req.note or "")[:500], operator)
+    tm.audit(task_id, "badcase_reap", operator=operator, detail=(req.note or "")[:200])
+    if case.get("duplicate"):
+        return {"task_id": task_id, "duplicate": True, "message": "该任务已沉淀过"}
+    return {
+        "task_id": task_id, "duplicate": False,
+        "message": "已沉淀到 evals/backlog/bad_cases.jsonl，待人工分诊后转入回归集",
+    }
+
+
+@router.get("/evals/badcases")
+async def list_badcases(limit: int = 50):
+    """查看已回流的 bad case 素材（分诊队列）。"""
+    from src.eval.badcase import list_backlog
+
+    return {"cases": list_backlog(min(int(limit), 500))}
+
+
 @router.get("/tasks/{task_id}/config")
 async def get_task_config(task_id: str):
     """返回任务配置视图（字段映射 / where / 连接信息 / 原始 JSON）。"""

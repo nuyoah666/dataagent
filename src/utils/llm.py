@@ -3,16 +3,38 @@
 默认所有 Agent 共用全局 LLM_MODEL（线程安全的懒加载缓存），
 同时支持按任务类型覆盖模型（见 config.AGENT_MODELS），
 统一管理模型、超时、重试与 API Key 校验。
+
+Token 度量：每次调用的 prompt/completion/cached tokens 与耗时
+通过任务上下文（ContextVar）累加到任务记录 llm_usage 字段，
+供任务详情与成本观测使用（无任务上下文时忽略）。
 """
 import json
 import logging
 import re
+import time
+from contextvars import ContextVar
 from functools import lru_cache
 from typing import Any, Dict, Optional
 
 from ..config import config
 
 logger = logging.getLogger(__name__)
+
+# 当前 LLM 调用归属的任务（workflow.run 设置；线程内有效）
+_task_id_ctx: ContextVar[Optional[str]] = ContextVar("llm_task_id", default=None)
+
+
+def bind_task_context(task_id: Optional[str]):
+    """绑定任务上下文，返回 reset token（with 语义请用 try/finally reset）。"""
+    return _task_id_ctx.set(task_id)
+
+
+def reset_task_context(token) -> None:
+    _task_id_ctx.reset(token)
+
+
+def current_task_id() -> Optional[str]:
+    return _task_id_ctx.get()
 
 
 @lru_cache(maxsize=8)
@@ -151,5 +173,44 @@ def _invoke_json(system: str, human: str, llm: Any) -> Dict[str, Any]:
     # 注意：必须传纯消息对象而非 ("system", text) 元组——
     # 元组会被 ChatPromptTemplate 当作模板解析，提示词里的 JSON 大括号
     # （如 {"source_db_type": ...}）会被误识别为模板变量导致调用失败。
+    t0 = time.time()
     result = runnable.invoke([SystemMessage(content=system), HumanMessage(content=human)])
+    latency_ms = round((time.time() - t0) * 1000, 1)
+    try:
+        _record_usage(_extract_usage(result, runnable), latency_ms)
+    except Exception as e:  # 度量失败绝不影响主链路
+        logger.debug("LLM token 度量记录失败（忽略）: %s", e)
     return parse_llm_json(getattr(result, "content", result))
+
+
+def _extract_usage(result: Any, runnable: Any) -> Dict[str, Any]:
+    """从 LangChain 响应中提取 token 用量（兼容 usage_metadata 与原始 token_usage）。"""
+    usage = {"prompt_tokens": 0, "completion_tokens": 0, "cached_tokens": 0, "model": ""}
+    um = getattr(result, "usage_metadata", None)
+    if isinstance(um, dict):
+        usage["prompt_tokens"] = int(um.get("input_tokens") or 0)
+        usage["completion_tokens"] = int(um.get("output_tokens") or 0)
+        details = um.get("input_token_details") or {}
+        usage["cached_tokens"] = int(details.get("cache_read") or 0)
+    rm = getattr(result, "response_metadata", None) or {}
+    tu = rm.get("token_usage") or {}
+    if not usage["prompt_tokens"] and tu:
+        usage["prompt_tokens"] = int(tu.get("prompt_tokens") or 0)
+        usage["completion_tokens"] = int(tu.get("completion_tokens") or 0)
+        cached = (tu.get("prompt_tokens_details") or {}).get("cached_tokens")
+        usage["cached_tokens"] = int(cached or 0)
+    usage["model"] = (
+        rm.get("model_name") or rm.get("model")
+        or getattr(runnable, "model_name", "") or ""
+    )
+    return usage
+
+
+def _record_usage(usage: Dict[str, Any], latency_ms: float) -> None:
+    task_id = _task_id_ctx.get()
+    if not task_id:
+        return
+    # 延迟导入避免循环依赖
+    from ..workflow.task_manager import get_task_manager
+
+    get_task_manager().add_llm_usage(task_id, usage, latency_ms)

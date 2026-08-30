@@ -389,6 +389,7 @@ function taskActions(t, withRow = true) {
     if (t.status === 'failed') {
       b += `<button class="btn btn-action" onclick="event.stopPropagation();doDiagnose('${t.task_id}')">运维诊断</button>`;
     }
+    b += `<button class="btn btn-action" onclick="event.stopPropagation();doReapBadcase('${t.task_id}')">沉淀 Bad Case</button>`;
   }
   if (withRow) b += `<button class="btn btn-action" onclick="event.stopPropagation();showDetail('${t.task_id}')">详情</button>`;
   return b || '—';
@@ -914,6 +915,21 @@ async function saveConfigSql() {
   } catch (e) { alert('保存失败: ' + e.message); }
 }
 
+function llmUsage(t) {
+  const u = t.llm_usage;
+  if (!u || !u.calls) return '';
+  const models = Object.entries(u.models || {}).map(([m, n]) => `${escapeHtml(m)}×${n}`).join('，') || '—';
+  const cached = u.prompt_tokens ? Math.round((u.cached_tokens || 0) / u.prompt_tokens * 100) : 0;
+  return `<div class="section-title">LLM 用量（成本观测）</div>
+    <div style="font-size:12.5px;line-height:1.8">
+      调用 <b>${u.calls}</b> 次 ·
+      输入 <b>${u.prompt_tokens}</b> tokens（缓存命中 <b>${u.cached_tokens || 0}</b>，${cached}%）·
+      输出 <b>${u.completion_tokens}</b> tokens ·
+      LLM 总耗时 <b>${(u.latency_ms / 1000).toFixed(1)}s</b><br>
+      <span class="d">模型：${models}</span>
+    </div>`;
+}
+
 async function showDetail(taskId) {
   try {
     const [task, logs, audit, cfg] = await Promise.all([
@@ -975,6 +991,7 @@ async function showDetail(taskId) {
       </div>
       ${renderConfigSection(cfg)}
       <div class="section-title">阶段时间线</div>${tl}
+      ${llmUsage(task)}
       ${diag}${opsAct}${opsRec}${anal}${etl}
       <div class="section-title">审计记录</div>${audits || '<div class="empty">（无审计）</div>'}
       <div class="section-title">错误信息</div><pre>${escapeHtml(task.error || '（无）')}</pre>
@@ -1007,6 +1024,19 @@ async function doDiagnose(id) {
     loadAll();
     if (r && r.task_id) showDetail(r.task_id);
   } catch(e) { alert(e.message); }
+}
+
+async function doReapBadcase(id) {
+  const note = prompt('可选：补充这个 Bad Case 的备注（现象/复现方式）', '');
+  if (note === null) return;
+  try {
+    const r = await api('/tasks/' + id + '/badcase', {
+      method: 'POST',
+      headers: Object.assign({'Content-Type': 'application/json'}, headers()),
+      body: JSON.stringify({note}),
+    });
+    alert(r.duplicate ? '该任务已沉淀过' : '已沉淀：' + r.message);
+  } catch (e) { alert(e.message); }
 }
 
 // ---------- 筛选/排序/分页 ----------

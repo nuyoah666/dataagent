@@ -16,6 +16,7 @@ from ..tools import detect_incremental_field, enhance_config_with_incremental
 from .task_manager import get_task_manager, TaskStatus, _NON_TERMINAL_STATUSES
 from .checkpointer import create_checkpointer
 from ..utils.security import redact_secrets, _is_secret_key
+from ..utils.llm import bind_task_context, reset_task_context
 from ..utils.tracing import trace_step
 
 logger = logging.getLogger(__name__)
@@ -295,6 +296,7 @@ class AgentWorkflow:
             "diagnose_task_id": diagnose_task_id,
         }
 
+        ctx_token = bind_task_context(task_id)  # LLM token 度量归属本任务
         try:
             cfg = {"configurable": {"thread_id": thread_id}} if self.checkpointer else {}
             final = self.graph.invoke(init, config=cfg)
@@ -327,6 +329,8 @@ class AgentWorkflow:
             logger.error("异常: %s", e, exc_info=True, extra={"task_id": task_id})
             self.task_mgr.complete_task(task_id, TaskStatus.FAILED, error=str(e))
             return {**init, "error": str(e), "current_step": "error"}
+        finally:
+            reset_task_context(ctx_token)
 
     def get_history(self, limit: int = 20):
         """获取任务历史。"""

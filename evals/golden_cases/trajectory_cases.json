@@ -1,0 +1,128 @@
+[
+  {
+    "id": "integration_approval_then_exec",
+    "description": "集成任务：配置完成 -> 待审批 -> 审批通过 -> 执行 -> 完成",
+    "expect_pass": true,
+    "logs": [
+      "任务创建: 把 MySQL 的 src_user 表同步到 ES",
+      "ConfigAgent 开始执行",
+      "ConfigAgent 完成",
+      "配置已生成，等待人工审批（POST /tasks/xxx/approve 通过 / reject 拒绝）",
+      "人工审批通过，开始执行",
+      "ExecutionAgent 开始执行",
+      "ExecutionAgent 完成",
+      "ValidationAgent 开始执行",
+      "任务完成: success"
+    ],
+    "rules": {
+      "must_contain": ["ConfigAgent 完成", "等待人工审批", "人工审批通过", "任务完成: success"],
+      "must_not_contain": [],
+      "order": [
+        ["ConfigAgent 完成", "等待人工审批"],
+        ["等待人工审批", "人工审批通过"],
+        ["人工审批通过", "ExecutionAgent 开始执行"]
+      ]
+    }
+  },
+  {
+    "id": "integration_rejected_no_execution",
+    "description": "拒绝审批：不得进入执行阶段",
+    "expect_pass": true,
+    "logs": [
+      "任务创建: 把 src_user 同步到 ES",
+      "ConfigAgent 完成",
+      "配置已生成，等待人工审批",
+      "人工拒绝执行，任务取消",
+      "任务完成: cancelled"
+    ],
+    "rules": {
+      "must_contain": ["等待人工审批", "人工拒绝执行"],
+      "must_not_contain": ["ExecutionAgent 开始执行", "ExecutionAgent 完成"],
+      "order": [["等待人工审批", "人工拒绝执行"]]
+    }
+  },
+  {
+    "id": "integration_incremental_watermark",
+    "description": "增量任务成功后必须更新水位",
+    "expect_pass": true,
+    "logs": [
+      "ConfigAgent 完成",
+      "增量同步: 字段=update_time, 水位=2026-08-08",
+      "等待人工审批",
+      "人工审批通过，开始执行",
+      "ExecutionAgent 完成",
+      "增量水位更新: 2026-08-09",
+      "任务完成: success"
+    ],
+    "rules": {
+      "must_contain": ["增量同步: 字段", "增量水位更新"],
+      "order": [["ExecutionAgent 完成", "增量水位更新"]]
+    }
+  },
+  {
+    "id": "analysis_no_approval_gate",
+    "description": "问数任务只读，不挂审批门禁，直接 config -> execution -> validation",
+    "expect_pass": true,
+    "logs": [
+      "任务创建: 分析用户数按日期",
+      "ConfigAgent 完成",
+      "ExecutionAgent 开始执行",
+      "ExecutionAgent 完成",
+      "ValidationAgent 开始执行",
+      "任务完成: success"
+    ],
+    "rules": {
+      "must_contain": ["ExecutionAgent 完成", "任务完成: success"],
+      "must_not_contain": ["等待人工审批", "人工审批通过"],
+      "order": [["ConfigAgent 完成", "ExecutionAgent 开始执行"]]
+    }
+  },
+  {
+    "id": "negative_execution_before_approval",
+    "description": "负样本：执行早于审批（门禁失效），必须被检查器拦住",
+    "expect_pass": false,
+    "expected_error_contains": "不应早于",
+    "logs": [
+      "ConfigAgent 完成",
+      "ExecutionAgent 开始执行",
+      "ExecutionAgent 完成",
+      "等待人工审批",
+      "人工审批通过，开始执行",
+      "任务完成: success"
+    ],
+    "rules": {
+      "order": [["等待人工审批", "人工审批通过"], ["人工审批通过", "ExecutionAgent 开始执行"]]
+    }
+  },
+  {
+    "id": "negative_rejected_but_executed",
+    "description": "负样本：已拒绝却出现执行日志，必须被拦住",
+    "expect_pass": false,
+    "expected_error_contains": "禁止步骤",
+    "logs": [
+      "ConfigAgent 完成",
+      "等待人工审批",
+      "人工拒绝执行，任务取消",
+      "ExecutionAgent 开始执行",
+      "任务完成: success"
+    ],
+    "rules": {
+      "must_contain": ["人工拒绝执行"],
+      "must_not_contain": ["ExecutionAgent 开始执行"]
+    }
+  },
+  {
+    "id": "negative_missing_watermark",
+    "description": "负样本：增量任务成功但没有水位更新",
+    "expect_pass": false,
+    "expected_error_contains": "缺少必要步骤",
+    "logs": [
+      "增量同步: 字段=update_time, 水位=2026-08-08",
+      "ExecutionAgent 完成",
+      "任务完成: success"
+    ],
+    "rules": {
+      "must_contain": ["增量水位更新"]
+    }
+  }
+]

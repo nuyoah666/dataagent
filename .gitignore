@@ -34,3 +34,9 @@ INTERVIEW_QUICK.md
 OPTIMIZATION.md
 SUMMARY.md
 INTERVIEW_FULL.md
+
+# Bad case 回流素材（本地分诊队列，分诊后手工转入 evals/golden_cases/）
+evals/backlog/bad_cases.jsonl
+
+# 临时文件（博客资料下载等）
+tmp/

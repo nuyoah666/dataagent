@@ -181,6 +181,7 @@ def _migrate_tables(conn: sqlite3.Connection):
         ("analysis_summary", "TEXT"),
         ("started_at", "TEXT"),
         ("approved_at", "TEXT"),
+        ("llm_usage", "TEXT"),
     ):
         if name not in cols:
             conn.execute(f"ALTER TABLE tasks ADD COLUMN {name} {ddl}")
@@ -320,7 +321,7 @@ class TaskManager:
             "parsed_intent", "source_schema", "execution_status",
             "validation_result", "datax_config",
             "ops_diagnosis", "ops_actions", "ops_record_result",
-            "analysis_query", "analysis_result",
+            "analysis_query", "analysis_result", "llm_usage",
         ]:
             if key in out and isinstance(out[key], (dict, list)):
                 out[key] = json.dumps(redact_secrets(out[key]), ensure_ascii=False)
@@ -706,6 +707,33 @@ class TaskManager:
             )
             conn.commit()
 
+    def add_llm_usage(self, task_id: str, usage: Dict[str, Any], latency_ms: float) -> None:
+        """累加一次 LLM 调用的 token 用量与耗时（任务级成本观测）。"""
+        conn = _get_conn()
+        with _db_lock:
+            row = conn.execute(
+                "SELECT llm_usage FROM tasks WHERE task_id = ?", (task_id,)
+            ).fetchone()
+            if not row:
+                return
+            try:
+                agg = json.loads(row["llm_usage"]) if row["llm_usage"] else {}
+            except (json.JSONDecodeError, TypeError):
+                agg = {}
+            agg["calls"] = int(agg.get("calls", 0)) + 1
+            for k in ("prompt_tokens", "completion_tokens", "cached_tokens"):
+                agg[k] = int(agg.get(k, 0)) + int(usage.get(k, 0) or 0)
+            agg["latency_ms"] = round(float(agg.get("latency_ms", 0)) + float(latency_ms), 1)
+            models = agg.get("models") or {}
+            m = str(usage.get("model") or "unknown")
+            models[m] = int(models.get(m, 0)) + 1
+            agg["models"] = models
+            conn.execute(
+                "UPDATE tasks SET llm_usage = ?, updated_at = ? WHERE task_id = ?",
+                (json.dumps(agg, ensure_ascii=False), datetime.now().isoformat(), task_id),
+            )
+            conn.commit()
+
     def get_task_logs(self, task_id: str) -> List[Dict[str, Any]]:
         """获取任务日志。"""
         conn = _get_conn()
@@ -722,7 +750,7 @@ class TaskManager:
             "parsed_intent", "source_schema", "execution_status",
             "validation_result", "datax_config",
             "ops_diagnosis", "ops_actions", "ops_record_result",
-            "analysis_query", "analysis_result",
+            "analysis_query", "analysis_result", "llm_usage",
         ]:
             if result.get(key):
                 try:
