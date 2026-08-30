@@ -161,6 +161,34 @@ async def retry_task(task_id: str, request: Request):
     )
     return {"task_id": new_task_id, "status": "submitted"}
 
+@router.post("/tasks/{task_id}/remediate")
+async def remediate_task(task_id: str, request: Request):
+    """运维闭环：失败任务一键修复。
+
+    确定性修复成功 -> 配置更新并转回待审批（人工确认后重跑）；
+    否则触发 LLM 运维诊断（RAG+web），根因回写原任务。
+    """
+    tm = get_task_manager()
+    old = tm.get_task(task_id)
+    if not old:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if old.get("status") not in ("failed", "cancelled"):
+        raise HTTPException(status_code=409, detail="只有已失败或已取消的任务可以修复")
+    operator = _operator_from_request(request)
+    wf = _support.get_workflow(old.get("task_type") or "data_integration")
+    result = await asyncio.to_thread(
+        wf.remediate_task, task_id, operator, False, True
+    )
+    if result is None:
+        raise HTTPException(status_code=409, detail="任务状态不允许修复")
+    if result.get("fixed"):
+        return {"fixed": True, "changes": result.get("changes", []),
+                "status": result.get("status"),
+                "message": "运维已自动修复配置缺陷，任务已转回待审批，请审批后重跑"}
+    return {"fixed": False,
+            "diagnosis": result.get("diagnosis"),
+            "message": result.get("reason", "无法自动修复，已生成运维诊断")}
+
 @router.post("/tasks/{task_id}/approve")
 async def approve_task(task_id: str, request: Request):
     """人工审批通过：执行已生成配置的待审批任务。"""
@@ -183,6 +211,7 @@ async def approve_task(task_id: str, request: Request):
             "task_id": task_id,
             "status": result.get("current_step"),
             "error": result.get("error"),
+            "remediated": bool(result.get("remediated")),
             "validation_result": result.get("validation_result"),
         }
     except HTTPException:

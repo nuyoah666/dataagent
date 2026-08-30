@@ -387,6 +387,9 @@ function taskActions(t, withRow = true) {
   if (t.status === 'failed' || t.status === 'cancelled') {
     b += `<button class="btn btn-action" onclick="event.stopPropagation();doRetry('${t.task_id}')">重试</button>`;
     if (t.status === 'failed') {
+      if (t.task_type === 'data_integration') {
+        b += `<button class="btn btn-approve" onclick="event.stopPropagation();doRemediate('${t.task_id}')">一键修复</button>`;
+      }
       b += `<button class="btn btn-action" onclick="event.stopPropagation();doDiagnose('${t.task_id}')">运维诊断</button>`;
     }
     b += `<button class="btn btn-action" onclick="event.stopPropagation();doReapBadcase('${t.task_id}')">沉淀 Bad Case</button>`;
@@ -1017,11 +1020,36 @@ async function doCreateTargetTable(id) {
   loadAll();
 }
 async function doApprove(id) { if (!confirm('确认执行该任务？')) return;
-  try { const r = await api('/tasks/' + id + '/approve', {method:'POST'}); alert('已通过并执行: ' + (r.status || '')); } catch(e) { alert(e.message); } loadAll(); }
+  try {
+    const r = await api('/tasks/' + id + '/approve', {method:'POST'});
+    if (r.remediated) {
+      alert('执行失败，但运维已自动修复配置缺陷并转回待审批。请查看配置后再次点「通过」重跑。');
+      showDetail(id);
+    }
+  } catch(e) { alert(e.message); }
+  loadAll();
+}
 async function doReject(id) { if (!confirm('确认拒绝执行该任务？')) return;
   try { await api('/tasks/' + id + '/reject', {method:'POST'}); alert('已拒绝执行'); } catch(e) { alert(e.message); } loadAll(); }
 async function doRetry(id) { if (!confirm('确认重试该任务？')) return;
   try { const r = await api('/tasks/' + id + '/retry', {method:'POST'}); alert('已提交重试: ' + r.task_id); } catch(e) { alert(e.message); } loadAll(); }
+async function doRemediate(id) {
+  if (!confirm('运维将尝试自动修复配置缺陷，成功后任务转回待审批（仍需你确认后重跑）。是否继续？')) return;
+  try {
+    const r = await api('/tasks/' + id + '/remediate', {
+      method: 'POST',
+      headers: Object.assign({'Content-Type': 'application/json'}, headers()),
+      body: JSON.stringify({}),
+    });
+    if (r.fixed) {
+      alert('已自动修复：' + (r.changes || []).join('；') + '\n任务已转回待审批，请查看配置后点「通过」重跑。');
+      loadAll(); showDetail(id);
+    } else {
+      alert('无法自动修复（已生成运维诊断）：' + (r.message || ''));
+      loadAll();
+    }
+  } catch(e) { alert('修复失败: ' + e.message); }
+}
 async function doDiagnose(id) {
   alert('运维诊断执行中（约 1-3 分钟），完成后自动打开诊断详情');
   try {

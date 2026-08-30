@@ -217,10 +217,27 @@ class AgentWorkflow:
             )
             self.task_mgr.log(task_id, "INFO", "ExecutionAgent 完成")
         else:
-            self.task_mgr.log(task_id, "ERROR", f"ExecutionAgent 失败: {result.get('error')}")
-            self.task_mgr.complete_task(
-                task_id, TaskStatus.FAILED, error=result.get("error") or "执行失败"
-            )
+            err = result.get("error") or "执行失败"
+            self.task_mgr.log(task_id, "ERROR", f"ExecutionAgent 失败: {err}")
+            self.task_mgr.complete_task(task_id, TaskStatus.FAILED, error=err)
+            # 运维闭环：集成任务失败后尝试确定性自动修复，成功则转回待审批
+            # （人工重新确认后重跑）；失败则保持 FAILED，等待人工/诊断。
+            if self.task_type == "data_integration" and self.approval_gate:
+                try:
+                    rem = self.remediate_task(task_id, operator="system",
+                                              auto=True, run_diagnosis=False)
+                    if rem and rem.get("fixed"):
+                        self.task_mgr.log(
+                            task_id, "INFO",
+                            "已自动修复配置缺陷并转人工重新审批",
+                        )
+                        return {
+                            **state, "current_step": "awaiting_reapproval",
+                            "remediated": True, "error": None,
+                            "execution_status": result.get("execution_status"),
+                        }
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("自动修复异常: %s", e)
 
         return result
 
@@ -381,6 +398,81 @@ class AgentWorkflow:
         self.task_mgr.audit(task_id, "task_retry", detail="以原指令新建任务重试")
         return self.run(task["user_query"])
 
+    def remediate_task(self, task_id: str, operator: str = "system",
+                       auto: bool = False, run_diagnosis: bool = True) -> Optional[Dict[str, Any]]:
+        """运维闭环：失败任务自动修复。
+
+        确定性修复（集成任务：用最新配置处理器重建配置）成功 -> 配置写回并
+        转回待审批（人工确认后重跑）；无法确定性修复 -> 触发 LLM 运维诊断
+        （RAG+web），根因回写原任务，供人工决策。
+        """
+        task = self.task_mgr.get_task(task_id)
+        if not task:
+            return None
+        if task["status"] not in (TaskStatus.FAILED.value, TaskStatus.CANCELLED.value):
+            return {"fixed": False, "reason": "仅失败/取消的任务可修复"}
+
+        # ---- 1. 确定性自动修复（数据集成）----
+        fixed_cfg = None
+        changes = []
+        if task.get("task_type") == "data_integration":
+            from ..tools.remediation import auto_remediate_integration
+            r = auto_remediate_integration(task)
+            if r.get("fixed"):
+                fixed_cfg = r["config"]
+                changes = r.get("changes") or []
+
+        if fixed_cfg is not None:
+            # 写回修复后配置，状态从 FAILED 回到待审批（写操作仍需人工放行）
+            ok = self.task_mgr.transition_status(
+                task_id, TaskStatus.PENDING_APPROVAL,
+                [TaskStatus.FAILED, TaskStatus.CANCELLED],
+                current_step="awaiting_approval",
+                datax_config=fixed_cfg,
+                error=None, execution_status=None, validation_result=None,
+                retry_count=0,
+            )
+            if ok:
+                self.task_mgr.log(
+                    task_id, "WARNING",
+                    f"运维自动修复 {len(changes)} 项：{('；'.join(changes))}，"
+                    f"配置已更新，等待人工重新审批后执行",
+                )
+                self.task_mgr.audit(
+                    task_id, "auto_remediate", operator,
+                    detail="；".join(changes),
+                )
+                self.task_mgr.record_decision(
+                    task_id, "ops_auto_fix",
+                    decision="；".join(changes), basis="rule",
+                    evidence={"changes": changes, "auto": auto},
+                )
+                return {"fixed": True, "changes": changes,
+                        "status": TaskStatus.PENDING_APPROVAL.value}
+
+        # ---- 2. 确定性修不了：LLM 运维诊断（根因 + 知识库），回写原任务 ----
+        # 自动触发路径（执行节点内）不做同步 LLM 诊断以免长耗时阻塞；
+        # 人工点击"一键修复"时才带诊断。
+        if not run_diagnosis:
+            return {"fixed": False, "reason": "无法确定性自动修复，待人工触发运维诊断"}
+        try:
+            ops_wf = AgentWorkflow(task_type="data_ops")
+            diag = ops_wf.run(
+                f"诊断任务 {task_id} 失败原因",
+                diagnose_task_id=task_id, parent_task_id=task_id,
+            )
+            diagnosis = diag.get("ops_diagnosis") or {}
+            if diagnosis:
+                self.task_mgr.update_task(
+                    task_id, ops_diagnosis={**diagnosis, "ops_task_id": diag.get("_task_id")}
+                )
+            return {"fixed": False,
+                    "reason": "无法确定性自动修复，已生成运维诊断",
+                    "diagnosis": diagnosis}
+        except Exception as e:  # noqa: BLE001
+            logger.warning("运维诊断失败: %s", e)
+            return {"fixed": False, "reason": f"自动修复与诊断均未成功: {e}"}
+
     def approve_task(self, task_id: str, operator: str = "system") -> Optional[Dict[str, Any]]:
         """人工审批通过：恢复执行（execution -> validation），返回最终状态。"""
         task = self.task_mgr.get_task(task_id)
@@ -407,7 +499,7 @@ class AgentWorkflow:
             detail=f"config_digest={self._config_digest(task)}",
         )
         state = self._run_execution(state)
-        if state.get("error"):
+        if state.get("error") or state.get("remediated"):
             return state
         final = self._run_validation(state)
         if (final.get("validation_result") or {}).get("success"):
