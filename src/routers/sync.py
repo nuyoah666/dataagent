@@ -140,6 +140,12 @@ async def chat_submit(req: ChatSubmitRequest):
     task_id = tm.create_task(query, task_type=routed.task_type)
     tm.update_task(task_id, current_step="submitted")
     tm.log(task_id, "INFO", f"已提交（{routed.task_type}，来源={routed.source}）")
+    # 决策依据①：意图路由（显式指令 / 规则打分 / LLM 兜底）
+    tm.record_decision(
+        task_id, "route", decision=routed.task_type, basis=routed.source,
+        confidence=getattr(routed, "confidence", None),
+        evidence={"matched_keywords": routed.matched_keywords, "message": routed.message},
+    )
 
     # 跨会话指代："把刚才那个表同步到 StarRocks" -> 注入上一任务的结构化上下文
     context_hint = ""
@@ -152,6 +158,10 @@ async def chat_submit(req: ChatSubmitRequest):
                 context_hint = build_context_hint(recent.get("parsed_intent") or {})
                 if context_hint:
                     tm.log(task_id, "INFO", f"检测到指代词，注入上一任务 {recent['task_id']} 上下文")
+                    tm.record_decision(
+                        task_id, "context", decision=f"引用上一任务 {recent['task_id']} 的结构化意图",
+                        basis="rule", evidence={"ref_task_id": recent["task_id"]},
+                    )
     except Exception:
         logging.getLogger(__name__).debug("指代消解跳过", exc_info=True)
 

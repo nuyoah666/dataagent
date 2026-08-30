@@ -146,6 +146,16 @@ class OpsDiagnosisAgent(BaseAgent):
             tm.log(current_task_id, "INFO",
                    f"Ops 诊断完成: {task_id} -> {diagnosis.get('root_cause', '')[:100]}")
 
+        # 决策依据：运维诊断（LLM + RAG/web 证据）
+        tm.record_decision(
+            current_task_id or task_id, "ops_diagnose",
+            decision=(diagnosis.get("root_cause") or "")[:200],
+            basis="llm", confidence=diagnosis.get("confidence"),
+            evidence={"rag_hits": len(rag_hits), "web_results": len(web_results),
+                      "related_incidents": len(diagnosis.get("related_incidents", [])),
+                      "rag_circuit_open": not rag_circuit_breaker.allow_request()},
+        )
+
         return {
             **state,
             "diagnose_task_id": task_id,

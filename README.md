@@ -391,6 +391,15 @@ SQL 型 MVP：指令中带"加工/清洗/聚合"（或 `/etl`）即路由到 `et
 - **审计日志**：`GET /audit` 查询谁在什么时候批准/拒绝/取消/重试了什么任务；
   审批记录包含配置指纹（DataX 配置/ETL SQL 的 sha256 前 16 位），
   可验证"批准的内容"未被篡改；API 可用 `X-Operator` 头标记操作人
+- **决策依据轨迹**（decision_logs）：每个关键决策点结构化落库，回答
+  "这一步是规则判定、LLM 推断还是人工操作"。五类 basis：
+  `rule`（规则/模板，确定性）、`llm`（模型推断，兜底）、`default`（默认回填）、
+  `explicit`（用户显式指令）、`human`（人工审批/编辑，复用审计日志不重复记）；
+  evidence 只存关键抽取值并自动脱敏，不存 prompt 原文（那是 LangSmith 的职责）
+  - `GET /tasks/{id}/decisions`：机器决策 + 人工动作合并的时间线
+  - `GET /metrics/summary` 的 `decisions` 字段按「节点 × basis」聚合，
+    可直接算规则覆盖率 / LLM 兜底率，是衡量 Agent 确定性的核心指标
+  - chat 卡片与任务详情页有「🧭 决策依据」折叠时间线
 - **API Token 鉴权**（可选）：配置 `API_TOKEN` 后，除
   `/health` `/ui` `/metrics` 外所有接口需 `Authorization: Bearer <token>`
   或 `X-API-Token` 头；留空则保持本机直连

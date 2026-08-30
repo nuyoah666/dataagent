@@ -67,13 +67,60 @@ async def list_tasks_pipelines(limit: int = 200):
     tm = get_task_manager()
     return {"tasks": tm.get_task_history_full(min(limit, 500))}
 
+# 人工动作 -> 时间线展示（机器决策之外的 human 依据，来自 audit_logs，不重复落 decision_logs）
+_HUMAN_ACTIONS = {
+    "task_approve": "人工审批通过",
+    "task_reject": "人工拒绝",
+    "config_edit": "人工编辑配置",
+    "mapping_edit": "人工编辑字段映射",
+    "target_table_create": "一键建表",
+    "badcase_reap": "沉淀 Bad Case",
+    "goodcase_reap": "沉淀 Good Case",
+}
+
+
+def build_decision_timeline(tm, task_id: str) -> list:
+    """合并机器决策（decision_logs）与人工动作（audit_logs）为一条可审计时间线。"""
+    timeline = []
+    for d in tm.get_task_decisions(task_id):
+        timeline.append({
+            "kind": "machine", "node": d.get("node"), "decision": d.get("decision"),
+            "basis": d.get("basis"), "confidence": d.get("confidence"),
+            "evidence": d.get("evidence"), "created_at": d.get("created_at"),
+        })
+    try:
+        for a in tm.get_audit_logs(task_id=task_id, limit=200):
+            label = _HUMAN_ACTIONS.get(a.get("action"))
+            if not label:
+                continue
+            timeline.append({
+                "kind": "human", "node": a.get("action"), "decision": label,
+                "basis": "human", "operator": a.get("operator"),
+                "evidence": {"detail": (a.get("detail") or "")[:160]},
+                "created_at": a.get("created_at"),
+            })
+    except Exception:
+        pass
+    timeline.sort(key=lambda x: x.get("created_at") or "")
+    return timeline
+
+
 @router.get("/tasks/{task_id}")
 async def get_task(task_id: str):
     tm = get_task_manager()
     task = tm.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
+    task["decisions"] = build_decision_timeline(tm, task_id)
     return task
+
+@router.get("/tasks/{task_id}/decisions")
+async def get_task_decisions(task_id: str):
+    """决策依据时间线：机器决策（rule/llm/default/explicit）+ 人工动作（human）。"""
+    tm = get_task_manager()
+    if not tm.get_task(task_id):
+        raise HTTPException(status_code=404, detail="任务不存在")
+    return {"task_id": task_id, "decisions": build_decision_timeline(tm, task_id)}
 
 @router.get("/tasks/{task_id}/logs")
 async def get_task_logs(task_id: str):

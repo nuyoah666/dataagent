@@ -65,8 +65,14 @@ async def metrics():
 
 @router.get("/metrics/summary")
 async def metrics_summary():
-    """业务指标 JSON（监控页卡片用）。"""
-    return get_task_manager().get_metrics()
+    """业务指标 JSON（监控页卡片用），含机器决策依据分布（规则覆盖 / LLM 兜底率）。"""
+    tm = get_task_manager()
+    data = tm.get_metrics()
+    try:
+        data["decisions"] = tm.decision_stats()
+    except Exception:
+        data["decisions"] = []
+    return data
 
 @router.get("/audit")
 async def audit_logs(

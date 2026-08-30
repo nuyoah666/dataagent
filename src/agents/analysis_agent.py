@@ -46,6 +46,18 @@ class AnalysisConfigAgent(BaseAgent):
     def __init__(self):
         self._llm = None
 
+    @staticmethod
+    def _record(state, node, decision, basis, confidence=None, evidence=None):
+        try:
+            from ..workflow.task_manager import get_task_manager
+            tid = state.get("_task_id")
+            if tid:
+                get_task_manager().record_decision(
+                    tid, node, decision=decision, basis=basis,
+                    confidence=confidence, evidence=evidence)
+        except Exception:
+            logger.debug("record_decision 失败（忽略）", exc_info=True)
+
     def _get_llm(self):
         if self._llm is None:
             self._llm = get_agent_llm("data_analysis")
@@ -68,8 +80,23 @@ class AnalysisConfigAgent(BaseAgent):
         # 1.5 确定性兜底（按日/月/年统计 = 时间维度分组）：
         #   a) LLM 偶发漏抽粒度 -> 从原文 年/月/日 关键词补 granularity
         #   b) 有粒度却没 date 维度 -> 补语义层 date 维度
+        gran0, dims0 = query.granularity, list(query.dimensions)
         self._ensure_granularity(query, user_query)
         self._ensure_date_dim(query, catalog)
+        backfilled = (gran0 != query.granularity) or (dims0 != list(query.dimensions))
+
+        self._record(
+            state, "analysis_parse",
+            decision=f"指标 {query.metrics} / 维度 {query.dimensions}",
+            basis=getattr(self, "_parse_basis", "llm"),
+            evidence={"granularity": query.granularity},
+        )
+        if backfilled:
+            self._record(
+                state, "analysis_backfill",
+                decision=f"规则补全粒度/日期维度 -> {query.granularity} / {query.dimensions}",
+                basis="default",
+            )
 
         # 2. 确定性生成 SQL + 白名单校验
         filters = [f.model_dump() for f in query.filters]
@@ -94,6 +121,11 @@ class AnalysisConfigAgent(BaseAgent):
             granularity=query.granularity,
         )
 
+        self._record(
+            state, "semantic_pick",
+            decision=f"{caliber['table_alias']}（物理表 {caliber['table']}）",
+            basis="rule", evidence={"metrics": [m["name"] for m in caliber["metrics"]]},
+        )
         database = query.database or catalog.default_database
         logger.info(f"分析配置完成: {sql}")
         return self.ok(state, **{
@@ -109,7 +141,9 @@ class AnalysisConfigAgent(BaseAgent):
         rule_query = self._rule_query(user_query, catalog)
         if rule_query is not None:
             logger.info("分析意图规则命中，跳过 LLM: %s", rule_query.model_dump())
+            self._parse_basis = "rule"
             return rule_query
+        self._parse_basis = "llm"
 
         # 汇总全部表的指标/维度清单供 LLM 选择
         all_metrics = []

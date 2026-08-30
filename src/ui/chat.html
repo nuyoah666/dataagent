@@ -68,6 +68,22 @@ operatorName.onchange = e => localStorage.setItem(OPERATOR_KEY, e.target.value.t
   .caliber-block { margin-top:8px; background:rgba(34,197,94,.08); border:1px solid var(--border);
     border-radius:8px; padding:8px 10px; white-space:pre-wrap; font-size:12px; color:var(--text); }
   .caliber-block .sql-label { color:var(--ok,#22c55e); }
+  .decisions { margin-top:8px; border:1px solid var(--border); border-radius:8px; }
+  .decisions summary { cursor:pointer; padding:7px 10px; font-size:12.5px; color:var(--muted); list-style:none; }
+  .decisions summary::-webkit-details-marker{ display:none; }
+  .decisions[open] summary { border-bottom:1px solid var(--border); }
+  .dec-list { padding:6px 10px; }
+  .dec-item { display:flex; gap:8px; align-items:flex-start; font-size:12px; padding:3px 0; }
+  .dec-time { color:var(--muted); white-space:nowrap; font-variant-numeric:tabular-nums; }
+  .basis-badge { flex:none; padding:0 7px; border-radius:999px; font-size:11px; line-height:18px; }
+  .basis-rule{background:rgba(37,99,235,.15);color:var(--accent);}
+  .basis-llm{background:rgba(168,85,247,.18);color:#a855f7;}
+  .basis-default{background:rgba(217,119,6,.16);color:#d97706;}
+  .basis-explicit{background:rgba(22,163,74,.16);color:var(--ok,#16a34a);}
+  .basis-human{background:rgba(100,116,139,.18);color:var(--muted);}
+  .dec-node{color:var(--muted); flex:none; min-width:64px;}
+  .dec-text{word-break:break-word;}
+  .dec-conf{color:var(--muted); font-size:11px;}
   .sql-block code { font-family:Consolas,monospace; font-size:12px; color:var(--accent);
                     white-space:pre-wrap; word-break:break-all; }
   .result-wrap { margin-top:8px; overflow-x:auto; }
@@ -255,6 +271,34 @@ function renderAnalysis(t) {
   return html;
 }
 
+const BASIS_LABEL = {explicit:"显式指令", rule:"规则", llm:"LLM", default:"默认/回填", human:"人工"};
+const NODE_LABEL = {
+  route:"意图路由", context:"上下文指代", intent_parse:"意图解析", credential:"凭据来源",
+  analysis_parse:"问数解析", analysis_backfill:"规则兜底", semantic_pick:"语义选表",
+  ops_diagnose:"运维诊断", validation:"校验结论",
+  task_approve:"审批", task_reject:"拒绝", config_edit:"改配置", mapping_edit:"改映射",
+  target_table_create:"建表", badcase_reap:"沉淀BadCase", goodcase_reap:"沉淀GoodCase",
+};
+function renderDecisions(t) {
+  const ds = t.decisions;
+  if (!ds || !ds.length) return '';
+  const rows = ds.map(d => {
+    const basis = d.basis || 'rule';
+    const time = (d.created_at || '').slice(11, 19);
+    const node = NODE_LABEL[d.node] || d.node;
+    const conf = (d.confidence != null) ? ` <span class="dec-conf">·置信${d.confidence}</span>` : '';
+    const who = d.operator ? ` <span class="dec-conf">·${escapeHtml(d.operator)}</span>` : '';
+    return `<div class="dec-item">
+      <span class="dec-time">${escapeHtml(time)}</span>
+      <span class="basis-badge basis-${basis}">${BASIS_LABEL[basis] || basis}</span>
+      <span class="dec-node">${escapeHtml(node)}</span>
+      <span class="dec-text">${escapeHtml(d.decision || '')}${conf}${who}</span>
+    </div>`;
+  }).join('');
+  return `<details class="decisions"><summary>🧭 决策依据（${ds.length}）：每步凭什么这么决定</summary>
+    <div class="dec-list">${rows}</div></details>`;
+}
+
 function renderTask(t, logs) {
   const stages = [];
   const markers = [
@@ -295,6 +339,7 @@ function renderTask(t, logs) {
     body += `<div class="ok-text">✅ ${escapeHtml(v.summary || '任务成功')}</div>`;
   }
   body += renderAnalysis(t);
+  body += renderDecisions(t);
   if (t.status === 'cancelled') body += `<div class="error">任务已取消</div>`;
   if (!TERMINAL.includes(t.status) && t.status !== 'pending_approval') {
     body = `<span class="spinner"></span> 处理中…<div class="stage">${stageHtml}</div>` + body;

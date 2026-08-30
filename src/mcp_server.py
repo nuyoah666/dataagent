@@ -65,6 +65,11 @@ def _submit(query: str) -> dict:
         return {"success": False, "error": routed.message or "无法识别任务类型"}
     tm = get_task_manager()
     task_id = tm.create_task(query, task_type=routed.task_type)
+    tm.record_decision(
+        task_id, "route", decision=routed.task_type, basis=routed.source,
+        confidence=getattr(routed, "confidence", None),
+        evidence={"matched_keywords": routed.matched_keywords, "channel": "mcp"},
+    )
     tm.update_task(task_id, current_step="submitted")
     tm.log(task_id, "INFO", f"已提交（{routed.task_type}，来源=mcp）")
 

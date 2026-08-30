@@ -146,6 +146,27 @@ class AgentWorkflow:
                                        last_value=last_value)
             if not saved: return {**result, "error": "任务已结束或取消", "current_step": "cancelled"}
             self.task_mgr.log(task_id, "INFO", "ConfigAgent 完成")
+            # 决策依据：意图解析与凭据来源（集成/ETL；分析的决策在 analysis_agent 内记录）
+            pi = result.get("parsed_intent") or intent or {}
+            if pi.get("source_table") and (result.get("datax_config") or result.get("etl_sql")):
+                self.task_mgr.record_decision(
+                    task_id, "intent_parse",
+                    decision=f"{pi.get('source_table','')} -> "
+                             f"{pi.get('target_db_type') or pi.get('target_table','')}"
+                             f"（{pi.get('sync_type') or pi.get('transform_type') or ''}）",
+                    basis="llm",
+                    evidence={"source_table": pi.get("source_table"),
+                              "target_db_type": pi.get("target_db_type"),
+                              "sync_type": pi.get("sync_type"),
+                              "update_cycle": pi.get("update_cycle"),
+                              "named_source": pi.get("source_name") or ""},
+                )
+                self.task_mgr.record_decision(
+                    task_id, "credential",
+                    decision=(f"命名数据源 {pi.get('source_name')}" if pi.get("source_name")
+                              else "默认/指令内凭据回填"),
+                    basis="explicit" if pi.get("source_name") else "default",
+                )
         else:
             self.task_mgr.log(task_id, "ERROR", f"ConfigAgent 失败: {result.get('error')}")
             self.task_mgr.complete_task(
@@ -213,6 +234,14 @@ class AgentWorkflow:
         self.task_mgr.log(task_id, "INFO", "ValidationAgent 开始执行")
 
         result = self.validation_agent.run(state)
+
+        vr = result.get("validation_result") or {}
+        self.task_mgr.record_decision(
+            task_id, "validation",
+            decision="通过" if vr.get("success") else "未通过",
+            basis="rule",
+            evidence={"summary": (vr.get("summary") or result.get("error") or "")[:200]},
+        )
 
         if result.get("validation_result", {}).get("success"):
             self.task_mgr.update_task(

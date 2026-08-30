@@ -149,6 +149,24 @@ def _init_tables(conn: sqlite3.Connection):
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_task_logs_task_id ON task_logs(task_id)"
     )
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS decision_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id TEXT,
+            node TEXT NOT NULL,
+            decision TEXT,
+            basis TEXT,
+            confidence REAL,
+            evidence TEXT,
+            created_at TEXT NOT NULL
+        )
+    """)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_decision_task_id ON decision_logs(task_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_decision_basis ON decision_logs(basis)"
+    )
     conn.commit()
 
 
@@ -761,6 +779,60 @@ class TaskManager:
         rows = conn.execute(
             "SELECT level, message, created_at FROM task_logs WHERE task_id = ? ORDER BY created_at",
             (task_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def record_decision(
+        self, task_id, node: str, decision: str = "", basis: str = "rule",
+        confidence: Optional[float] = None, evidence: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """记录一条机器决策依据（可审计、可跨任务聚合）。
+
+        basis 固定五类：explicit(用户显式指令) / rule(规则命中) / llm(LLM 决策) /
+        default(默认/回填) / human(人工，人工动作统一走 audit_logs)。
+        evidence 只存关键抽取值（命中词/得分/数据源 id/选表结果），脱敏后 JSON 存储，
+        不灌完整 prompt/response（那是 LangSmith 的职责）。
+        """
+        ev = None
+        if evidence:
+            try:
+                ev = json.dumps(redact_secrets(evidence), ensure_ascii=False)
+            except Exception:
+                ev = json.dumps({"note": str(evidence)[:300]}, ensure_ascii=False)
+        conn = _get_conn()
+        with _db_lock:
+            conn.execute(
+                "INSERT INTO decision_logs (task_id, node, decision, basis, confidence, evidence, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (task_id, node, str(decision or "")[:300], basis, confidence, ev,
+                 datetime.now().isoformat()),
+            )
+            conn.commit()
+
+    def get_task_decisions(self, task_id: str) -> List[Dict[str, Any]]:
+        """获取任务的机器决策轨迹（按时间）。"""
+        conn = _get_conn()
+        rows = conn.execute(
+            "SELECT node, decision, basis, confidence, evidence, created_at "
+            "FROM decision_logs WHERE task_id = ? ORDER BY created_at, id",
+            (task_id,),
+        ).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            if d.get("evidence"):
+                try:
+                    d["evidence"] = json.loads(d["evidence"])
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            out.append(d)
+        return out
+
+    def decision_stats(self) -> List[Dict[str, Any]]:
+        """跨任务聚合：各节点按 basis 的计数（算 LLM 兜底率 / 规则覆盖率）。"""
+        conn = _get_conn()
+        rows = conn.execute(
+            "SELECT node, basis, COUNT(*) AS c FROM decision_logs GROUP BY node, basis"
         ).fetchall()
         return [dict(r) for r in rows]
 
