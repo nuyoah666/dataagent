@@ -30,7 +30,7 @@ def get_workflow(task_type: str = "data_integration"):
             if task_type not in _workflows:
                 config.ensure_directories()
                 _workflows[task_type] = AgentWorkflow(
-                    use_checkpointer=True, task_type=task_type,
+                    task_type=task_type,
                 )
     return _workflows[task_type]
 

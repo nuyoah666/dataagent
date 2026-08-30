@@ -29,6 +29,18 @@ class TestSyncIntent:
         intent = SyncIntent.model_validate({"source_port": "9030"})
         assert intent.source_port == 9030
 
+    def test_junk_port_does_not_nuke_intent(self):
+        """LLM 把端口返回成空串/带中文说明/超范围时，回退默认端口，
+        整张意图（含已正确解析的表名）不被连累。"""
+        i1 = SyncIntent.model_validate({"source_table": "t1", "source_port": ""})
+        assert i1.source_port == 3306 and i1.source_table == "t1"
+        i2 = SyncIntent.model_validate({"target_port": "9030（默认）"})
+        assert i2.target_port == 9030
+        i3 = SyncIntent.model_validate({"target_port": None})
+        assert i3.target_port == 9200
+        i4 = SyncIntent.model_validate({"source_port": 99999})
+        assert i4.source_port == 3306
+
 
 class TestETLIntent:
     def test_valid(self):

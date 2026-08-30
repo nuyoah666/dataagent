@@ -9,7 +9,6 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 
-from src.config import config
 from src.workflow import get_task_manager, TaskStatus
 from src.intent_router import get_router
 from . import _support
@@ -23,7 +22,7 @@ router = APIRouter()
 
 @router.get("/health")
 async def health():
-    return {"status": "ok", "store": config.STATE_STORE_TYPE}
+    return {"status": "ok", "state_store": "sqlite"}
 
 @router.get("/health/components")
 async def health_components():

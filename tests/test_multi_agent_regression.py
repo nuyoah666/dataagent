@@ -165,7 +165,7 @@ def test_failed_integration_then_ops_diagnose_and_record(
                        validation=fail_agent if fail_step == "validation" else _OkValidation)
 
     # 1) 数据集成任务失败
-    wf = AgentWorkflow(use_checkpointer=True, task_type="data_integration")
+    wf = AgentWorkflow(task_type="data_integration")
     result = wf.run("把 MySQL 的 t1 表同步到 ES")
     failed_id = result["_task_id"]
     task = get_task_manager().get_task(failed_id)
@@ -173,7 +173,7 @@ def test_failed_integration_then_ops_diagnose_and_record(
     assert error_kw in (task.get("error") or "")
 
     # 2) 运维 Agent 接手诊断
-    ops = AgentWorkflow(use_checkpointer=True, task_type="data_ops")
+    ops = AgentWorkflow(task_type="data_ops")
     r2 = ops.run(f"诊断任务 {failed_id}", diagnose_task_id=failed_id)
     assert r2["current_step"] == "validation_complete"
     assert r2["ops_diagnosis"]["task_id"] == failed_id
@@ -187,7 +187,7 @@ def test_failed_integration_then_ops_diagnose_and_record(
 
 def test_cancelled_task_diagnosable(monkeypatch, ops_mocks):
     _patch_integration(monkeypatch, exec_=_FailExec)
-    wf = AgentWorkflow(use_checkpointer=True, task_type="data_integration")
+    wf = AgentWorkflow(task_type="data_integration")
     result = wf.run("把 MySQL 的 t1 表同步到 ES")
     failed_id = result["_task_id"]
     # 取消一个非终态任务后诊断
@@ -195,7 +195,7 @@ def test_cancelled_task_diagnosable(monkeypatch, ops_mocks):
     tid2 = tm.create_task("另一个任务")
     tm.cancel_task(tid2)
 
-    ops = AgentWorkflow(use_checkpointer=True, task_type="data_ops")
+    ops = AgentWorkflow(task_type="data_ops")
     for target in (failed_id, tid2):
         r = ops.run(f"诊断任务 {target}", diagnose_task_id=target)
         assert r["current_step"] == "validation_complete"
@@ -204,13 +204,13 @@ def test_cancelled_task_diagnosable(monkeypatch, ops_mocks):
 def test_batch_partial_failure_then_ops_diagnoses_child(monkeypatch, ops_mocks):
     """批量同步中某张表失败 -> 运维诊断该子任务。"""
     _patch_integration(monkeypatch)
-    wf = AgentWorkflow(use_checkpointer=True, task_type="data_integration")
+    wf = AgentWorkflow(task_type="data_integration")
     # 直接构造一个失败子任务（模拟批量场景）
     tm = get_task_manager()
     child_id = tm.create_task("把 MySQL 的 t_bad 表同步到 ES", parent_task_id="pipeline-1", pipeline_id="pipeline-1")
     tm.update_task(child_id, status=TaskStatus.FAILED.value, error="表 t_bad 不存在")
 
-    ops = AgentWorkflow(use_checkpointer=True, task_type="data_ops")
+    ops = AgentWorkflow(task_type="data_ops")
     r = ops.run(f"诊断任务 {child_id}", diagnose_task_id=child_id)
     assert r["current_step"] == "validation_complete"
     assert r["ops_diagnosis"]["task_id"] == child_id
@@ -222,7 +222,7 @@ def test_batch_partial_failure_then_ops_diagnoses_child(monkeypatch, ops_mocks):
 def test_ops_survives_rag_and_llm_down(monkeypatch, tmp_path):
     """RAG 与 LLM 同时不可用 -> 规则兜底诊断，链路不中断。"""
     _patch_integration(monkeypatch, exec_=_FailExec)
-    wf = AgentWorkflow(use_checkpointer=True, task_type="data_integration")
+    wf = AgentWorkflow(task_type="data_integration")
     failed_id = wf.run("把 MySQL 的 t1 表同步到 ES")["_task_id"]
 
     monkeypatch.setattr(
@@ -246,7 +246,7 @@ def test_ops_survives_rag_and_llm_down(monkeypatch, tmp_path):
         },
     )
 
-    ops = AgentWorkflow(use_checkpointer=True, task_type="data_ops")
+    ops = AgentWorkflow(task_type="data_ops")
     r = ops.run(f"诊断任务 {failed_id}", diagnose_task_id=failed_id)
     assert r["current_step"] == "validation_complete"
     d = r["ops_diagnosis"]
@@ -259,7 +259,7 @@ def test_ops_survives_rag_and_llm_down(monkeypatch, tmp_path):
 
 def test_ops_unknown_task_id_graceful(monkeypatch, ops_mocks):
     _patch_integration(monkeypatch)
-    ops = AgentWorkflow(use_checkpointer=True, task_type="data_ops")
+    ops = AgentWorkflow(task_type="data_ops")
     r = ops.run("诊断任务 deadbeef0000", diagnose_task_id="deadbeef0000")
     assert r["current_step"] == "config_error"
     assert "任务不存在" in r["error"]
@@ -271,10 +271,10 @@ def test_ops_unknown_task_id_graceful(monkeypatch, ops_mocks):
 def test_ops_repeated_diagnosis_dedups_incident(monkeypatch, ops_mocks):
     """同一任务诊断两次 -> 只有一次事故沉淀（去重）。"""
     _patch_integration(monkeypatch, exec_=_FailExec)
-    wf = AgentWorkflow(use_checkpointer=True, task_type="data_integration")
+    wf = AgentWorkflow(task_type="data_integration")
     failed_id = wf.run("把 MySQL 的 t1 表同步到 ES")["_task_id"]
 
-    ops = AgentWorkflow(use_checkpointer=True, task_type="data_ops")
+    ops = AgentWorkflow(task_type="data_ops")
     r1 = ops.run(f"诊断任务 {failed_id}", diagnose_task_id=failed_id)
     assert r1["ops_record_result"]["incident_id"]
     first_id = r1["ops_record_result"]["incident_id"]
@@ -419,7 +419,7 @@ def _patch_analysis_ok(monkeypatch):
 
 def test_analysis_workflow_success(monkeypatch):
     _patch_analysis_ok(monkeypatch)
-    wf = AgentWorkflow(use_checkpointer=True, task_type="data_analysis")
+    wf = AgentWorkflow(task_type="data_analysis")
     result = wf.run("分析用户数按日期")
     assert result["execution_status"]["success"] is True
     assert result["analysis_result"]["row_count"] == 1
@@ -437,7 +437,7 @@ def test_analysis_unknown_metric_rejected(monkeypatch):
         "metrics": ["salary"], "dimensions": [], "filters": [],
         "granularity": "", "limit": 100,
     })
-    wf = AgentWorkflow(use_checkpointer=True, task_type="data_analysis")
+    wf = AgentWorkflow(task_type="data_analysis")
     result = wf.run("分析工资")
     assert result["current_step"] == "config_error"
     assert "未注册" in (result.get("error") or "")
@@ -456,7 +456,7 @@ def test_etl_workflow_success(monkeypatch):
         raise AssertionError("纯透传不应调用 LLM")
 
     monkeypatch.setattr(etl_mod, "llm_json", _boom)
-    wf = AgentWorkflow(use_checkpointer=True, task_type="etl_development")
+    wf = AgentWorkflow(task_type="etl_development")
     result = wf.run("把 ods_user 透传到 dwd_user")
     assert result["current_step"] == "validation_complete"
     assert result["execution_status"]["success"] is True

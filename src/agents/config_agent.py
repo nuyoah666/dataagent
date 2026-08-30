@@ -165,7 +165,6 @@ class ConfigAgent(BaseAgent):
             **state,
             "parsed_intent": intent,
             "source_schema": schema_result,
-            "rag_context": rag_context,
             "datax_config": result.get("config"),
             "error": result.get("errors", [None])[0] if not result["success"] else None,
             "current_step": "config_complete" if result["success"] else "config_error",
@@ -175,17 +174,26 @@ class ConfigAgent(BaseAgent):
 
     def _parse_intent(self, user_query: str, context_hint: str = "") -> Dict[str, Any]:
         human = f"{context_hint}\n指令：{user_query}" if context_hint else f"指令：{user_query}"
+        intent = None
         try:
             data = llm_json(
                 _INTENT_SYSTEM,
                 human,
                 llm=self.llm, breaker=llm_circuit_breaker,
             )
-            # Pydantic 强校验：保证字段齐全、类型正确
+            # Pydantic 强校验：保证字段齐全、类型正确（端口等脏数据在
+            # schema 边界宽松清洗，不让一个坏字段连累整张意图）
             intent = SyncIntent.model_validate(data).model_dump()
         except Exception as e:
             logger.warning(f"意图解析失败，使用 fallback: {e}")
             intent = self._fallback_intent(user_query)
+        # LLM 结构有效但漏抽源表名（空串）：规则兜底补表名，
+        # 其余字段（库类型/目标端）仍以 LLM 为准
+        if not intent.get("source_table"):
+            fb_table = self._fallback_intent(user_query).get("source_table", "")
+            if fb_table:
+                intent["source_table"] = fb_table
+                logger.info("LLM 漏抽源表，规则补: %s", fb_table)
         # 跨会话指代：LLM 与 fallback 两条路径都可能抽不到表名（"那个表"），
         # 统一在此从上一任务上下文补，且用户当前指令明确给出的表名优先
         if context_hint and not intent.get("source_table"):

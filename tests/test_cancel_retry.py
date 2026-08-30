@@ -106,7 +106,7 @@ def test_workflow_marks_cancelled(monkeypatch):
     monkeypatch.setitem(steps, "execution", _CancelledExec)
     monkeypatch.setitem(steps, "validation", _ValidationAgent)
 
-    wf = DataIntegrationWorkflow(use_checkpointer=False)
+    wf = DataIntegrationWorkflow()
     result = wf.run("把 MySQL 的 t1 表同步到 ES")
     assert result["current_step"] == "execution_cancelled"
     task = get_task_manager().get_task(result["_task_id"])
@@ -115,12 +115,12 @@ def test_workflow_marks_cancelled(monkeypatch):
 
 def test_retry_failed_task(monkeypatch):
     _patch_agents(monkeypatch, config_ok=False)
-    wf = DataIntegrationWorkflow(use_checkpointer=False)
+    wf = DataIntegrationWorkflow()
     r1 = wf.run("把 MySQL 的 t1 表同步到 ES")
     assert get_task_manager().get_task(r1["_task_id"])["status"] == TaskStatus.FAILED.value
 
     _patch_agents(monkeypatch, config_ok=True)
-    wf2 = DataIntegrationWorkflow(use_checkpointer=False)
+    wf2 = DataIntegrationWorkflow()
     r2 = wf2.retry_task(r1["_task_id"])
     assert r2 is not None
     assert r2["current_step"] == "validation_complete"
@@ -129,7 +129,7 @@ def test_retry_failed_task(monkeypatch):
 
 def test_retry_rejects_running_task(monkeypatch):
     _patch_agents(monkeypatch)
-    wf = DataIntegrationWorkflow(use_checkpointer=False)
+    wf = DataIntegrationWorkflow()
     r = wf.run("把 MySQL 的 t1 表同步到 ES")
     assert wf.retry_task(r["_task_id"]) is None
     assert wf.retry_task("not_exist") is None
@@ -177,7 +177,7 @@ def test_complete_does_not_override_terminal_status():
 def test_double_approve_executes_once(monkeypatch):
     monkeypatch.setenv("APPROVAL_GATE", "true")
     _patch_agents(monkeypatch)
-    wf = DataIntegrationWorkflow(use_checkpointer=False)
+    wf = DataIntegrationWorkflow()
     result = wf.run("把 MySQL 的 t1 表同步到 ES")
     tid = result["_task_id"]
     assert wf.get_task(tid)["status"] == TaskStatus.PENDING_APPROVAL.value

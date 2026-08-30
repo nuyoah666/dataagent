@@ -53,7 +53,7 @@ _NON_TERMINAL_STATUSES = tuple(
 def _get_conn() -> sqlite3.Connection:
     global _task_db_conn
     if _task_db_conn is None:
-        # tasks.db 与 checkpoints.db 放在同一目录下的独立文件
+        # 业务状态库：任务/日志/审计/数据源均在 tasks.db
         db_path = str(Path(config.STATE_STORE_PATH).with_name("tasks.db"))
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         _task_db_conn = sqlite3.connect(db_path, check_same_thread=False)
@@ -74,7 +74,6 @@ def _init_tables(conn: sqlite3.Connection):
             task_type TEXT NOT NULL DEFAULT 'data_integration',
             parsed_intent TEXT,
             source_schema TEXT,
-            rag_context TEXT,
             datax_config TEXT,
             execution_status TEXT,
             validation_result TEXT,

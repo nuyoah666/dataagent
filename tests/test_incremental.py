@@ -81,7 +81,7 @@ def _get_where(result):
 
 def test_incremental_where_injected(monkeypatch):
     _patch_agents(monkeypatch)
-    wf = DataIntegrationWorkflow(use_checkpointer=False)
+    wf = DataIntegrationWorkflow()
     result = wf.run("增量同步 MySQL 的 src_user 表到 ES")
 
     assert result["current_step"] == "validation_complete"
@@ -93,7 +93,7 @@ def test_incremental_where_injected(monkeypatch):
 
 def test_watermark_persisted_and_reused(monkeypatch):
     _patch_agents(monkeypatch)
-    wf = DataIntegrationWorkflow(use_checkpointer=False)
+    wf = DataIntegrationWorkflow()
     # 模拟水位查询返回固定值
     monkeypatch.setattr(wf, "_query_source_max", lambda state: "2026-08-02 10:00:00")
 
@@ -173,7 +173,7 @@ def test_approval_path_persists_watermark(monkeypatch):
     from src.workflow.task_manager import get_task_manager, TaskStatus
 
     _patch_agents(monkeypatch)
-    wf = DataIntegrationWorkflow(use_checkpointer=False)
+    wf = DataIntegrationWorkflow()
     tm = get_task_manager()
 
     task_id = tm.create_task("增量同步 MySQL 的 src_user 表到 ES", task_type="data_integration")

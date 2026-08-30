@@ -110,7 +110,7 @@ def retry_failed_task(task_id: str) -> Dict[str, Any]:
         from ..workflow import AgentWorkflow, get_task_manager
         old = get_task_manager().get_task(task_id)
         task_type = (old or {}).get("task_type", "data_integration")
-        wf = AgentWorkflow(use_checkpointer=True, task_type=task_type)
+        wf = AgentWorkflow(task_type=task_type)
         result = wf.retry_task(task_id)
         if result is None:
             return {"success": False, "error": "只有已失败或已取消的任务可以重试"}

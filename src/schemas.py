@@ -41,12 +41,25 @@ class SyncIntent(BaseModel):
         v = (v or "").strip().lower()
         return v if v in ("day", "hour") else "day"
 
-    @field_validator("source_port", "target_port")
+    @field_validator("source_port", "target_port", mode="before")
     @classmethod
-    def _positive_port(cls, v: int) -> int:
-        if v is None or v <= 0:
-            return 3306
-        return v
+    def _coerce_port(cls, v, info):
+        """端口宽松入参：LLM 可能返回空串/None/带中文说明（如"9030（默认）"）。
+
+        提取数字、范围校验，失败回退该字段默认端口——不让一个坏端口
+        连累整张意图（含已正确解析的表名）被 Pydantic 整体拒绝。
+        """
+        import re
+
+        default = 3306 if info.field_name == "source_port" else 9200
+        if isinstance(v, str):
+            m = re.search(r"\d{2,5}", v)
+            v = m.group(0) if m else None
+        try:
+            port = int(v)
+        except (TypeError, ValueError):
+            return default
+        return port if 0 < port < 65536 else default
 
 
 class ETLFieldMap(BaseModel):
@@ -152,3 +165,18 @@ class AnalysisQuery(BaseModel):
     order_by: Optional[str] = Field(default=None, description="排序字段（指标或维度名）")
     order_desc: bool = Field(default=True)
     database: str = Field(default="", description="StarRocks 库名，缺省用语义层默认")
+
+    @field_validator("limit", mode="before")
+    @classmethod
+    def _coerce_limit(cls, v):
+        """limit 宽松入参：LLM 返回空串/说明文字时回退默认 1000。"""
+        import re
+
+        if isinstance(v, str):
+            m = re.search(r"\d+", v)
+            v = m.group(0) if m else None
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            return 1000
+        return min(max(n, 1), 5000)

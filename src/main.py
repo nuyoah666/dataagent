@@ -32,7 +32,7 @@ def main():
         return {"error": routed.message}
     logger.info(f"路由结果: {routed.task_type} (source={routed.source})")
 
-    workflow = AgentWorkflow(use_checkpointer=True, task_type=routed.task_type)
+    workflow = AgentWorkflow(task_type=routed.task_type)
     result = workflow.run(user_query, thread_id="demo-001")
 
     logger.info(f"最终状态: {result.get('current_step')}")

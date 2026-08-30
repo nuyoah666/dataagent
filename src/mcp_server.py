@@ -55,7 +55,7 @@ def _dump(obj: Any) -> str:
 
 def _workflow(task_type: str) -> AgentWorkflow:
     config.ensure_directories()
-    return AgentWorkflow(use_checkpointer=True, task_type=task_type)
+    return AgentWorkflow(task_type=task_type)
 
 
 def _submit(query: str) -> dict:

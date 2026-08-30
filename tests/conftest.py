@@ -36,11 +36,11 @@ def fake_datax(tmp_path):
 def isolate_state(tmp_path, monkeypatch):
     """每个测试使用独立的 state/jobs/logs 目录，并重置模块级单例。"""
     from src.config import config
-    from src.workflow import checkpointer, task_manager
+    from src.workflow import task_manager
     from src.tools import datax_tool
     from src.utils import llm as llm_mod
 
-    monkeypatch.setattr(config, "STATE_STORE_PATH", str(tmp_path / "state" / "checkpoints.db"))
+    monkeypatch.setattr(config, "STATE_STORE_PATH", str(tmp_path / "state" / "tasks.db"))
     monkeypatch.setattr(config, "DATAX_WORK_DIR", str(tmp_path / "jobs"))
     monkeypatch.setattr(config, "LOG_FILE", str(tmp_path / "logs" / "app.log"))
     monkeypatch.setattr(config, "LLM_API_KEY", "test-key")
@@ -48,7 +48,6 @@ def isolate_state(tmp_path, monkeypatch):
 
     monkeypatch.setattr(task_manager, "_task_db_conn", None)
     monkeypatch.setattr(task_manager, "_task_manager", None)
-    monkeypatch.setattr(checkpointer, "_sqlite_conn", None)
     monkeypatch.setattr(datax_tool, "_datax_tool", None)
     llm_mod.get_llm.cache_clear()
 
@@ -57,6 +56,5 @@ def isolate_state(tmp_path, monkeypatch):
     # 清理测试残留的全局状态
     task_manager._task_db_conn = None
     task_manager._task_manager = None
-    checkpointer._sqlite_conn = None
     datax_tool._datax_tool = None
     llm_mod.get_llm.cache_clear()

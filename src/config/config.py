@@ -124,12 +124,10 @@ class Config:
     # 同时执行的任务数上限（信号量控制，避免 DataX/数据库资源竞争）
     MAX_CONCURRENT_TASKS: int = int(os.getenv("MAX_CONCURRENT_TASKS", "2"))
 
-    # ---- LangGraph 状态存储 ----
-    # memory   : 内存存储，重启丢失，开发/调试用
-    # sqlite   : 本地文件持久化，轻量单机场景（默认）
-    # mysql    : MySQL 持久化，多进程/分布式场景
-    STATE_STORE_TYPE: str = os.getenv("STATE_STORE_TYPE", "sqlite")
-    STATE_STORE_PATH: str = os.getenv("STATE_STORE_PATH", str(_PROJECT_ROOT / "state" / "checkpoints.db"))
+    # ---- 业务状态存储 ----
+    # 任务状态/日志/审计统一落在 <state>/tasks.db（SQLite）；
+    # LangGraph 只做编排，不另建 checkpoint 双写。
+    STATE_STORE_PATH: str = os.getenv("STATE_STORE_PATH", str(_PROJECT_ROOT / "state" / "tasks.db"))
 
     # ---- 日志 ----
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")

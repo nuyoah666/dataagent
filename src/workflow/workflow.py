@@ -1,6 +1,8 @@
 """LangGraph 工作流定义。
 
-集成：状态机 + Checkpoint 持久化 + 任务管理
+状态机编排 + 任务状态持久化：tasks.db 是业务状态的单一事实来源，
+LangGraph 只负责节点编排（审批/重试均从任务记录重建状态，不依赖
+checkpoint 双写）。
 """
 import json
 import logging
@@ -14,7 +16,6 @@ from ..state import DataIntegrationState
 from ..agents import get_step_agents, get_task_approval
 from ..tools import detect_incremental_field, enhance_config_with_incremental
 from .task_manager import get_task_manager, TaskStatus, _NON_TERMINAL_STATUSES
-from .checkpointer import create_checkpointer
 from ..utils.security import redact_secrets, _is_secret_key
 from ..utils.llm import bind_task_context, reset_task_context
 from ..utils.tracing import trace_step
@@ -32,7 +33,7 @@ class AgentWorkflow:
       - validation 成功: validation_result.success
     """
 
-    def __init__(self, use_checkpointer: bool = True, task_type: str = "data_integration"):
+    def __init__(self, task_type: str = "data_integration"):
         # 从注册表按任务类型实例化步骤 Agent，便于后续扩展新任务类型
         steps = get_step_agents(task_type)
         self.task_type = task_type
@@ -41,7 +42,6 @@ class AgentWorkflow:
         self.validation_agent = steps["validation"]()
         # 人工审批门禁：集成/ETL 任务生成配置后需人工确认才执行
         self.approval_gate = self._resolve_approval_gate(task_type)
-        self.checkpointer = create_checkpointer() if use_checkpointer else None
         self.task_mgr = get_task_manager()
         self.graph = self._build()
 
@@ -79,8 +79,7 @@ class AgentWorkflow:
         wf.add_conditional_edges("execution_agent", self._after_exec,
                                   {"continue": "validation_agent", "error": END})
         wf.add_edge("validation_agent", END)
-        kw = {"checkpointer": self.checkpointer} if self.checkpointer else {}
-        return wf.compile(**kw)
+        return wf.compile()
 
     # ---- 节点包装器（注入 task_id） ----
 
@@ -273,7 +272,7 @@ class AgentWorkflow:
                 user_query, pipeline_id=pipeline_id, parent_task_id=parent_task_id,
                 task_type=self.task_type,
             )
-        # 默认用 task_id 作为 checkpoint 线程，避免多个任务复用同一线程导致状态串扰
+        # thread_id 仅作日志关联标识（状态持久化以 task_id 归属 tasks.db）
         thread_id = thread_id or task_id
         logger.info(
             "开始: %s", redact_secrets(user_query),
@@ -285,7 +284,6 @@ class AgentWorkflow:
             "_task_id": task_id,
             "parsed_intent": parsed_intent,
             "source_schema": None,
-            "rag_context": None,
             "datax_config": None,
             "execution_status": None,
             "validation_result": None,
@@ -300,8 +298,7 @@ class AgentWorkflow:
 
         ctx_token = bind_task_context(task_id)  # LLM token 度量归属本任务
         try:
-            cfg = {"configurable": {"thread_id": thread_id}} if self.checkpointer else {}
-            final = self.graph.invoke(init, config=cfg)
+            final = self.graph.invoke(init)
             # 安全网：若图正常返回但携带错误且任务仍未进入终态，则标记失败
             if final.get("error"):
                 task = self.task_mgr.get_task(task_id)
@@ -404,28 +401,14 @@ class AgentWorkflow:
         return ",".join(hashes) or "none"
 
     def _restore_pending_state(self, task: dict) -> Optional[dict]:
-        """恢复待审批任务的执行状态。
+        """从任务记录重建待审批任务的执行状态。
 
-        优先从任务记录重建（支持审批前人工编辑后的最新配置，密码由
-        _refill_config_credentials 回填）；任务记录缺配置时降级为
-        LangGraph checkpoint（备份，含 config 阶段完整状态）。
+        支持审批前人工编辑后的最新配置；脱敏密码由
+        _refill_config_credentials / apply_intent_defaults 回填。
         """
         state = self._state_from_task_record(task)
         if not (state.get("datax_config") or state.get("etl_sql")):
-            # 任务记录缺配置（老任务）时回退 checkpoint
-            if self.checkpointer is not None:
-                try:
-                    tup = self.checkpointer.get_tuple({
-                        "configurable": {"thread_id": task.get("task_id", "")},
-                    })
-                    if tup is not None:
-                        values = dict((tup.checkpoint or {}).get("channel_values", {}))
-                        if values.get("datax_config") or values.get("etl_sql"):
-                            state = values
-                except Exception as e:
-                    logger.warning(f"审批状态恢复(checkpoint)失败: {e}")
-
-        if not (state.get("datax_config") or state.get("etl_sql")):
+            # 任务记录缺配置：无法恢复（tasks.db 是状态单一事实来源）
             return None
         state.update({
             "_task_id": task.get("task_id", ""),
@@ -448,7 +431,6 @@ class AgentWorkflow:
             "user_query": task.get("user_query", ""),
             "parsed_intent": intent,
             "source_schema": task.get("source_schema"),
-            "rag_context": task.get("rag_context"),
             "datax_config": cfg,
             "etl_sql": task.get("etl_sql"),
             "etl_ddl": task.get("etl_ddl"),

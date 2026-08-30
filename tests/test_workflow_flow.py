@@ -71,7 +71,7 @@ def _patch_agents(monkeypatch, config_ok=True):
 
 def test_full_workflow_success(monkeypatch):
     _patch_agents(monkeypatch)
-    wf = DataIntegrationWorkflow(use_checkpointer=False)
+    wf = DataIntegrationWorkflow()
     result = wf.run("把 MySQL 的 t1 表同步到 ES")
 
     assert result["current_step"] == "validation_complete"
@@ -82,18 +82,34 @@ def test_full_workflow_success(monkeypatch):
     assert task["status"] == TaskStatus.SUCCESS.value
 
 
-def test_full_workflow_with_checkpointer(monkeypatch):
+def test_task_record_is_single_source_of_truth(monkeypatch):
+    """状态单一事实来源是 tasks.db：config 产物全部落任务记录、可重建执行状态，
+    且不再生成 LangGraph checkpoint 文件（无双写）。"""
+    from pathlib import Path
+    from src.config import config
+
     _patch_agents(monkeypatch)
-    wf = DataIntegrationWorkflow(use_checkpointer=True)
+    wf = DataIntegrationWorkflow()
     result = wf.run("把 MySQL 的 t1 表同步到 ES")
     assert result["current_step"] == "validation_complete"
+
     task = get_task_manager().get_task(result["_task_id"])
     assert task["status"] == TaskStatus.SUCCESS.value
+    assert task["datax_config"] is not None
+    assert task["source_schema"] == {"success": True, "primary_key": "id"}
+    assert task["parsed_intent"]["source_table"] == "t1"
+
+    rebuilt = wf._state_from_task_record(task)
+    assert rebuilt["datax_config"] is not None
+    assert rebuilt["parsed_intent"]["source_table"] == "t1"
+
+    state_dir = Path(config.STATE_STORE_PATH).parent
+    assert not any("checkpoint" in p.name for p in state_dir.iterdir())
 
 
 def test_config_failure_marks_task_failed(monkeypatch):
     _patch_agents(monkeypatch, config_ok=False)
-    wf = DataIntegrationWorkflow(use_checkpointer=False)
+    wf = DataIntegrationWorkflow()
     result = wf.run("把 MySQL 的 t1 表同步到 ES")
 
     assert result["current_step"] == "config_error"
@@ -122,7 +138,7 @@ def test_agent_exception_caught(monkeypatch):
         AGENT_REGISTRY["data_integration"], "validation", FakeValidationAgent
     )
 
-    wf = DataIntegrationWorkflow(use_checkpointer=False)
+    wf = DataIntegrationWorkflow()
     result = wf.run("把 MySQL 的 t1 表同步到 ES")
     assert result["current_step"] == "error"
     assert "LLM 服务不可用" in result["error"]
@@ -134,7 +150,7 @@ def test_task_secrets_redacted_on_persist(monkeypatch):
     from src.workflow import task_manager as tm_mod
 
     _patch_agents(monkeypatch)
-    wf = DataIntegrationWorkflow(use_checkpointer=False)
+    wf = DataIntegrationWorkflow()
     result = wf.run("把 MySQL 的 t1 表同步到 ES")
 
     task = get_task_manager().get_task(result["_task_id"])

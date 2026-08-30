@@ -8,7 +8,6 @@ dependencies = [
     "langgraph>=0.1.0",
     "langchain-core>=0.2.0",
     "langchain-openai>=0.1.0",
-    "langgraph-checkpoint-sqlite>=3.0.0",
 
     # 数据库驱动
     "pymysql>=1.1.0",
@@ -40,7 +39,6 @@ rag = [
 ]
 # MySQL 状态存储（默认用 SQLite）
 mysql-state = [
-    "langgraph-checkpoint-mysql>=3.0.0",
 ]
 # 开发与测试
 dev = [

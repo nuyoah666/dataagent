@@ -75,7 +75,7 @@ def test_audit_records_create_approve_reject(gate_agents):
     task_id = _make_pending_task()
 
     # 审批（带操作人）与拒绝都会落审计
-    wf = AgentWorkflow(use_checkpointer=True, task_type="data_integration")
+    wf = AgentWorkflow(task_type="data_integration")
     wf.approve_task(task_id, operator="alice")
 
     logs = tm.get_audit_logs(task_id=task_id)
@@ -90,7 +90,7 @@ def test_audit_records_create_approve_reject(gate_agents):
 def test_audit_reject_and_cancel(gate_agents):
     tm = get_task_manager()
     task_id = _make_pending_task()
-    wf = AgentWorkflow(use_checkpointer=True, task_type="data_integration")
+    wf = AgentWorkflow(task_type="data_integration")
     wf.reject_task(task_id, operator="bob")
     actions = [l["action"] for l in tm.get_audit_logs(task_id=task_id)]
     assert "task_reject" in actions

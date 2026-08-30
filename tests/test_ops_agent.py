@@ -275,7 +275,7 @@ def test_ops_results_persisted_to_task_record(monkeypatch):
         },
     )
 
-    r = AgentWorkflow(use_checkpointer=True, task_type="data_ops").run(
+    r = AgentWorkflow(task_type="data_ops").run(
         f"诊断任务 {task_id}", diagnose_task_id=task_id,
     )
     record = get_task_manager().get_task(r["_task_id"])

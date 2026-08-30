@@ -46,6 +46,13 @@ class TestSourceTable:
         assert extract_source_table("同步 orders 到 ES") == "orders"
         assert extract_source_table("表：src_user 同步到 starrocks") == "src_user"
 
+    def test_extract_qualified_table(self):
+        """显式 库.表 优先整体抽取，不能只抓到末段丢库名。"""
+        assert extract_source_table(
+            "把 cdc_test_db.user_action_log 同步到 StarRocks"
+        ) == "cdc_test_db.user_action_log"
+        assert extract_source_table("同步 test.user_purchase 到 ES") == "test.user_purchase"
+
 
 class TestTargetDetection:
     def test_explicit_targets(self):

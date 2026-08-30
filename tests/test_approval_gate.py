@@ -101,7 +101,7 @@ def gate_etl_agents(monkeypatch):
 
 
 def _submit(gate_agents):
-    wf = AgentWorkflow(use_checkpointer=True, task_type="data_integration")
+    wf = AgentWorkflow(task_type="data_integration")
     result = wf.run("把 MySQL 的 t1 表同步到 ES")
     task_id = result["_task_id"]
     return wf, task_id, result
@@ -167,7 +167,7 @@ def test_retry_rejected_task_pauses_again(gate_agents):
 
 
 def test_etl_also_gated(gate_etl_agents):
-    wf = AgentWorkflow(use_checkpointer=True, task_type="etl_development")
+    wf = AgentWorkflow(task_type="etl_development")
     result = wf.run("把 ods_user 加工到 dwd_user")
     assert result["current_step"] == "awaiting_approval"
     task_id = result["_task_id"]
@@ -206,7 +206,7 @@ def test_ops_not_gated(monkeypatch):
         lambda rec, auto_ingest=False: {"success": True, "incident_id": "x"},
     )
 
-    wf = AgentWorkflow(use_checkpointer=True, task_type="data_ops")
+    wf = AgentWorkflow(task_type="data_ops")
     result = wf.run(f"诊断任务 {failed_id}", diagnose_task_id=failed_id)
     assert result["current_step"] == "validation_complete"  # 直接完成，不挂起
 
@@ -219,7 +219,7 @@ def test_gate_disabled_runs_immediately(monkeypatch):
     monkeypatch.setitem(steps, "config", _CfgAgent)
     monkeypatch.setitem(steps, "execution", type("E", (), {"run": exec_.run}))
     monkeypatch.setitem(steps, "validation", _ValAgent)
-    wf = AgentWorkflow(use_checkpointer=True, task_type="data_integration")
+    wf = AgentWorkflow(task_type="data_integration")
     result = wf.run("把 MySQL 的 t1 表同步到 ES")
     assert result["current_step"] == "validation_complete"
     assert exec_.calls == 1

@@ -64,7 +64,7 @@ def _patch(monkeypatch, config=None):
 def test_run_batch_success(monkeypatch):
     fake = _BatchConfigAgent()
     _patch(monkeypatch, config=lambda: fake)
-    wf = DataIntegrationWorkflow(use_checkpointer=False)
+    wf = DataIntegrationWorkflow()
 
     result = wf.run_batch("把 MySQL 的表同步到 ES", ["t1", "t2", "t3"])
 
@@ -106,7 +106,7 @@ def test_run_batch_partial_failure(monkeypatch):
 
     fake = _Flaky()
     _patch(monkeypatch, config=lambda: fake)
-    wf = DataIntegrationWorkflow(use_checkpointer=False)
+    wf = DataIntegrationWorkflow()
 
     result = wf.run_batch("把 MySQL 的表同步到 ES", ["t1", "t2", "t3"])
 
@@ -118,7 +118,7 @@ def test_run_batch_partial_failure(monkeypatch):
 
 def test_run_batch_empty_tables(monkeypatch):
     _patch(monkeypatch)
-    wf = DataIntegrationWorkflow(use_checkpointer=False)
+    wf = DataIntegrationWorkflow()
     result = wf.run_batch("同步", [])
     assert result["success"] is False
     assert result["pipeline_id"] is None
