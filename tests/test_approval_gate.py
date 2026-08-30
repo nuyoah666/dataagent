@@ -149,6 +149,10 @@ def test_reject_cancels_task(gate_agents):
     assert gate_agents["exec"].calls == 0  # 未执行任何同步
     # 拒绝后不可再审批
     assert wf.approve_task(task_id) is None
+    # 幂等：重复 reject 不应再打"人工拒绝"日志（守卫读旧状态也不重复记录）
+    assert wf.reject_task(task_id) is None
+    logs = get_task_manager().get_task_logs(task_id)
+    assert sum(1 for l in logs if "人工拒绝执行，任务取消" in l["message"]) == 1
 
 
 def test_cancel_pending_task_allowed(gate_agents):

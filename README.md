@@ -121,7 +121,11 @@ Web 界面：
 
 ```bash
 pytest                          # 单元/集成测试（离线，mock DataX/数据库/LLM）
+python scripts/eval_gate.py     # 发版前一键门禁：golden 回归(阻塞)+轨迹巡检/体检(诊断)
+python scripts/eval_gate.py --llm                       # 完整门禁：再加真实 LLM 质量评测(阻塞)
 python scripts/eval_golden.py   # 第①层：确定性回归（不调 LLM/不连库），CI 门禁
+python scripts/eval_trajectory.py  # 在线轨迹正确性巡检（读 tasks.db，门禁/状态机顺序）
+python scripts/lint_traces.py      # 在线轨迹健康体检（重复步骤/报错、空转、耗时离群）
 python scripts/eval_llm_quality.py            # 第②层：LLM 开放点质量评测（发版前手动跑）
 python scripts/eval_llm_quality.py --judge    # 追加 LLM 主观打分（额外消耗 token）
 ```

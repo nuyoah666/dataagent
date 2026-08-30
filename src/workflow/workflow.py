@@ -470,9 +470,12 @@ class AgentWorkflow:
             return None
         if task.get("status") != TaskStatus.PENDING_APPROVAL.value:
             return None
+        # 先做原子状态流转，确认真正取消后才记日志/审计——
+        # 避免重复点击 reject 时守卫读到旧状态、却反复打"人工拒绝"日志（幂等）。
+        if not self.task_mgr.complete_task(task_id, TaskStatus.CANCELLED, error="人工拒绝执行"):
+            return None
         self.task_mgr.log(task_id, "WARNING", "人工拒绝执行，任务取消")
         self.task_mgr.audit(task_id, "task_reject", operator=operator)
-        self.task_mgr.complete_task(task_id, TaskStatus.CANCELLED, error="人工拒绝执行")
         logger.info("人工拒绝执行", extra={"task_id": task_id})
         return self.task_mgr.get_task(task_id)
 
