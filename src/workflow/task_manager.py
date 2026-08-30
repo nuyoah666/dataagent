@@ -304,6 +304,27 @@ class TaskManager:
             out.append(d)
         return out
 
+    def get_recent_task_with_intent(
+        self, task_types=("data_integration", "etl_development"), exclude_task_id: str = "",
+    ) -> Optional[Dict[str, Any]]:
+        """最近一个带结构化 intent 且能抽到源表的任务（跨会话指代消解用）。"""
+        placeholders = ",".join("?" for _ in task_types)
+        conn = _get_conn()
+        rows = conn.execute(
+            f"SELECT * FROM tasks WHERE task_type IN ({placeholders}) "
+            "AND parsed_intent IS NOT NULL AND status != ? "
+            "ORDER BY created_at DESC LIMIT 20",
+            (*task_types, TaskStatus.CANCELLED.value),
+        ).fetchall()
+        for r in rows:
+            task = self._deserialize_row(dict(r))
+            if task["task_id"] == exclude_task_id:
+                continue
+            intent = task.get("parsed_intent") or {}
+            if isinstance(intent, dict) and intent.get("source_table"):
+                return task
+        return None
+
     def get_pipeline_tasks(self, pipeline_id: str) -> List[Dict[str, Any]]:
         """获取某个 pipeline 下的全部子任务。"""
         conn = _get_conn()

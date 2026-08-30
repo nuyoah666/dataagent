@@ -28,6 +28,31 @@ from .base import BaseAgent, register_agent
 logger = logging.getLogger(__name__)
 
 
+# System prompt 抽为模块级常量：跨任务字节级稳定，利于前缀缓存命中；
+# 逐任务变化的内容（用户指令/表结构/RAG）一律放 human 消息。
+_INTENT_SYSTEM = (
+    "你是数据同步专家。解析用户指令，返回 JSON（仅 JSON，无其他文本）。\n"
+    "字段：source_name, source_db_type, source_host, source_port, source_username, "
+    "source_password, source_database, source_table, target_db_type, "
+    "target_host, target_port, target_username, target_password, "
+    "target_database, target_table, sync_type, update_cycle。\n"
+    "source_name：用户提到命名数据源（如「数据源 生产MySQL」/「用 XX 同步」）"
+    "时填写，否则空字符串。\n"
+    "重要：不要编造账号密码。source_password/target_password 仅在指令中"
+    "明确出现时填写，否则一律返回空字符串。\n"
+    "sync_type: full 或 incremental（增量）；update_cycle: day 或 hour（默认 day，指令含“每小时”时为 hour）。\n"
+    "默认值：MySQL 127.0.0.1:3306 root/datax_test；"
+    "MongoDB 127.0.0.1:27017 无鉴权/datax_test；ES localhost:9200"
+)
+_DATAX_SYSTEM = (
+    "你是 DataX 配置专家。根据提供的信息生成可直接执行的 DataX JSON。\n"
+    "要求：1) 包含 job.setting 和 job.content；"
+    "2) content 每项必须有 reader 和 writer；3) 仅返回 JSON。\n"
+    "重要：不要生成 querySql 字段（增量过滤用 reader.parameter.where，"
+    "reader 用 connection.table 单表同步，禁止 table 与 querySql 共存）。"
+)
+
+
 @register_agent(
     "data_integration", "config",
     description="解析同步意图，生成 DataX 配置",
@@ -66,7 +91,7 @@ class ConfigAgent(BaseAgent):
         if state.get("parsed_intent"):
             intent = dict(state["parsed_intent"])
         else:
-            intent = self._parse_intent(user_query)
+            intent = self._parse_intent(user_query, state.get("context_hint") or "")
         # 2. 回填本地默认凭据（LLM 可能编造密码，或留空）
         intent = self._apply_config_defaults(intent)
         if intent.get("_source_name_error"):
@@ -148,30 +173,29 @@ class ConfigAgent(BaseAgent):
 
     # ---- 意图解析 ----
 
-    def _parse_intent(self, user_query: str) -> Dict[str, Any]:
+    def _parse_intent(self, user_query: str, context_hint: str = "") -> Dict[str, Any]:
+        human = f"{context_hint}\n指令：{user_query}" if context_hint else f"指令：{user_query}"
         try:
             data = llm_json(
-                "你是数据同步专家。解析用户指令，返回 JSON（仅 JSON，无其他文本）。\n"
-                "字段：source_name, source_db_type, source_host, source_port, source_username, "
-                "source_password, source_database, source_table, target_db_type, "
-                "target_host, target_port, target_username, target_password, "
-                "target_database, target_table, sync_type, update_cycle。\n"
-                "source_name：用户提到命名数据源（如「数据源 生产MySQL」/「用 XX 同步」）"
-                "时填写，否则空字符串。\n"
-                "重要：不要编造账号密码。source_password/target_password 仅在指令中"
-                "明确出现时填写，否则一律返回空字符串。\n"
-                "sync_type: full 或 incremental（增量）；update_cycle: day 或 hour（默认 day，指令含“每小时”时为 hour）。\n"
-                "默认值：MySQL 127.0.0.1:3306 root/datax_test；"
-                "MongoDB 127.0.0.1:27017 无鉴权/datax_test；ES localhost:9200",
-                f"指令：{user_query}",
+                _INTENT_SYSTEM,
+                human,
                 llm=self.llm, breaker=llm_circuit_breaker,
             )
             # Pydantic 强校验：保证字段齐全、类型正确
-            return SyncIntent.model_validate(data).model_dump()
+            intent = SyncIntent.model_validate(data).model_dump()
         except Exception as e:
             logger.warning(f"意图解析失败，使用 fallback: {e}")
+            intent = self._fallback_intent(user_query)
+        # 跨会话指代：LLM 与 fallback 两条路径都可能抽不到表名（"那个表"），
+        # 统一在此从上一任务上下文补，且用户当前指令明确给出的表名优先
+        if context_hint and not intent.get("source_table"):
+            from ..tools.conversation import extract_hint_table
 
-        return self._fallback_intent(user_query)
+            hinted = extract_hint_table(context_hint)
+            if hinted:
+                intent["source_table"] = hinted
+                logger.info("跨会话指代: 源表沿用上一任务 %s", hinted)
+        return intent
 
     def _apply_config_defaults(self, intent: Dict[str, Any]) -> Dict[str, Any]:
         """凭据回填（与审批恢复共用同一份规则，见 tools/credentials）。"""
@@ -255,7 +279,12 @@ class ConfigAgent(BaseAgent):
         """
         table = (intent.get("source_table") or "").strip()
         if not table:
-            return intent, [], ""  # 交由下游报"未指定源表名"
+            # 表名缺失（含"那个表"指代且无上一任务上下文）必须在此拦住，
+            # 不能让空配置进入审批/执行
+            return intent, [], (
+                "未识别到源表名：请明确指定表名（示例：把 src_user 表同步到 StarRocks），"
+                "或使用同步向导选择数据源/库/表"
+            )
         db_type = intent.get("source_db_type", "mysql")
 
         # 1) 显式 库.表：跳过发现
@@ -378,11 +407,7 @@ class ConfigAgent(BaseAgent):
             intent_str = json.dumps(intent, ensure_ascii=False, indent=2)
             schema_str = json.dumps(schema, ensure_ascii=False, indent=2)
             return llm_json(
-                "你是 DataX 配置专家。根据提供的信息生成可直接执行的 DataX JSON。\n"
-                "要求：1) 包含 job.setting 和 job.content；"
-                "2) content 每项必须有 reader 和 writer；3) 仅返回 JSON。\n"
-                "重要：不要生成 querySql 字段（增量过滤用 reader.parameter.where，"
-                "reader 用 connection.table 单表同步，禁止 table 与 querySql 共存）。",
+                _DATAX_SYSTEM,
                 f"源数据库：\n{intent_str}\n\n源表结构：\n{schema_str}\n\n"
                 f"DataX 文档：\n{rag_ctx}\n\n请生成配置：",
                 llm=self.llm, breaker=llm_circuit_breaker,

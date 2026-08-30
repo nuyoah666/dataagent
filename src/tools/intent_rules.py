@@ -56,11 +56,12 @@ DB_TYPE_RE = "|".join(
 )
 
 # 源表名抽取（按优先级，命中即止）
+# 末条 (?!到) 防止"同步到 StarRocks"把虚词"到"误抓为表名
 SOURCE_TABLE_PATTERNS = (
     r"表[：:]\s*(\w+)",
     r"(\w+)\s*表",
     r"同步\s*([\w]+?)\s*到",
-    r"同步\s*(\w+)",
+    r"同步\s+(?!到)(\w+)",
 )
 
 _LEADING_VERBS = re.compile(r"^\s*(?:把|将|请|帮我|帮忙|对|给)\s*")
@@ -77,12 +78,22 @@ def strip_leading_verbs(text: str) -> str:
     return _LEADING_VERBS.sub("", text or "")
 
 
+# 抽到"表名"位置但其实是指代词（那个表/刚才那个表/该表），视为未抽到，
+# 交由上层跨会话指代逻辑从上一任务补表名
+_DEICTIC_PARTS = ("那个", "这个", "刚才", "什么", "哪张", "哪张表", "上面")
+_DEICTIC_EXACT = {"该", "啥", "哪", "到", "在", "给", "把", "去", "来", "的", "了"}
+
+
+def _looks_deictic(word: str) -> bool:
+    return word in _DEICTIC_EXACT or any(p in word for p in _DEICTIC_PARTS)
+
+
 def extract_source_table(text: str) -> str:
     """从指令抽取源表名（先去引导动词，按优先级匹配）。"""
     clean = strip_leading_verbs(text)
     for pat in SOURCE_TABLE_PATTERNS:
         m = re.search(pat, clean)
-        if m:
+        if m and not _looks_deictic(m.group(1)):
             return m.group(1)
     return ""
 

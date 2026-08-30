@@ -141,6 +141,20 @@ async def chat_submit(req: ChatSubmitRequest):
     tm.update_task(task_id, current_step="submitted")
     tm.log(task_id, "INFO", f"已提交（{routed.task_type}，来源={routed.source}）")
 
+    # 跨会话指代："把刚才那个表同步到 StarRocks" -> 注入上一任务的结构化上下文
+    context_hint = ""
+    try:
+        from src.tools.conversation import needs_context, build_context_hint
+
+        if needs_context(query):
+            recent = tm.get_recent_task_with_intent(exclude_task_id=task_id)
+            if recent:
+                context_hint = build_context_hint(recent.get("parsed_intent") or {})
+                if context_hint:
+                    tm.log(task_id, "INFO", f"检测到指代词，注入上一任务 {recent['task_id']} 上下文")
+    except Exception:
+        logging.getLogger(__name__).debug("指代消解跳过", exc_info=True)
+
     def _run_background():
         try:
             wf = _support.get_workflow(routed.task_type)
@@ -149,6 +163,7 @@ async def chat_submit(req: ChatSubmitRequest):
                     query,
                     thread_id=task_id,
                     precreated_task_id=task_id,
+                    context_hint=context_hint,
                 )
         except Exception as e:
             import logging

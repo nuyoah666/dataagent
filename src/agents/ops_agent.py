@@ -26,6 +26,21 @@ from .base import BaseAgent, register_agent
 
 logger = logging.getLogger(__name__)
 
+
+# System prompt 常量：跨任务字节级稳定以利前缀缓存；任务信息/检索结果放 human。
+_OPS_DIAGNOSE_SYSTEM = (
+    "你是数仓运维专家。根据失败任务信息与事故知识库检索结果，"
+    "输出 JSON 诊断报告（仅 JSON，无其他文本）：\n"
+    "字段: root_cause（根因，中文）, impact（影响）, "
+    "solution_steps（处置步骤，字符串数组）, "
+    "related_incidents（关联的事故记录 source，数组）, "
+    "related_links（网络检索到的参考链接，[{'title','url'}] 数组，无则空数组）, "
+    "confidence（0-1，对根因的把握程度）。\n"
+    "要求：优先参考检索到的事故记录；检索无相关内容时基于经验判断；"
+    "不要编造日志里不存在的细节；网络检索结果仅作外部线索，"
+    "与本地环境可能不完全匹配，引用时必须给出真实 URL。"
+)
+
 _TASK_ID_RE = re.compile(r"(?:任务|task)\s*[:：#]?\s*([A-Za-z0-9_-]{6,})")
 _RETRY_RE = re.compile(r"重试|retry", re.IGNORECASE)
 _KILL_RE = re.compile(r"清理|杀进程|kill", re.IGNORECASE)
@@ -172,18 +187,7 @@ class OpsDiagnosisAgent(BaseAgent):
         web_results: list[dict] = None,
     ) -> dict:
         web_results = web_results or []
-        prompt_text = (
-            "你是数仓运维专家。根据失败任务信息与事故知识库检索结果，"
-            "输出 JSON 诊断报告（仅 JSON，无其他文本）：\n"
-            "字段: root_cause（根因，中文）, impact（影响）, "
-            "solution_steps（处置步骤，字符串数组）, "
-            "related_incidents（关联的事故记录 source，数组）, "
-            "related_links（网络检索到的参考链接，[{'title','url'}] 数组，无则空数组）, "
-            "confidence（0-1，对根因的把握程度）。\n"
-            "要求：优先参考检索到的事故记录；检索无相关内容时基于经验判断；"
-            "不要编造日志里不存在的细节；网络检索结果仅作外部线索，"
-            "与本地环境可能不完全匹配，引用时必须给出真实 URL。"
-        )
+        prompt_text = _OPS_DIAGNOSE_SYSTEM
         rag_text = "\n".join(
             f"[{h.get('source')}] {h.get('content', '')[:300]}" for h in rag_hits[:3]
         ) or "（无检索结果）"

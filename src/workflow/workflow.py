@@ -261,6 +261,7 @@ class AgentWorkflow:
         diagnose_task_id: str = None,
         precreated_task_id: str = None,
         parsed_intent: dict = None,
+        context_hint: str = None,
     ) -> Dict[str, Any]:
         """执行完整工作流。"""
         # 创建任务记录
@@ -294,6 +295,7 @@ class AgentWorkflow:
             "pipeline_id": pipeline_id,
             "parent_task_id": parent_task_id,
             "diagnose_task_id": diagnose_task_id,
+            "context_hint": context_hint,
         }
 
         ctx_token = bind_task_context(task_id)  # LLM token 度量归属本任务

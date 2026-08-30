@@ -89,6 +89,14 @@ class Config:
         "data_ops": os.getenv("AGENT_DATA_OPS_MODEL", ""),
         "data_analysis": os.getenv("AGENT_DATA_ANALYSIS_MODEL", ""),
     }
+    # 轻量 classify 角色模型：意图路由 LLM 兜底等"输入短、输出短、答案窄"的任务。
+    # 缺省走全局模型；配置为 Flash 类小模型可把这类调用成本降到旗舰的 1/10~1/20。
+    AGENT_CLASSIFY_MODEL: str = os.getenv("AGENT_CLASSIFY_MODEL", "")
+
+    @classmethod
+    def get_classify_model(cls) -> Optional[str]:
+        """classify 角色模型；未配置返回 None（调用方回退全局模型）。"""
+        return cls.AGENT_CLASSIFY_MODEL or None
 
     # DataX JVM 参数（本机内存紧张时降低堆，避免 Could not reserve enough space）
     DATAX_JVM: str = os.getenv("DATAX_JVM", "-Xms512m -Xmx512m")

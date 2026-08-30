@@ -173,6 +173,7 @@ class IntentRouter:
     def _llm_route(self, text: str) -> RouterResult:
         try:
             from langchain_core.prompts import ChatPromptTemplate
+            from .config import config
             from .utils.llm import get_llm
 
             prompt = ChatPromptTemplate.from_messages([
@@ -182,7 +183,8 @@ class IntentRouter:
                 )),
                 ("human", "指令：{query}"),
             ])
-            result = (prompt | get_llm()).invoke({"query": text})
+            # classify 角色：短输入短输出，优先走配置的轻量模型
+            result = (prompt | get_llm(config.get_classify_model())).invoke({"query": text})
             task_type = str(result.content).strip().lower()
             if task_type in self.rules:
                 return RouterResult(task_type, 0.8, [], "llm", "LLM 兜底路由")

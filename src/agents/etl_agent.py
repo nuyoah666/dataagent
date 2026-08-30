@@ -41,6 +41,20 @@ from .base import BaseAgent, register_agent
 
 logger = logging.getLogger(__name__)
 
+
+# System prompt 常量：跨任务字节级稳定以利前缀缓存；动态内容放 human。
+_ETL_MAPPING_SYSTEM = (
+    "你是数仓 ETL 专家。解析透传加工指令中的映射要求，只输出 JSON（仅 JSON）：\n"
+    "{\"field_mappings\": [{\"source_column\": \"源列名\", \"target_column\": \"目标列名\"}],\n"
+    " \"enum_mappings\": [{\"column\": \"源列名\", \"code_type\": \"码值类型(如 gender/status)\","
+    " \"target_column\": \"输出可读名列名(可省略)\"}]}\n"
+    "要求：\n"
+    "1) 字段映射仅当用户要求改名/去列时填写，source_column 必须来自源表；\n"
+    "2) 枚举映射仅当用户要求把码值(如 1/0)转成可读名(男/女)时填写，"
+    "code_type 用业务语义（gender/status/…）；\n"
+    "3) 未涉及的映射留空数组，禁止臆造列名。"
+)
+
 # 规则关键词
 _PASSTHROUGH_RE = re.compile(
     r"(?:把|将)?\s*([A-Za-z0-9_]+)\s*(?:透传|同步|加工|清洗|转换|迁移|转换到)\s*(?:为|到|成|至)\s*([A-Za-z0-9_]+)"
@@ -142,6 +156,14 @@ class ETLConfigAgent(BaseAgent):
     def _run(self, state: DataIntegrationState) -> DataIntegrationState:
         user_query = state.get("user_query", "")
         intent = self._parse_intent(user_query)
+        # 跨会话指代：规则未抽到源表时，从上一任务上下文补
+        if not intent["source_table"] and state.get("context_hint"):
+            from ..tools.conversation import extract_hint_table
+
+            hinted = extract_hint_table(state["context_hint"])
+            if hinted:
+                intent["source_table"] = hinted
+                logger.info("跨会话指代: ETL 源表沿用上一任务 %s", hinted)
         if not intent["source_table"]:
             raise ValueError("无法解析源表（示例：把 ods_user 透传到 dwd_user）")
 
@@ -237,15 +259,7 @@ class ETLConfigAgent(BaseAgent):
         # 枚举/字段映射：LLM 解析映射细节
         try:
             data = llm_json(
-                "你是数仓 ETL 专家。解析透传加工指令中的映射要求，只输出 JSON（仅 JSON）：\n"
-                "{\"field_mappings\": [{\"source_column\": \"源列名\", \"target_column\": \"目标列名\"}],\n"
-                " \"enum_mappings\": [{\"column\": \"源列名\", \"code_type\": \"码值类型(如 gender/status)\","
-                " \"target_column\": \"输出可读名列名(可省略)\"}]}\n"
-                "要求：\n"
-                "1) 字段映射仅当用户要求改名/去列时填写，source_column 必须来自源表；\n"
-                "2) 枚举映射仅当用户要求把码值(如 1/0)转成可读名(男/女)时填写，"
-                "code_type 用业务语义（gender/status/…）；\n"
-                "3) 未涉及的映射留空数组，禁止臆造列名。",
+                _ETL_MAPPING_SYSTEM,
                 f"指令：{user_query}",
                 llm=self._get_llm(),
                 breaker=llm_circuit_breaker,

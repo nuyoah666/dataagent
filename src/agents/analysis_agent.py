@@ -23,6 +23,25 @@ from .base import BaseAgent, register_agent
 
 logger = logging.getLogger(__name__)
 
+
+# System prompt 常量：静态指令字节级稳定以利前缀缓存；
+# 指标/维度清单随语义层 catalog 变化（同部署内跨任务稳定），拼在 human 侧。
+_ANALYSIS_PARSE_SYSTEM = (
+    "你是数据分析语义层解析器。把用户的分析请求转成 JSON（仅 JSON，无其他文本）：\n"
+    "{\"metrics\": [\"指标名\"], \"dimensions\": [\"维度名\"],\n"
+    " \"filters\": [{\"dimension\": \"维度名\", \"op\": \"=\", \"value\": \"值\"}],\n"
+    " \"granularity\": \"day|month|year（空字符串表示不折叠）\",\n"
+    " \"limit\": 1000, \"order_by\": \"指标或维度名（可选）\", \"order_desc\": true}\n"
+    "要求：\n"
+    "1) 指标/维度只能从用户消息给出的清单中选择，禁止臆造；\n"
+    "2) 用户提到'按月/按年/按天'时设置 granularity；\n"
+    "3) 没有过滤条件时 filters 为空数组。"
+)
+_ANALYSIS_SUMMARY_SYSTEM = (
+    "你是数据分析师。根据 SQL 和查询结果，用 2-3 句中文总结要点"
+    "（趋势、异常、结论），只输出 JSON：{\"summary\": \"...\"}"
+)
+
 # 规则解析："分析 X 按 Y" / "统计 X 按 Y"（LLM 兜底前的确定性路径）
 _RULE_QUERY_RE = re.compile(
     r"(?:分析|统计|查询|看看|看下)\s*([\u4e00-\u9fa5A-Za-z0-9_]+?)\s*"
@@ -99,24 +118,14 @@ class AnalysisConfigAgent(BaseAgent):
             all_metrics.extend(t.all_metric_names())
             all_dims.extend(t.all_dimension_names())
 
-        prompt = (
-            "你是数据分析语义层解析器。把用户的分析请求转成 JSON（仅 JSON，无其他文本）：\n"
-            "{\"metrics\": [\"指标名\"], \"dimensions\": [\"维度名\"],\n"
-            " \"filters\": [{\"dimension\": \"维度名\", \"op\": \"=\", \"value\": \"值\"}],\n"
-            " \"granularity\": \"day|month|year（空字符串表示不折叠）\",\n"
-            " \"limit\": 1000, \"order_by\": \"指标或维度名（可选）\", \"order_desc\": true}\n"
-            "要求：\n"
-            "1) 指标/维度只能从下面清单选择，禁止臆造：\n"
-            f"指标: {', '.join(all_metrics)}\n"
-            f"维度: {', '.join(all_dims)}\n"
-            "2) 用户提到'按月/按年/按天'时设置 granularity；\n"
-            "3) 没有过滤条件时 filters 为空数组。"
-        )
+        prompt = _ANALYSIS_PARSE_SYSTEM
         last_err = None
         for attempt in range(2):  # LLM 输出不稳定，重试一次
             try:
                 data = llm_json(
                     prompt,
+                    f"可选指标: {', '.join(all_metrics)}\n"
+                    f"可选维度: {', '.join(all_dims)}\n"
                     f"用户请求：{user_query}",
                     llm=self._get_llm(),
                     breaker=llm_circuit_breaker,
@@ -227,8 +236,7 @@ class AnalysisExecutionAgent(BaseAgent):
         try:
             preview = rows[:10]
             data = llm_json(
-                "你是数据分析师。根据 SQL 和查询结果，用 2-3 句中文总结要点"
-                "（趋势、异常、结论），只输出 JSON：{\"summary\": \"...\"}",
+                _ANALYSIS_SUMMARY_SYSTEM,
                 f"SQL：{sql}\n列：{columns}\n结果前 {len(preview)} 行：{preview}",
                 llm=self._get_llm(),
                 breaker=llm_circuit_breaker,
