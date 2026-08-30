@@ -84,5 +84,29 @@
         "TRUNCATE"
       ]
     }
+  },
+  {
+    "id": "analysis_good_b53cea79",
+    "from_good_case": "b53cea797796",
+    "query": "按日期统计用户数",
+    "expect": {
+      "sql_must_not_contain": [
+        "INSERT",
+        "DELETE",
+        "UPDATE",
+        "DROP",
+        "ALTER"
+      ],
+      "metrics_include": [
+        "user_count"
+      ],
+      "dimensions_include": [
+        "dt"
+      ],
+      "sql_must_contain": [
+        "SELECT",
+        "GROUP BY"
+      ]
+    }
   }
 ]

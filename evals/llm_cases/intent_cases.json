@@ -62,5 +62,15 @@
       "source_table": "enum_src",
       "target_db_type": "starrocks"
     }
+  },
+  {
+    "id": "intent_good_71ed8939",
+    "from_good_case": "71ed89396cc2",
+    "query": "把 datax_test.src_user 同步到 StarRocks",
+    "expect": {
+      "sync_type": "full",
+      "source_table": "src_user",
+      "target_db_type": "starrocks"
+    }
   }
 ]

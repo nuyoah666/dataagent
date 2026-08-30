@@ -204,6 +204,44 @@ async def list_badcases(limit: int = 50):
     return {"cases": list_backlog(min(int(limit), 500))}
 
 
+@router.post("/tasks/{task_id}/goodcase")
+async def reap_goodcase(task_id: str, req: BadCaseRequest, request: Request):
+    """把成功任务沉淀为 Good Case（回归/防漂移素材）。
+
+    成功任务的 parsed_intent / analysis_sql 是已验证正确产出，晋升 golden 时
+    无需重放 LLM（零成本）。素材写入 evals/backlog/good_cases.jsonl。
+    """
+    tm = get_task_manager()
+    task = tm.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if task.get("status") != "success":
+        raise HTTPException(status_code=409, detail="只有成功任务可以沉淀为 Good Case")
+    from src.eval.goodcase import reap_good_case
+
+    operator = request.headers.get("X-Operator", "system")[:50]
+    case = await asyncio.to_thread(reap_good_case, task, (req.note or "")[:500], operator)
+    tm.audit(task_id, "goodcase_reap", operator=operator, detail=(req.note or "")[:200])
+    if case.get("duplicate"):
+        return {"task_id": task_id, "duplicate": True, "message": "该任务已沉淀过"}
+    if not case.get("snapshot"):
+        return {"task_id": task_id, "duplicate": False,
+                "message": "任务成功但无可快照的 LLM 产出（该类型暂不纳入 good case）"}
+    return {
+        "task_id": task_id, "duplicate": False,
+        "layer": case["snapshot"].get("layer"),
+        "message": "已沉淀到 evals/backlog/good_cases.jsonl，promote-good 即可零成本转为回归用例",
+    }
+
+
+@router.get("/evals/goodcases")
+async def list_goodcases(limit: int = 50):
+    """查看已回流的 good case 素材。"""
+    from src.eval.goodcase import list_good
+
+    return {"cases": list_good(min(int(limit), 500))}
+
+
 @router.get("/tasks/{task_id}/config")
 async def get_task_config(task_id: str):
     """返回任务配置视图（字段映射 / where / 连接信息 / 原始 JSON）。"""

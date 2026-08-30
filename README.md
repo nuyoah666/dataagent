@@ -154,6 +154,22 @@ python scripts/triage_badcase.py status               # 分诊进度
 晋升的草稿带 `needs_review: true`，**不参与评测打分**；人工核对 `expect` 后删掉该标记
 即正式纳入 `evals/llm_cases/` 回归集（人在环里，避免把未确认输出固化成标准）。
 
+**Good case 闭环（成功任务 -> 防回归 / 防模型漂移）**：失败任务靠 bad case *发现新问题*，
+成功任务则沉淀为 *防漂移基线*。成功任务落库的 `parsed_intent` / `analysis_sql` 本身就是
+经过数据校验的正确产出，因此晋升时**零 LLM 成本**——直接快照推导 `expect`，无需重放：
+
+```bash
+curl -X POST localhost:8010/tasks/<task_id>/goodcase -d '{"note":"基线"}'  # 仅成功任务可回流
+python scripts/triage_badcase.py list-good                  # 待晋升的成功素材
+python scripts/triage_badcase.py promote-good <task_id>     # 快照零成本生成 golden 草稿
+python scripts/triage_badcase.py status                     # good/bad 分类进度
+```
+
+素材写 `evals/backlog/good_cases.jsonl`（已 gitignore）；晋升草稿同样带 `needs_review`，
+人工核对后纳入回归集。此后每次 `eval_llm_quality.py` 都会重放这些 query，一旦模型升级/
+切换后意图解析或问数语义偏离已验证的正确行为，评测立即红灯——这就是个人项目里最轻量的
+「模型漂移检测」。
+
 ## MCP Server（模型上下文协议）
 
 把平台能力暴露为标准 MCP 工具，任何支持 MCP 的客户端
