@@ -15,6 +15,7 @@ from langgraph.graph import StateGraph, END
 from ..state import DataIntegrationState
 from ..agents import get_step_agents, get_task_approval
 from ..tools import detect_incremental_field, enhance_config_with_incremental
+from ..tools.db_tool import validate_identifier
 from .task_manager import get_task_manager, TaskStatus, _NON_TERMINAL_STATUSES
 from ..utils.security import redact_secrets, _is_secret_key
 from ..utils.llm import bind_task_context, reset_task_context

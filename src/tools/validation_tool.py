@@ -82,7 +82,8 @@ class ValidationTool:
             
             # 生成校验总结
             summary = self._generate_summary(
-                source_count, target_count, count_match, unique_check
+                source_count, target_count, count_match, unique_check,
+                incremental=allow_count_mismatch,
             )
             
             # 全量必须行数匹配；增量允许 0 条（无新数据合法，count_match 仍返回供展示）。
@@ -271,14 +272,21 @@ class ValidationTool:
         source_count: int,
         target_count: int,
         count_match: bool,
-        unique_check: Optional[Dict[str, Any]]
+        unique_check: Optional[Dict[str, Any]],
+        incremental: bool = False,
     ) -> str:
         """生成校验总结。"""
         summary_parts = []
-        
+
         # 记录数校验
         if count_match:
             summary_parts.append(f"✅ 记录数匹配：源表 {source_count} 条，目标表 {target_count} 条")
+        elif incremental:
+            # 增量任务只同步窗口内数据，整表行数不做强制比对
+            summary_parts.append(
+                f"ℹ️ 增量模式不做整表行数比对：源表 {source_count} 条，"
+                f"目标表 {target_count} 条（首次为全量 bootstrap，之后按水位追加）"
+            )
         else:
             diff = abs(source_count - target_count)
             summary_parts.append(f"❌ 记录数不匹配：源表 {source_count} 条，目标表 {target_count} 条，差异 {diff} 条")

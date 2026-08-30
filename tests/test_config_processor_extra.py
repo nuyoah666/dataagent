@@ -146,6 +146,8 @@ class TestPluginNameCase:
             target_db_type="mysql",
             target_host="127.0.0.1",
             target_port=3306,
+            target_username="root",
+            target_password="pw",
             target_database="datax_test",
             target_table="dst_table",
         )
@@ -381,6 +383,8 @@ class TestStarRocks:
             target_db_type="starrocks",
             target_host="127.0.0.1",
             target_port=9030,
+            target_username="datax",
+            target_password="test-password-123",
             target_database="datax_test",
             target_table="src_user_sr",
         )
@@ -448,6 +452,8 @@ class TestStarRocks:
             target_db_type="mysql",
             target_host="127.0.0.1",
             target_port=3306,
+            target_username="root",
+            target_password="pw",
             target_database="datax_test",
             target_table="dst_table",
         )
@@ -500,6 +506,8 @@ class TestSchemaColumns:
             target_db_type="mysql",
             target_host="127.0.0.1",
             target_port=3306,
+            target_username="root",
+            target_password="pw",
             target_database="target_db",
             target_table="target_user",
         )
@@ -874,3 +882,64 @@ class TestPrimaryMirrorDdl:
         )
         assert "PRIMARY KEY(`id`)" in ddl
         assert "PARTITION BY" not in ddl
+
+
+class TestStarRocksWriter:
+    """StarRocks 目标走 mysqlwriter（FE MySQL 协议）的专项修复。"""
+
+    def _sr_intent(self, **ov):
+        base = _intent(
+            target_db_type="starrocks",
+            target_host="127.0.0.1",
+            target_port=9031,
+            target_username="datax",
+            target_password="Datax@2026",
+            target_database="datax_test",
+            target_table="ods_src_user",
+        )
+        base.update(ov)
+        return base
+
+    def test_empty_password_fails_at_config_stage(self):
+        """空密码必须在配置阶段拦下（DataX 引擎侧是 DBUtilErrorCode-03 退出码 1）。"""
+        schema = {"success": True, "columns": [{"name": "id", "type": "bigint"}]}
+        result = process_config(self._sr_intent(target_password=""), schema)
+        assert result["success"] is False
+        assert any("密码为空" in e for e in result["errors"])
+        assert any("STARROCKS" in e for e in result["errors"])
+
+    def test_stream_load_noise_stripped(self):
+        """LLM 混写的 starrockswriter 参数（loadUrl/loadProps）在 mysqlwriter 下清除。"""
+        llm_cfg = {
+            "job": {"content": [{
+                "reader": {"name": "mysqlreader", "parameter": {
+                    "username": "root", "password": "pw",
+                    "column": ["id"],
+                    "connection": [{"table": ["src_user"],
+                                    "jdbcUrl": ["jdbc:mysql://127.0.0.1:3306/datax_test"]}],
+                }},
+                "writer": {"name": "starrockswriter", "parameter": {
+                    "username": "datax", "password": "Datax@2026",
+                    "column": ["id"],
+                    "loadUrl": ["127.0.0.1:8030"],
+                    "loadProps": {"format": "json"},
+                    "connection": [{"jdbcUrl": "jdbc:mysql://127.0.0.1:9031/datax_test",
+                                    "table": ["ods_src_user"]}],
+                }},
+            }]}
+        }
+        cfg = normalize_datax_config(llm_cfg, self._sr_intent())
+        wparam = cfg["job"]["content"][0]["writer"]["parameter"]
+        assert cfg["job"]["content"][0]["writer"]["name"] == "mysqlwriter"
+        assert "loadUrl" not in wparam
+        assert "loadProps" not in wparam
+        valid, errors = validate_datax_config(cfg)
+        assert valid, errors
+
+    def test_non_empty_password_passes(self):
+        schema = {"success": True, "columns": [{"name": "id", "type": "bigint"}]}
+        result = process_config(self._sr_intent(), schema)
+        assert result["success"] is True, result["errors"]
+        w = result["config"]["job"]["content"][0]["writer"]
+        assert w["name"] == "mysqlwriter"
+        assert w["parameter"]["password"] == "Datax@2026"

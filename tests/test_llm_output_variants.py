@@ -93,6 +93,27 @@ class TestLlmVariantConfigResidual:
         assert "querySql" not in reader
         assert "querySql" not in reader["connection"][0]
 
+    def test_llm_where_stripped(self):
+        """LLM 自带的固定窗口 where（DATE_SUB/CURDATE）必须清除：
+        增量窗口由水位机制权威生成，bootstrap 不能被缩成'昨天'。"""
+        llm_config = {
+            "job": {"content": [{
+                "reader": {"name": "mysqlreader", "parameter": {
+                    "column": ["id"],
+                    "where": "`update_time` >= DATE_SUB(CURDATE(), INTERVAL 1 DAY)",
+                    "connection": [{"jdbcUrl": ["jdbc:mysql://127.0.0.1:3306/cdc_test_db"],
+                                    "table": ["user_action_log"]}],
+                }},
+                "writer": {"name": "mysqlwriter", "parameter": {
+                    "column": ["id"],
+                    "connection": [{"jdbcUrl": "jdbc:mysql://127.0.0.1:9030/db", "table": ["t"]}],
+                }},
+            }]},
+        }
+        out = _process(_base_intent(), llm_config)
+        reader = out["config"]["job"]["content"][0]["reader"]["parameter"]
+        assert "where" not in reader
+
     def test_speed_byte_removed(self):
         llm_config = {
             "job": {
@@ -131,3 +152,39 @@ class TestLlmVariantCredentials:
         out = apply_intent_defaults(intent)
         # 默认用户的密码一律以 .env 为准（默认无密码则回填空串）
         assert out["target_password"] == sr["password"]
+
+    def test_target_database_normalized_source_preserved(self):
+        """LLM 把源库名传播到目标端（cdc_test_db）：目标库归一 .env 默认，
+        源库保留（显式 库.表 定位不能被覆盖）。"""
+        sr = config.STARROCKS_CONFIG
+        intent = _base_intent(
+            target_database="cdc_test_db",  # LLM 从源端照抄
+        )
+        out = apply_intent_defaults(intent)
+        assert out["target_database"] == sr["database"]
+        assert out["source_database"] == "cdc_test_db"
+
+    def test_writer_top_level_database_synced(self):
+        """writer.parameter.database 不能残留源库名（误导建表/配置视图）。"""
+        intent = _base_intent(target_database="cdc_test_db")
+        llm_cfg = {
+            "job": {"content": [{
+                "reader": {"name": "mysqlreader", "parameter": {
+                    "username": "root", "password": "pw", "column": ["id"],
+                    "connection": [{"table": ["user_action_log"],
+                                    "jdbcUrl": ["jdbc:mysql://127.0.0.1:3306/cdc_test_db"]}],
+                }},
+                "writer": {"name": "mysqlwriter", "parameter": {
+                    "username": "root", "password": "pw",
+                    "database": "cdc_test_db",
+                    "column": ["id"],
+                    "connection": [{"jdbcUrl": "jdbc:mysql://127.0.0.1:9031/cdc_test_db",
+                                    "table": ["ods_user_action_log"]}],
+                }},
+            }]}
+        }
+        result = _process(intent, llm_cfg)
+        assert result["success"] is True, result["errors"]
+        wparam = result["config"]["job"]["content"][0]["writer"]["parameter"]
+        assert wparam["database"] == config.STARROCKS_CONFIG["database"]
+        assert f"/{config.STARROCKS_CONFIG['database']}?" in wparam["connection"][0]["jdbcUrl"]

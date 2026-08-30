@@ -59,7 +59,9 @@ def build_incremental_where(
     生成 `field >= '次日 00:00:00'`——等价 date(field) > 水位日期，且可走索引。
     避免 datetime 秒级精度下 `>` 精确水位漏掉同秒多条记录（上次同步的
     max(update_time) 只能精确到秒，同秒其余记录水位相同会被跳过）。
-    无水位时默认最近 7 天窗口。数值字段（自增 ID）走精确 `>`。
+    无水位（首次运行）返回 None = 全量 bootstrap：ODS 主键镜像必须先全量
+    打底，之后才按水位增量；只取"最近 N 天"会让历史数据永远进不了镜像。
+    数值字段（自增 ID）有水路时走精确 `>`，无水位同样全量。
     """
     is_dt = any(k in field_type for k in ("date", "time", "timestamp"))
     if day_window and is_dt:
@@ -77,8 +79,9 @@ def build_incremental_where(
                 return f"{field} >= '{start}'"
             except ValueError:
                 pass  # 非日期水位，降级精确比较
-        start = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d 00:00:00")
-        return f"{field} >= '{start}'"
+        # 首次运行（无水位）：全量 bootstrap，返回 None 表示不加 where
+        logger.info("增量任务首次运行（无水位）：全量 bootstrap 建立镜像")
+        return None
     if last_value:
         if is_dt:
             return f"{field} > '{last_value}'"
@@ -131,8 +134,15 @@ def enhance_config_with_incremental(
                     sql = f"{sql} WHERE {where}"
                 param["querySql"] = [sql]
             else:
-                param["where"] = where
-            logger.info(f"增量查询: WHERE {where}")
+                # table 模式：有水位注入按天窗口；bootstrap（无水位）保持全量
+                if where:
+                    param["where"] = where
+                else:
+                    param.pop("where", None)
+            if where:
+                logger.info(f"增量查询: WHERE {where}")
+            else:
+                logger.info("增量首次运行：不加 where，全量 bootstrap")
 
     return cfg
 

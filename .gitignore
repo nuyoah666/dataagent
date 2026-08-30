@@ -40,3 +40,6 @@ evals/backlog/bad_cases.jsonl
 
 # 临时文件（博客资料下载等）
 tmp/
+
+# 根目录临时调试产物（手工测试脚本导出的配置/视图快照）
+/tmp_*.json

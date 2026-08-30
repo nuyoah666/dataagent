@@ -132,6 +132,10 @@ _PLUGIN_SPECS: List[PluginSpec] = [
         aliases=("starrocks",),
         column_style="plain",
         type_map={}, field_types=set(), type_alias={},
+        # StarRocks 走 FE MySQL 协议（mysqlwriter）；loadUrl/loadProps 是
+        # starrockswriter 的 Stream Load 参数（本机 docker 下 BE 重定向不可达），
+        # LLM 常把两套参数混写，这里清掉噪声
+        noise_keys=("loadUrl", "loadProps"),
         clear_sql=True, force_table=True, write_mode="insert", jdbc_style="str",
     ),
     PluginSpec(
@@ -400,6 +404,12 @@ def normalize_datax_config(config: Dict[str, Any], intent: Dict[str, Any]) -> Di
             for c in param.get("connection") or []:
                 if isinstance(c, dict) and c.pop("querySql", None):
                     logger.warning(f"已移除 {role}.connection.querySql（本机 DataX 不支持与 table 共存）")
+        # 增量过滤窗口由水位机制统一生成（enhance_config_with_incremental），
+        # LLM 自带 where（常写成 DATE_SUB(CURDATE()...) 固定窗口）一律清除，
+        # 避免 bootstrap 被误缩成"昨天"、或与水位窗口语义冲突
+        rparam = (item.get("reader") or {}).get("parameter") or {}
+        if rparam.pop("where", None):
+            logger.warning("已移除 reader.parameter.where（增量窗口由水位机制统一注入）")
 
     # 修正每个 content 项
     for item in content:
@@ -586,10 +596,14 @@ def _normalize_mysql_connections(
         if isinstance(tables, str):
             tables = [tables]
         # 过滤空字符串（模板/LLM 可能输出 [""]）
-        tables = [t for t in tables if t]
+        tables = [x for x in tables if x]
         if not tables and table:
             tables = [table]
         conn["table"] = tables
+    # writer 侧（as_list=False）：顶层 database 键与 jdbcUrl 路径保持一致，
+    # 防止 LLM 把源库名写进 writer.parameter.database 误导配置视图/建表逻辑
+    if not as_list and database:
+        param["database"] = database
 
 
 def _force_writer_table(param: Dict[str, Any], table: str) -> None:
@@ -869,6 +883,27 @@ def validate_datax_config(config: Dict[str, Any]) -> Tuple[bool, List[str]]:
                 errors.append(f"content[{i}].writer.name 为空")
             if not writer.get("parameter"):
                 errors.append(f"content[{i}].writer.parameter 为空")
+
+        # DataX JDBC 插件硬性要求非空用户名/密码（getNecessaryValue），
+        # 空密码会在引擎启动后报 DBUtilErrorCode-03，提前到配置阶段给出可操作提示
+        for role_name, plugin in (("reader", item.get("reader")), ("writer", item.get("writer"))):
+            name = str((plugin or {}).get("name", "")).lower()
+            if name in ("mysqlreader", "mysqlwriter", "rdbmsreader", "rdbmswriter"):
+                param = plugin.get("parameter") or {}
+                if not str(param.get("username", "")).strip():
+                    errors.append(
+                        f"content[{i}].{role_name} 用户名为空：DataX {name} 要求非空用户名"
+                    )
+                if not str(param.get("password", "")).strip():
+                    hint = (
+                        "目标端为 StarRocks 时，root 无密码账号不被 DataX 接受，"
+                        "需创建带密码的专用同步账号并在 .env 配置 STARROCKS_USERNAME/PASSWORD"
+                        if name == "mysqlwriter" else
+                        "请在 .env 配置源库凭据（MYSQL_USERNAME/MYSQL_PASSWORD）"
+                    )
+                    errors.append(
+                        f"content[{i}].{role_name} 密码为空：DataX {name} 要求非空密码。{hint}"
+                    )
 
     # jsonschema 校验（硬依赖）
     try:

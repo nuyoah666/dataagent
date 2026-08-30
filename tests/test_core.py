@@ -68,7 +68,7 @@ class TestConfigValidation:
         cfg = {
             "job": {
                 "content": [{
-                    "reader": {"name": "mysqlreader", "parameter": {"username": "root"}},
+                    "reader": {"name": "mysqlreader", "parameter": {"username": "root", "password": "pw"}},
                     "writer": {"name": "elasticsearchwriter", "parameter": {"endpoint": "http://localhost:9200"}}
                 }]
             }

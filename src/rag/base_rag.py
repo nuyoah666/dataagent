@@ -49,6 +49,12 @@ class BaseRAG:
         corpus = cfg.get("corpus", {})
         self.corpus_dir = corpus.get("dir")
         self.corpus_text_field = corpus.get("text_field", "text")
+        # PDF/分块配置：config_loader 把集合的 pdf_dir/chunk_size/chunk_overlap 合并到 cfg["pdf"]
+        # 纯 corpus 集合 pdf_dir 为空串/None（load_all_docs 接受 None）；分块给默认值兜底
+        pdf_cfg = cfg.get("pdf") or {}
+        self.pdf_dir = pdf_cfg.get("dir") or None
+        self.chunk_size = int(pdf_cfg.get("chunk_size", 600))
+        self.chunk_overlap = int(pdf_cfg.get("chunk_overlap", 120))
 
         # API Reranker（可选）
         self._reranker_cfg = cfg.get("reranker", {})

@@ -81,10 +81,15 @@ def apply_intent_defaults(intent: Dict[str, Any]) -> Dict[str, Any]:
                 )
             result[f"{side}_host"] = defaults["host"]
             result[f"{side}_port"] = defaults["port"]
-            # 库名保留用户显式选择（如同实例的 test 库），与默认一致时归一
-            result[f"{side}_database"] = (
-                defaults.get("database", "") if same_db else database
-            )
+            # 库名：目标端一律以 .env 为准（自然语言几乎不会显式指定数仓目标库，
+            # LLM 常把源库名传播过去）；源端库名是表定位的一部分，必须保留
+            # （用户可读 cdc_test_db.xxx，也可模糊检索跨库表）
+            if side == "target":
+                result[f"{side}_database"] = defaults.get("database", "")
+            else:
+                result[f"{side}_database"] = (
+                    defaults.get("database", "") if same_db else database
+                )
 
         # 用户名/密码：本地默认实例（host 匹配即视为默认实例，端口已归一）按用户类型回填。
         # - 用户名空/脱敏：整体回填默认凭据

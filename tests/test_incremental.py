@@ -80,15 +80,37 @@ def _get_where(result):
 
 
 def test_incremental_where_injected(monkeypatch):
+    from src.workflow.task_manager import TaskStatus
+    _patch_agents(monkeypatch)
+    wf = DataIntegrationWorkflow()
+
+    # 预置上一轮水位：非首次运行才注入按天窗口 where（首次=全量 bootstrap）
+    tm = get_task_manager()
+    seed = tm.create_task("seed")
+    tm.update_task(
+        seed, status=TaskStatus.SUCCESS.value,
+        source_table="src_user", target_table="es_user",
+        incremental_field="update_time", last_value="2026-08-01",
+    )
+
+    result = wf.run("增量同步 MySQL 的 src_user 表到 ES")
+
+    assert result["current_step"] == "validation_complete"
+    assert "update_time >= '2026-08-02 00:00:00'" in _get_where(result)
+    task = get_task_manager().get_task(result["_task_id"])
+    assert task["incremental_field"] == "update_time"
+    assert task["source_table"] == "src_user"
+
+
+def test_first_incremental_run_is_bootstrap(monkeypatch):
+    """首次增量（无水位）：全量 bootstrap，reader 不带 where。"""
     _patch_agents(monkeypatch)
     wf = DataIntegrationWorkflow()
     result = wf.run("增量同步 MySQL 的 src_user 表到 ES")
 
     assert result["current_step"] == "validation_complete"
-    assert "update_time >=" in _get_where(result)
-    task = get_task_manager().get_task(result["_task_id"])
-    assert task["incremental_field"] == "update_time"
-    assert task["source_table"] == "src_user"
+    param = result["datax_config"]["job"]["content"][0]["reader"]["parameter"]
+    assert "where" not in param
 
 
 def test_watermark_persisted_and_reused(monkeypatch):
@@ -152,12 +174,20 @@ class TestDayWindowIncremental:
         where = build_incremental_where("update_time", "datetime", today)
         assert where == f"update_time >= '{today} 00:00:00'"
 
-    def test_no_watermark_seven_day_window(self):
-        from src.tools.incremental import build_incremental_where
+    def test_no_watermark_bootstrap_full_sync(self):
+        """首次运行（无水位）：返回 None 表示不加 where，全量 bootstrap 建立镜像。
 
-        where = build_incremental_where("update_time", "datetime", None)
-        assert "update_time >= '" in where
-        assert " 00:00:00'" in where
+        旧逻辑用 7 天窗口会让历史数据永远进不了 ODS 镜像。
+        """
+        from src.tools.incremental import build_incremental_where, enhance_config_with_incremental
+
+        assert build_incremental_where("update_time", "datetime", None) is None
+        assert build_incremental_where("id", "bigint", None) is None
+        # enhance 注入时：None 表示不写 where（全量读）
+        cfg = {"job": {"content": [{"reader": {"name": "mysqlreader", "parameter": {}}}]}}
+        out = enhance_config_with_incremental(cfg, [{"name": "update_time", "type": "datetime"}], None, "update_time")
+        param = out["job"]["content"][0]["reader"]["parameter"]
+        assert "where" not in param
 
     def test_numeric_field_exact(self):
         """数值增量字段（自增 ID）保持精确比较。"""
