@@ -7,6 +7,7 @@
   4. 结果可选 LLM 中文总结（ANALYSIS_SUMMARIZE=false 关闭）
 """
 
+
 import logging
 import re
 from typing import Any, Dict, List, Optional
@@ -19,28 +20,11 @@ from ..tools.db import mysql_conn
 from ..tools.sql_validator import validate_analysis_sql
 from ..utils import llm_circuit_breaker
 from ..utils.llm import LLMJsonError, get_agent_llm, llm_json
+from .prompts import _ANALYSIS_PARSE_SYSTEM, _ANALYSIS_SUMMARY_SYSTEM
 from .base import BaseAgent, register_agent
 
 logger = logging.getLogger(__name__)
 
-
-# System prompt 常量：静态指令字节级稳定以利前缀缓存；
-# 指标/维度清单随语义层 catalog 变化（同部署内跨任务稳定），拼在 human 侧。
-_ANALYSIS_PARSE_SYSTEM = (
-    "你是数据分析语义层解析器。把用户的分析请求转成 JSON（仅 JSON，无其他文本）：\n"
-    "{\"metrics\": [\"指标名\"], \"dimensions\": [\"维度名\"],\n"
-    " \"filters\": [{\"dimension\": \"维度名\", \"op\": \"=\", \"value\": \"值\"}],\n"
-    " \"granularity\": \"day|month|year（空字符串表示不折叠）\",\n"
-    " \"limit\": 1000, \"order_by\": \"指标或维度名（可选）\", \"order_desc\": true}\n"
-    "要求：\n"
-    "1) 指标/维度只能从用户消息给出的清单中选择，禁止臆造；\n"
-    "2) 用户提到'按月/按年/按天'时设置 granularity；\n"
-    "3) 没有过滤条件时 filters 为空数组。"
-)
-_ANALYSIS_SUMMARY_SYSTEM = (
-    "你是数据分析师。根据 SQL 和查询结果，用 2-3 句中文总结要点"
-    "（趋势、异常、结论），只输出 JSON：{\"summary\": \"...\"}"
-)
 
 # 规则解析："分析 X 按 Y" / "统计 X 按 Y"（LLM 兜底前的确定性路径）
 _RULE_QUERY_RE = re.compile(
@@ -88,10 +72,11 @@ class AnalysisConfigAgent(BaseAgent):
         self._ensure_date_dim(query, catalog)
 
         # 2. 确定性生成 SQL + 白名单校验
+        filters = [f.model_dump() for f in query.filters]
         sql = catalog.query_sql(
             metric_names=query.metrics,
             dimension_names=query.dimensions,
-            filters=[f.model_dump() for f in query.filters],
+            filters=filters,
             granularity=query.granularity,
             limit=query.limit,
             order_by=query.order_by,
@@ -101,11 +86,20 @@ class AnalysisConfigAgent(BaseAgent):
         if not ok:
             raise ValueError(f"分析 SQL 校验不通过: {reason}")
 
+        # 2.5 口径说明：与 SQL 同源（resolve），保证"用户看到的口径=实际执行的口径"
+        caliber = catalog.explain(
+            metric_names=query.metrics,
+            dimension_names=query.dimensions,
+            filters=filters,
+            granularity=query.granularity,
+        )
+
         database = query.database or catalog.default_database
         logger.info(f"分析配置完成: {sql}")
         return self.ok(state, **{
             "analysis_query": query.model_dump(),
             "analysis_sql": sql,
+            "analysis_caliber": caliber,
             "analysis_database": database,
             "analysis_engine": catalog.default_engine,
         })

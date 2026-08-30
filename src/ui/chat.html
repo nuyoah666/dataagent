@@ -65,6 +65,9 @@ operatorName.onchange = e => localStorage.setItem(OPERATOR_KEY, e.target.value.t
   .sql-block { margin-top:8px; background:rgba(148,163,184,.08); border:1px solid var(--border);
                border-radius:8px; padding:8px 10px; }
   .sql-block .sql-label { display:block; font-size:11px; color:var(--muted); margin-bottom:4px; }
+  .caliber-block { margin-top:8px; background:rgba(34,197,94,.08); border:1px solid var(--border);
+    border-radius:8px; padding:8px 10px; white-space:pre-wrap; font-size:12px; color:var(--text); }
+  .caliber-block .sql-label { color:var(--ok,#22c55e); }
   .sql-block code { font-family:Consolas,monospace; font-size:12px; color:var(--accent);
                     white-space:pre-wrap; word-break:break-all; }
   .result-wrap { margin-top:8px; overflow-x:auto; }
@@ -98,6 +101,7 @@ operatorName.onchange = e => localStorage.setItem(OPERATOR_KEY, e.target.value.t
     <span class="links">
       <button class="theme-btn" id="themeToggle" onclick="toggleTheme()">☀️</button>
       <a href="/ui/wizard" target="_blank">同步向导 ↗</a>
+      <a href="/ui/semantic" target="_blank">语义层/提示词 ↗</a>
       <a href="/ui" target="_blank">全链路监控 ↗</a>
     </span>
   </header>
@@ -229,6 +233,10 @@ function renderAnalysis(t) {
   // 问数任务：SQL 一生成就展示（执行中可见），结果/总结到位后追加
   if (!t.analysis_sql && !t.analysis_result) return '';
   let html = '';
+  if (t.analysis_caliber && t.analysis_caliber.text) {
+    html += `<div class="caliber-block"><span class="sql-label">📐 口径说明（与实际执行同源，LLM 不参与编造）</span>` +
+            escapeHtml(t.analysis_caliber.text) + `</div>`;
+  }
   if (t.analysis_sql) {
     html += `<div class="sql-block"><span class="sql-label">📊 语义层生成 SQL（只读）</span>` +
             `<code>${escapeHtml(t.analysis_sql)}</code></div>`;

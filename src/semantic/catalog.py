@@ -215,6 +215,116 @@ class SemanticCatalog:
         sql += f" LIMIT {int(limit) if 0 < int(limit) <= 5000 else 1000}"
         return sql
 
+    def explain(
+        self,
+        metric_names: List[str],
+        dimension_names: List[str],
+        filters: Optional[List[dict]] = None,
+        granularity: str = "",
+    ) -> Dict[str, Any]:
+        """口径说明（结果可解释性）：返回本次查询的数据来源、指标公式、维度/过滤/粒度。
+
+        与 query_sql 同源（都走 resolve），保证"用户看到的口径"就是"实际执行的口径"，
+        LLM 不参与、不可编造。
+        """
+        table, metrics, dims = self.resolve(metric_names, dimension_names)
+        fmt = _GRANULARITY_FORMATS.get(str(granularity).lower())
+
+        cal_metrics = [{
+            "name": m["name"], "display": m["display"],
+            "column": m["column"], "agg": m["agg"],
+            "formula": _metric_formula(m),
+        } for m in metrics]
+        cal_dims = []
+        for d in dims:
+            expr = d["column"]
+            if fmt and d["type"] == "date":
+                expr = f"DATE_FORMAT({d['column']}, '{fmt}')"
+            cal_dims.append({"name": d["name"], "display": d["display"],
+                             "column": d["column"], "type": d["type"], "expr": expr})
+        cal_filters = []
+        for f in filters or []:
+            dim = table.find_dimension(f.get("dimension", ""))
+            cal_filters.append({
+                "dimension": dim["display"] if dim else f.get("dimension", ""),
+                "op": str(f.get("op", "=")).upper(),
+                "value": f.get("value", ""),
+            })
+
+        lines = [f"数据来源：{table.alias}（物理表 {table.table}）"]
+        lines.append("指标口径：" + "；".join(f"{m['display']} = {m['formula']}" for m in cal_metrics))
+        if cal_dims:
+            lines.append("分组维度：" + "、".join(d["display"] for d in cal_dims))
+        if cal_filters:
+            lines.append("过滤条件：" + "；".join(
+                f"{f['dimension']} {f['op']} {f['value']}" for f in cal_filters))
+        if granularity:
+            lines.append("时间粒度：" + _GRANULARITY_LABEL.get(str(granularity).lower(), str(granularity)))
+        lines.append(f"执行引擎：{self.default_engine} / 库 {self.default_database}（只读 SELECT）")
+
+        return {
+            "table": table.table, "table_alias": table.alias,
+            "database": self.default_database, "engine": self.default_engine,
+            "metrics": cal_metrics, "dimensions": cal_dims,
+            "filters": cal_filters, "granularity": str(granularity or ""),
+            "text": "\n".join(lines),
+        }
+
+
+# 时间粒度 -> 中文（口径说明用）
+_GRANULARITY_LABEL = {"day": "按天", "month": "按月", "year": "按年"}
+
+
+def _metric_formula(m: dict) -> str:
+    """指标 -> 可读计算公式，如 COUNT(DISTINCT `name`)。"""
+    if m["agg"] == "count_distinct":
+        return f"COUNT(DISTINCT `{m['column']}`)"
+    return f"{_AGG_WHITELIST[m['agg']]}(`{m['column']}`)"
+
+
+
+
+def catalog_to_raw(catalog: "SemanticCatalog") -> Dict[str, Any]:
+    """把内存 catalog 导出为可写 YAML / 可编辑 JSON 的原始结构。"""
+    return {
+        "version": 1,
+        "default_database": catalog.default_database,
+        "default_engine": catalog.default_engine,
+        "tables": [{
+            "table": t.table,
+            "alias": t.alias,
+            "description": t.description,
+            "metrics": [{
+                "name": m["name"], "display": m["display"], "column": m["column"],
+                "agg": m["agg"], "description": m["description"],
+            } for m in t.metrics.values()],
+            "dimensions": [{
+                "name": d["name"], "display": d["display"],
+                "column": d["column"], "type": d["type"],
+            } for d in t.dimensions.values()],
+        } for t in catalog.tables],
+    }
+
+
+def save_catalog(raw: Dict[str, Any], path: Optional[Path] = None) -> "SemanticCatalog":
+    """校验并保存语义层：先用 SemanticTable 严格校验（标识符/聚合白名单），
+    通过后写回 YAML（唯一事实源），再热重载单例。校验失败抛 ValueError。"""
+    path = path or _CATALOG_PATH
+    tables = [SemanticTable(t) for t in (raw.get("tables") or [])]
+    catalog = SemanticCatalog(
+        tables,
+        default_database=str(raw.get("default_database", "datax_test")),
+        default_engine=str(raw.get("default_engine", "starrocks")),
+    )
+    payload = catalog_to_raw(catalog)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        yaml.safe_dump(payload, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    reset_catalog()
+    return catalog
+
 
 def load_catalog(path: Optional[Path] = None) -> SemanticCatalog:
     path = path or _CATALOG_PATH

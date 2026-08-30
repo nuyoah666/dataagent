@@ -174,6 +174,7 @@ def _migrate_tables(conn: sqlite3.Connection):
         ("etl_ddl", "TEXT"),
         ("analysis_query", "TEXT"),
         ("analysis_sql", "TEXT"),
+        ("analysis_caliber", "TEXT"),
         ("analysis_database", "TEXT"),
         ("analysis_engine", "TEXT"),
         ("analysis_result", "TEXT"),
@@ -341,7 +342,7 @@ class TaskManager:
             "parsed_intent", "source_schema", "execution_status",
             "validation_result", "datax_config",
             "ops_diagnosis", "ops_actions", "ops_record_result",
-            "analysis_query", "analysis_result", "llm_usage",
+            "analysis_query", "analysis_caliber", "analysis_result", "llm_usage",
         ]:
             if key in out and isinstance(out[key], (dict, list)):
                 out[key] = json.dumps(redact_secrets(out[key]), ensure_ascii=False)
@@ -770,7 +771,7 @@ class TaskManager:
             "parsed_intent", "source_schema", "execution_status",
             "validation_result", "datax_config",
             "ops_diagnosis", "ops_actions", "ops_record_result",
-            "analysis_query", "analysis_result", "llm_usage",
+            "analysis_query", "analysis_caliber", "analysis_result", "llm_usage",
         ]:
             if result.get(key):
                 try:

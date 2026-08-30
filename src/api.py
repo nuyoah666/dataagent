@@ -28,7 +28,7 @@ from src.routers.tasks import _enrich_mapping_with_schemas  # noqa: F401
 from src.routers import pages, sync as sync_router, tasks, datasources, ops, observability, semantic
 
 # 免鉴权路径：健康检查/页面/静态资源/文档
-_AUTH_EXEMPT = {"/", "/health", "/ui", "/ui/wizard", "/chat", "/docs", "/openapi.json"}
+_AUTH_EXEMPT = {"/", "/health", "/ui", "/ui/wizard", "/ui/semantic", "/chat", "/docs", "/openapi.json"}
 _AUTH_EXEMPT_PREFIX = ("/static/",)
 
 

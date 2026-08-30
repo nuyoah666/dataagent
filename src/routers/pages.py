@@ -39,6 +39,16 @@ async def wizard_page():
         headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
     )
 
+@router.get("/ui/semantic", response_class=HTMLResponse, include_in_schema=False)
+async def semantic_page():
+    """语义层配置 + Agent 提示词只读查看页。"""
+    html_path = Path(__file__).parent.parent / "ui" / "semantic.html"
+    return HTMLResponse(
+        html_path.read_text(encoding="utf-8"),
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
+    )
+
+
 @router.get("/chat", response_class=HTMLResponse, include_in_schema=False)
 async def chat_page():
     """用户交互页：自然语言指令 -> 任务实时进度 -> 审批/结果。"""

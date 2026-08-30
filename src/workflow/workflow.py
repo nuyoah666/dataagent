@@ -136,6 +136,7 @@ class AgentWorkflow:
                                        etl_ddl=result.get("etl_ddl"),
                                        analysis_query=result.get("analysis_query"),
                                        analysis_sql=result.get("analysis_sql"),
+                                       analysis_caliber=result.get("analysis_caliber"),
                                        analysis_database=result.get("analysis_database"),
                                        analysis_engine=result.get("analysis_engine"),
                                        source_table=intent.get("source_table", ""),

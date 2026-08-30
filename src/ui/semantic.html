@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>语义层与提示词 · 数仓多 Agent 平台</title>
+<style>
+  :root{
+    --bg:#f5f7fa; --card:#fff; --line:#e4e8ef; --text:#1f2733; --muted:#6b7688;
+    --brand:#2563eb; --brand-weak:#e8f0fe; --ok:#16a34a; --warn:#d97706; --err:#dc2626;
+    --code:#f1f4f9;
+  }
+  [data-theme="dark"]{
+    --bg:#0f1420; --card:#171d2b; --line:#263044; --text:#e6ebf4; --muted:#93a0b5;
+    --brand:#5b93ff; --brand-weak:#1c2a45; --ok:#34d399; --warn:#fbbf24; --err:#f87171;
+    --code:#0d1320;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:14px/1.6 -apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif}
+  header{display:flex;align-items:center;gap:14px;padding:12px 20px;background:var(--card);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:10}
+  header h1{font-size:16px;margin:0}
+  header .sub{color:var(--muted);font-size:12px}
+  header a{color:var(--brand);text-decoration:none;font-size:13px}
+  .spacer{flex:1}
+  .tabs{display:flex;gap:6px;padding:12px 20px 0}
+  .tab{padding:7px 16px;border:1px solid var(--line);border-bottom:none;border-radius:8px 8px 0 0;background:transparent;color:var(--muted);cursor:pointer;font-size:14px}
+  .tab.active{background:var(--card);color:var(--brand);font-weight:600}
+  main{padding:16px 20px 60px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:16px}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  button{border:1px solid var(--line);background:var(--card);color:var(--text);padding:7px 14px;border-radius:7px;cursor:pointer;font-size:13px}
+  button:hover{border-color:var(--brand);color:var(--brand)}
+  button.primary{background:var(--brand);color:#fff;border-color:var(--brand)}
+  button.primary:hover{filter:brightness(1.08);color:#fff}
+  button.danger:hover{border-color:var(--err);color:var(--err)}
+  button.ghost{border:none;background:transparent;color:var(--muted)}
+  input,select,textarea{background:var(--bg);border:1px solid var(--line);border-radius:6px;color:var(--text);padding:6px 8px;font-size:13px;font-family:inherit}
+  input:focus,select:focus,textarea:focus{outline:none;border-color:var(--brand)}
+  label{font-size:12px;color:var(--muted)}
+  .layout{display:grid;grid-template-columns:280px 1fr;gap:16px;align-items:start}
+  .tlist .item{padding:9px 11px;border:1px solid var(--line);border-radius:8px;margin-bottom:8px;cursor:pointer}
+  .tlist .item:hover{border-color:var(--brand)}
+  .tlist .item.sel{border-color:var(--brand);background:var(--brand-weak)}
+  .tlist .item b{display:block}
+  .tlist .item small{color:var(--muted)}
+  table{width:100%;border-collapse:collapse;margin-top:8px}
+  th,td{border:1px solid var(--line);padding:5px 7px;text-align:left;font-size:12px;vertical-align:middle}
+  th{background:var(--bg);color:var(--muted);font-weight:600;white-space:nowrap}
+  td input,td select{width:100%;border:none;background:transparent;padding:3px 4px}
+  td input:focus,td select:focus{background:var(--bg)}
+  .muted{color:var(--muted);font-size:12px}
+  .pill{display:inline-block;padding:1px 8px;border-radius:999px;background:var(--brand-weak);color:var(--brand);font-size:11px;margin-left:6px}
+  .toast{position:fixed;right:20px;bottom:20px;padding:12px 18px;border-radius:8px;color:#fff;box-shadow:0 8px 24px rgba(0,0,0,.2);display:none;max-width:420px;z-index:50}
+  .toast.ok{background:var(--ok)} .toast.err{background:var(--err)}
+  .modal-mask{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;align-items:center;justify-content:center;z-index:40}
+  .modal{background:var(--card);border-radius:12px;padding:20px;width:520px;max-width:92vw;max-height:86vh;overflow:auto}
+  .modal h3{margin:0 0 14px}
+  .modal .field{margin-bottom:12px}
+  .modal select,.modal input{width:100%;margin-top:4px}
+  pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px;white-space:pre-wrap;word-break:break-word;font:12px/1.7 "SFMono-Regular",Consolas,monospace;color:var(--text);max-height:360px;overflow:auto}
+  .prompt-card h3{margin:0 0 2px;font-size:14px}
+  .hide{display:none}
+</style>
+</head>
+<body>
+<header>
+  <h1>语义层 &amp; 提示词</h1>
+  <span class="sub">问数指标/口径配置 · Agent system prompt 查看</span>
+  <span class="spacer"></span>
+  <a href="/chat">← 返回对话</a>
+  <button class="ghost" id="themeBtn" title="切换主题">🌙</button>
+</header>
+
+<div class="tabs">
+  <button class="tab active" data-tab="semantic">语义层配置</button>
+  <button class="tab" data-tab="prompts">Agent 提示词（只读）</button>
+</div>
+
+<main>
+  <!-- ============ 语义层 ============ -->
+  <section id="tab-semantic">
+    <div class="card row">
+      <label>默认库 <input id="defaultDb" style="width:120px" value="datax_test"/></label>
+      <label>执行引擎 <input id="defaultEngine" style="width:110px" value="starrocks"/></label>
+      <span class="spacer" style="flex:1"></span>
+      <button onclick="openImport()">＋ 从物理表导入草稿</button>
+      <button onclick="addTable()">＋ 新增表</button>
+      <button class="primary" onclick="saveAll()">💾 保存全部</button>
+    </div>
+
+    <div class="layout">
+      <div class="card tlist" id="tableList"></div>
+      <div class="card" id="editor">
+        <div class="muted">在左侧选择一张表，或「从物理表导入草稿 / 新增表」。</div>
+      </div>
+    </div>
+    <p class="muted">说明：指标/维度的语义名只能用字母数字下划线；聚合方式走白名单（count/count_distinct/sum/avg/max/min）；
+      保存时服务端严格校验并写回 <code>catalog.yaml</code>（唯一事实源，可 git 评审），随后热重载立即生效。
+      SQL 由代码按语义层确定性拼装，LLM 不写 SQL。</p>
+  </section>
+
+  <!-- ============ 提示词 ============ -->
+  <section id="tab-prompts" class="hide">
+    <div class="card">
+      <p class="muted" style="margin-top:0">各 Agent 的 system prompt 集中在 <code>src/agents/prompts.py</code>，字节级稳定以利前缀缓存；
+        版本走 git 评审，不做在线热改（需要 A/B / 版本化再上 Langfuse）。本页只读。</p>
+      <div id="promptList"></div>
+    </div>
+  </section>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<!-- 导入草稿弹窗 -->
+<div class="modal-mask" id="importMask">
+  <div class="modal">
+    <h3>从物理表生成语义层草稿</h3>
+    <div class="field">
+      <label>数据源（仅 MySQL / StarRocks）</label>
+      <select id="impSource" onchange="loadDatabases()"><option value="">请选择…</option></select>
+    </div>
+    <div class="field">
+      <label>数据库</label>
+      <select id="impDb" onchange="loadTables()"><option value="">先选数据源</option></select>
+    </div>
+    <div class="field">
+      <label>物理表</label>
+      <select id="impTable"><option value="">先选数据库</option></select>
+    </div>
+    <div class="muted" id="impHint">将自动把日期列判为维度、文本列判为维度、金额/数量类数值列判为指标，并补一个记录数指标；中文名与口径请在导入后人工补全。</div>
+    <div class="row" style="margin-top:16px;justify-content:flex-end">
+      <button onclick="closeImport()">取消</button>
+      <button class="primary" onclick="genDraft()">生成草稿</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const AGG_OPTS = ["count","count_distinct","sum","avg","max","min"];
+const DIM_TYPES = ["string","date"];
+let CAT = {default_database:"datax_test", default_engine:"starrocks", tables:[]};
+let selIdx = -1;
+
+function toast(msg, ok=true){ const t=document.getElementById("toast"); t.textContent=msg; t.className="toast "+(ok?"ok":"err"); t.style.display="block"; clearTimeout(t._h); t._h=setTimeout(()=>t.style.display="none", 3600); }
+async function api(url, opts){ const r=await fetch(url, opts); const d=await r.json().catch(()=>({})); if(!r.ok) throw new Error(d.detail||r.statusText); return d; }
+function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+
+/* ---------- 语义层 ---------- */
+async function loadCatalog(){
+  CAT = await api("/semantic/catalog");
+  document.getElementById("defaultDb").value = CAT.default_database;
+  document.getElementById("defaultEngine").value = CAT.default_engine;
+  selIdx = CAT.tables.length? 0 : -1;
+  renderList(); renderEditor();
+}
+function renderList(){
+  const el = document.getElementById("tableList");
+  el.innerHTML = CAT.tables.map((t,i)=>`
+    <div class="item ${i===selIdx?"sel":""}" onclick="selTable(${i})">
+      <b>${esc(t.alias||t.table)}</b>
+      <small>${esc(t.table)} · ${(t.metrics||[]).length} 指标 / ${(t.dimensions||[]).length} 维度</small>
+    </div>`).join("") || `<div class="muted">还没有表。</div>`;
+}
+function selTable(i){ selIdx=i; renderList(); renderEditor(); }
+function cur(){ return CAT.tables[selIdx]; }
+
+function field(v){ return esc(v==null?"":v); }
+function renderEditor(){
+  const el = document.getElementById("editor");
+  if(selIdx<0 || !cur()){ el.innerHTML=`<div class="muted">在左侧选择一张表，或「从物理表导入草稿 / 新增表」。</div>`; return; }
+  const t = cur();
+  t.metrics = t.metrics||[]; t.dimensions = t.dimensions||[];
+  el.innerHTML = `
+    <div class="row" style="margin-bottom:12px">
+      <label>物理表 <input value="${field(t.table)}" onchange="upd('table',this.value)"/></label>
+      <label>别名/中文名 <input value="${field(t.alias)}" onchange="upd('alias',this.value)" style="width:160px"/></label>
+      <label>说明 <input value="${field(t.description)}" onchange="upd('description',this.value)" style="width:280px"/></label>
+      <span class="spacer" style="flex:1"></span>
+      <button class="danger" onclick="delTable()">删除该表</button>
+    </div>
+    <h4 style="margin:14px 0 4px">指标 <span class="pill">聚合口径</span></h4>
+    <table>
+      <tr><th style="width:130px">语义名</th><th style="width:130px">中文名</th><th style="width:110px">物理列</th><th style="width:120px">聚合</th><th>口径说明</th><th style="width:40px"></th></tr>
+      ${t.metrics.map((m,i)=>`
+        <tr>
+          <td><input value="${field(m.name)}" onchange="updM(${i},'name',this.value)"/></td>
+          <td><input value="${field(m.display)}" onchange="updM(${i},'display',this.value)"/></td>
+          <td><input value="${field(m.column)}" onchange="updM(${i},'column',this.value)"/></td>
+          <td><select onchange="updM(${i},'agg',this.value)">${AGG_OPTS.map(a=>`<option ${m.agg===a?"selected":""}>${a}</option>`).join("")}</select></td>
+          <td><input value="${field(m.description)}" onchange="updM(${i},'description',this.value)"/></td>
+          <td><button class="ghost danger" onclick="delM(${i})">✕</button></td>
+        </tr>`).join("")}
+    </table>
+    <button onclick="addM()">＋ 指标</button>
+    <h4 style="margin:16px 0 4px">维度 <span class="pill">GROUP BY</span></h4>
+    <table>
+      <tr><th style="width:130px">语义名</th><th style="width:150px">中文名</th><th style="width:120px">物理列</th><th style="width:110px">类型</th><th style="width:40px"></th></tr>
+      ${t.dimensions.map((d,i)=>`
+        <tr>
+          <td><input value="${field(d.name)}" onchange="updD(${i},'name',this.value)"/></td>
+          <td><input value="${field(d.display)}" onchange="updD(${i},'display',this.value)"/></td>
+          <td><input value="${field(d.column)}" onchange="updD(${i},'column',this.value)"/></td>
+          <td><select onchange="updD(${i},'type',this.value)">${DIM_TYPES.map(a=>`<option ${d.type===a?"selected":""}>${a}</option>`).join("")}</select></td>
+          <td><button class="ghost danger" onclick="delD(${i})">✕</button></td>
+        </tr>`).join("")}
+    </table>
+    <button onclick="addD()">＋ 维度</button>`;
+}
+function upd(k,v){ cur()[k]=v; renderList(); }
+function updM(i,k,v){ cur().metrics[i][k]=v; renderList(); }
+function updD(i,k,v){ cur().dimensions[i][k]=v; }
+function addM(){ cur().metrics.push({name:"",display:"",column:"",agg:"count",description:""}); renderEditor(); }
+function addD(){ cur().dimensions.push({name:"",display:"",column:"",type:"string"}); renderEditor(); }
+function delM(i){ cur().metrics.splice(i,1); renderEditor(); }
+function delD(i){ cur().dimensions.splice(i,1); renderEditor(); }
+function addTable(){ CAT.tables.push({table:"",alias:"",description:"",metrics:[],dimensions:[]}); selIdx=CAT.tables.length-1; renderList(); renderEditor(); }
+function delTable(){ if(!cur())return; if(!confirm(`删除表 ${cur().table}？`))return; CAT.tables.splice(selIdx,1); selIdx=Math.min(selIdx,CAT.tables.length-1); renderList(); renderEditor(); }
+
+async function saveAll(){
+  const body={ default_database:document.getElementById("defaultDb").value.trim(),
+               default_engine:document.getElementById("defaultEngine").value.trim(),
+               tables: CAT.tables.filter(t=>(t.table||"").trim()) };
+  try{
+    const d = await api("/semantic/catalog",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    CAT = d.catalog; selIdx = CAT.tables.length?Math.min(selIdx,CAT.tables.length-1):-1;
+    renderList(); renderEditor(); toast(`已保存并热重载（${d.tables} 张表），问数立即生效`);
+  }catch(e){ toast("保存失败："+e.message, false); }
+}
+
+/* ---------- 导入草稿 ---------- */
+function openImport(){
+  document.getElementById("importMask").style.display="flex";
+  document.getElementById("impDb").innerHTML=`<option>先选数据源</option>`;
+  document.getElementById("impTable").innerHTML=`<option>先选数据库</option>`;
+  api("/datasources").then(d=>{
+    const opts=d.sources.filter(s=>["mysql","starrocks"].includes(s.db_type))
+      .map(s=>`<option value="${s.id}">${esc(s.name)}（${s.db_type} ${s.host}:${s.port}）</option>`).join("");
+    document.getElementById("impSource").innerHTML=`<option value="">请选择…</option>`+opts;
+  });
+}
+function closeImport(){ document.getElementById("importMask").style.display="none"; }
+async function discover(id, db){
+  const q = db? `?database=${encodeURIComponent(db)}` : "";
+  return api(`/datasources/${id}/discover${q}`,{method:"POST"});
+}
+async function loadDatabases(){
+  const id=document.getElementById("impSource").value;
+  const dbSel=document.getElementById("impDb"); const tblSel=document.getElementById("impTable");
+  dbSel.innerHTML=`<option>加载中…</option>`; tblSel.innerHTML=`<option>先选数据库</option>`;
+  if(!id){ dbSel.innerHTML=`<option>先选数据源</option>`; return; }
+  const d=await discover(id);
+  dbSel.innerHTML=`<option value="">请选择数据库…</option>`+(d.databases||[]).map(x=>`<option>${esc(x)}</option>`).join("");
+}
+async function loadTables(){
+  const id=document.getElementById("impSource").value; const db=document.getElementById("impDb").value;
+  const tblSel=document.getElementById("impTable");
+  tblSel.innerHTML=`<option>加载中…</option>`;
+  const d=await discover(id, db);
+  tblSel.innerHTML=`<option value="">请选择表…</option>`+(d.tables||[]).map(x=>`<option value="${esc(x.name)}">${esc(x.name)}${x.comment?"  "+esc(x.comment):""}</option>`).join("");
+}
+async function genDraft(){
+  const source_id=parseInt(document.getElementById("impSource").value);
+  const database=document.getElementById("impDb").value; const table=document.getElementById("impTable").value;
+  if(!database||!table){ toast("请选全数据源/库/表", false); return; }
+  try{
+    const d=await api("/semantic/draft",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({source_id,database,table})});
+    const draft=d.draft;
+    const exist=CAT.tables.findIndex(t=>t.table===draft.table);
+    if(exist>=0){ if(!confirm(`${draft.table} 已在语义层，是否覆盖为新草稿？`))return; CAT.tables[exist]=draft; selIdx=exist; }
+    else { CAT.tables.push(draft); selIdx=CAT.tables.length-1; }
+    closeImport(); renderList(); renderEditor();
+    toast(`已生成草稿：${draft.metrics.length} 指标 / ${draft.dimensions.length} 维度，请补中文名与口径后保存`);
+  }catch(e){ toast("生成失败："+e.message, false); }
+}
+
+/* ---------- 提示词 ---------- */
+async function loadPrompts(){
+  const d=await api("/prompts");
+  document.getElementById("promptList").innerHTML = d.prompts.map(p=>`
+    <div class="card prompt-card">
+      <h3>${esc(p.title)} <span class="pill">${esc(p.agent)}</span> <span class="pill">${esc(p.key)}</span></h3>
+      <div class="muted" style="margin-bottom:8px">${esc(p.description)}</div>
+      <pre>${esc(p.text)}</pre>
+    </div>`).join("");
+}
+
+/* ---------- tabs / theme ---------- */
+document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>{
+  document.querySelectorAll(".tab").forEach(x=>x.classList.remove("active"));
+  b.classList.add("active");
+  document.getElementById("tab-semantic").classList.toggle("hide", b.dataset.tab!=="semantic");
+  document.getElementById("tab-prompts").classList.toggle("hide", b.dataset.tab!=="prompts");
+  if(b.dataset.tab==="prompts") loadPrompts();
+});
+const themeBtn=document.getElementById("themeBtn");
+function setTheme(t){ document.documentElement.setAttribute("data-theme",t); themeBtn.textContent=t==="dark"?"☀️":"🌙"; localStorage.setItem("theme",t); }
+themeBtn.onclick=()=>setTheme(document.documentElement.getAttribute("data-theme")==="dark"?"light":"dark");
+setTheme(localStorage.getItem("theme") || (matchMedia("(prefers-color-scheme:dark)").matches?"dark":"light"));
+
+loadCatalog();
+</script>
+</body>
+</html>

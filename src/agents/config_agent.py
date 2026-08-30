@@ -3,6 +3,7 @@
 解析用户意图，获取表结构，检索文档，生成 DataX 配置。
 集成：配置后处理 Pipeline + 熔断器 + 重试
 """
+
 import json
 import logging
 import re
@@ -23,6 +24,7 @@ from ..tools.intent_rules import (
     detect_target_db_type, extract_source_table, strip_leading_verbs,
 )
 from ..schemas import SyncIntent
+from .prompts import _INTENT_SYSTEM, _DATAX_SYSTEM
 from .base import BaseAgent, register_agent
 
 logger = logging.getLogger(__name__)
@@ -30,27 +32,6 @@ logger = logging.getLogger(__name__)
 
 # System prompt 抽为模块级常量：跨任务字节级稳定，利于前缀缓存命中；
 # 逐任务变化的内容（用户指令/表结构/RAG）一律放 human 消息。
-_INTENT_SYSTEM = (
-    "你是数据同步专家。解析用户指令，返回 JSON（仅 JSON，无其他文本）。\n"
-    "字段：source_name, source_db_type, source_host, source_port, source_username, "
-    "source_password, source_database, source_table, target_db_type, "
-    "target_host, target_port, target_username, target_password, "
-    "target_database, target_table, sync_type, update_cycle。\n"
-    "source_name：用户提到命名数据源（如「数据源 生产MySQL」/「用 XX 同步」）"
-    "时填写，否则空字符串。\n"
-    "重要：不要编造账号密码。source_password/target_password 仅在指令中"
-    "明确出现时填写，否则一律返回空字符串。\n"
-    "sync_type: full 或 incremental（增量）；update_cycle: day 或 hour（默认 day，指令含“每小时”时为 hour）。\n"
-    "默认值：MySQL 127.0.0.1:3306 root/datax_test；"
-    "MongoDB 127.0.0.1:27017 无鉴权/datax_test；ES localhost:9200"
-)
-_DATAX_SYSTEM = (
-    "你是 DataX 配置专家。根据提供的信息生成可直接执行的 DataX JSON。\n"
-    "要求：1) 包含 job.setting 和 job.content；"
-    "2) content 每项必须有 reader 和 writer；3) 仅返回 JSON。\n"
-    "重要：不要生成 querySql 字段（增量过滤用 reader.parameter.where，"
-    "reader 用 connection.table 单表同步，禁止 table 与 querySql 共存）。"
-)
 
 
 @register_agent(

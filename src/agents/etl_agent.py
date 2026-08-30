@@ -10,6 +10,7 @@ ODS/DWD 命名规范见 tools/ods_naming.py（ods_x / ods_x_day_inc / ods_x_day_
 execution 阶段用管理账号建表（未配置管理账号则给出 DDL 提示）。
 """
 
+
 import logging
 import re
 from typing import Dict, List, Optional
@@ -37,23 +38,10 @@ from ..tools.ods_naming import (
 from ..tools.sql_validator import validate_etl_sql
 from ..utils import llm_circuit_breaker
 from ..utils.llm import LLMJsonError, get_agent_llm, llm_json
+from .prompts import _ETL_MAPPING_SYSTEM
 from .base import BaseAgent, register_agent
 
 logger = logging.getLogger(__name__)
-
-
-# System prompt 常量：跨任务字节级稳定以利前缀缓存；动态内容放 human。
-_ETL_MAPPING_SYSTEM = (
-    "你是数仓 ETL 专家。解析透传加工指令中的映射要求，只输出 JSON（仅 JSON）：\n"
-    "{\"field_mappings\": [{\"source_column\": \"源列名\", \"target_column\": \"目标列名\"}],\n"
-    " \"enum_mappings\": [{\"column\": \"源列名\", \"code_type\": \"码值类型(如 gender/status)\","
-    " \"target_column\": \"输出可读名列名(可省略)\"}]}\n"
-    "要求：\n"
-    "1) 字段映射仅当用户要求改名/去列时填写，source_column 必须来自源表；\n"
-    "2) 枚举映射仅当用户要求把码值(如 1/0)转成可读名(男/女)时填写，"
-    "code_type 用业务语义（gender/status/…）；\n"
-    "3) 未涉及的映射留空数组，禁止臆造列名。"
-)
 
 # 规则关键词
 _PASSTHROUGH_RE = re.compile(
