@@ -46,7 +46,7 @@ class TestJdbcUrl:
             "mysql", "127.0.0.1", 3306, "datax_test",
         )
         assert url == ("jdbc:mysql://127.0.0.1:3306/datax_test"
-                       "?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC")
+                       "?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai")
 
     def test_url_without_db_path(self):
         url = normalize_jdbc_url(
@@ -62,7 +62,7 @@ class TestJdbcUrl:
         )
         # 保留已有 useSSL，追加缺失的公钥检索与时区参数
         assert url == ("jdbc:mysql://127.0.0.1:3306/datax_test"
-                       "?useSSL=true&allowPublicKeyRetrieval=true&serverTimezone=UTC")
+                       "?useSSL=true&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai")
 
     def test_rebuilds_when_not_jdbc_prefix(self):
         url = normalize_jdbc_url(
@@ -70,6 +70,33 @@ class TestJdbcUrl:
             "mysql", "127.0.0.1", 3306, "datax_test",
         )
         assert url.startswith("jdbc:mysql://127.0.0.1:3306/datax_test?")
+
+    def test_strips_illegal_utf8mb4_charset(self):
+        # 真实事故回归：数据源/LLM 携带 characterEncoding=utf8mb4，DataX 的
+        # Connector/J 抛 "Unsupported character encoding 'utf8mb4'" 导致退出码 1。
+        # utf8mb4 是 MySQL 服务端字符集，JDBC 参数必须用 Java 编码名 utf8。
+        url = normalize_jdbc_url(
+            "jdbc:mysql://127.0.0.1:3306/cdc_test_db?"
+            "useUnicode=true&characterEncoding=utf8mb4&useSSL=false"
+            "&serverTimezone=Asia/Shanghai&rewriteBatchedStatements=true",
+            "mysql", "127.0.0.1", 3306, "cdc_test_db",
+        )
+        assert "characterEncoding=utf8mb4" not in url
+        assert "characterEncoding=utf8" in url
+        # 其余合法参数保留，时区统一为东八区
+        assert "rewriteBatchedStatements=true" in url
+        assert "serverTimezone=Asia/Shanghai" in url
+        assert "allowPublicKeyRetrieval=true" in url
+
+    def test_forces_timezone_to_shanghai(self):
+        # LLM/数据源常给 serverTimezone=UTC，会让 timestamp 列偏移 8 小时；
+        # 项目本地固定东八区，normalize 强制归一。
+        url = normalize_jdbc_url(
+            "jdbc:mysql://127.0.0.1:9031/datax_test?serverTimezone=UTC",
+            "mysql", "127.0.0.1", 9031, "datax_test",
+        )
+        assert "serverTimezone=UTC" not in url
+        assert "serverTimezone=Asia/Shanghai" in url
 
 
 class TestPluginNameCase:
@@ -99,7 +126,7 @@ class TestPluginNameCase:
         assert content["writer"]["name"] == "elasticsearchwriter"
         jdbc = content["reader"]["parameter"]["connection"][0]["jdbcUrl"]
         assert jdbc == ["jdbc:mysql://127.0.0.1:3306/datax_test"
-                        "?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC"]
+                        "?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai"]
         valid, errors = validate_datax_config(out)
         assert valid, errors
 

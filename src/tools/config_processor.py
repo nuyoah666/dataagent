@@ -222,23 +222,35 @@ def normalize_jdbc_url(url: str, db_type: str, host: str, port: int, database: s
                 url = f"jdbc:mysql://{host}:{port}/{database}{query}"
         # MySQL 8 caching_sha2_password：必须 allowPublicKeyRetrieval=true
         # （DataX 自带 Connector/J 版本较老，缺失时直接连接失败）
+        # 本地东八区：reader/writer 统一时区，避免 datetime 字段写入偏移
         required_params = {
             "useSSL": "false",
             "allowPublicKeyRetrieval": "true",
-            "serverTimezone": "UTC",
+            "serverTimezone": "Asia/Shanghai",
         }
-        if "?" not in url:
-            url += "?" + "&".join(f"{k}={v}" for k, v in required_params.items())
-        else:
-            query = url.split("?", 1)[1]
-            present = dict(
-                pair.split("=", 1) for pair in query.split("&") if "=" in pair
-            )
-            additions = [
-                f"{k}={v}" for k, v in required_params.items() if k not in present
-            ]
-            if additions:
-                url += "&" + "&".join(additions)
+        # 统一解析已有 query（数据源/LLM 可能携带各类参数）：纠正非法值，而非原样透传
+        base, _, query = url.partition("?")
+        params: Dict[str, str] = {}
+        order = []
+        for pair in query.split("&"):
+            if "=" not in pair:
+                continue
+            key, val = pair.split("=", 1)
+            if key not in params:
+                order.append(key)
+            params[key] = val
+        # JDBC characterEncoding 必须是 Java 编码名；utf8mb4 是 MySQL 服务端字符集，
+        # 直接传会被 Connector/J 拒绝：Unsupported character encoding 'utf8mb4'
+        if params.get("characterEncoding", "").lower() == "utf8mb4":
+            params["characterEncoding"] = "utf8"
+        for key, val in required_params.items():
+            if key not in params:
+                params[key] = val
+                order.append(key)
+            elif key == "serverTimezone":
+                # 强制东八区：LLM/数据源常给 UTC，会导致 timestamp 列写入偏移 8 小时
+                params[key] = val
+        url = base + "?" + "&".join(f"{key}={params[key]}" for key in order)
     elif db_type == "mongodb":
         url = f"mongodb://{host}:{port}"
     return url
