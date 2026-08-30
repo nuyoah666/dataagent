@@ -1,4 +1,5 @@
 """单元测试。"""
+import sqlite3
 import sys, json, pytest
 sys.path.insert(0, r"F:\dataagent")
 
@@ -11,6 +12,7 @@ from src.tools.config_processor import (
     normalize_intent, validate_datax_config, get_template, process_config,
 )
 from src.utils.retry import CircuitBreaker, CircuitBreakerOpenError
+from src.workflow import task_manager as task_manager_mod
 from src.workflow.task_manager import get_task_manager, TaskStatus
 
 
@@ -146,6 +148,66 @@ class TestTaskManager:
         tm = get_task_manager()
         history = tm.get_task_history(5)
         assert isinstance(history, list)
+
+    def test_init_migrates_old_audit_table_before_creating_indexes(self):
+        """老库 audit_logs 缺列时，先迁移再建索引，拒绝等审计动作不能 500。"""
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute("""
+            CREATE TABLE tasks (
+                task_id TEXT PRIMARY KEY,
+                user_query TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                parsed_intent TEXT,
+                source_schema TEXT,
+                rag_context TEXT,
+                datax_config TEXT,
+                execution_status TEXT,
+                validation_result TEXT,
+                error TEXT,
+                current_step TEXT DEFAULT 'start',
+                retry_count INTEGER DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                completed_at TEXT
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE audit_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT,
+                action TEXT NOT NULL,
+                operator TEXT DEFAULT 'system',
+                detail TEXT,
+                created_at TEXT NOT NULL
+            )
+        """)
+        conn.execute(
+            "INSERT INTO tasks (task_id, user_query, status, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("legacy-task", "old query", "pending_approval", "2026-01-01", "2026-01-01"),
+        )
+
+        task_manager_mod._init_tables(conn)
+        audit_cols = {r[1] for r in conn.execute("PRAGMA table_info(audit_logs)")}
+        assert {"task_type", "metadata"} <= audit_cols
+        assert conn.execute(
+            "SELECT task_type FROM tasks WHERE task_id = 'legacy-task'"
+        ).fetchone()["task_type"] == "data_integration"
+
+        original_conn = task_manager_mod._task_db_conn
+        task_manager_mod._task_db_conn = conn
+        try:
+            tm = task_manager_mod.TaskManager()
+            tm.audit("legacy-task", "task_reject", operator="tester")
+        finally:
+            task_manager_mod._task_db_conn = original_conn
+
+        row = conn.execute(
+            "SELECT task_type, operator FROM audit_logs WHERE action = 'task_reject'"
+        ).fetchone()
+        assert row["task_type"] == "data_integration"
+        assert row["operator"] == "tester"
 
 
 if __name__ == "__main__":

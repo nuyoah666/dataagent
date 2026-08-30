@@ -1,3 +1,5 @@
+operatorName.value = localStorage.getItem(OPERATOR_KEY) || 'local-user';
+operatorName.onchange = e => localStorage.setItem(OPERATOR_KEY, e.target.value.trim() || 'local-user');
 <!DOCTYPE html>
 <html lang="zh">
 <head>
@@ -60,6 +62,17 @@
   .btn-action { background:rgba(56,189,248,.15); color:var(--accent); }
   .error { color:var(--err); font-size:12.5px; margin-top:6px; white-space:pre-wrap; }
   .ok-text { color:var(--ok); font-size:12.5px; margin-top:6px; white-space:pre-wrap; }
+  .sql-block { margin-top:8px; background:rgba(148,163,184,.08); border:1px solid var(--border);
+               border-radius:8px; padding:8px 10px; }
+  .sql-block .sql-label { display:block; font-size:11px; color:var(--muted); margin-bottom:4px; }
+  .sql-block code { font-family:Consolas,monospace; font-size:12px; color:var(--accent);
+                    white-space:pre-wrap; word-break:break-all; }
+  .result-wrap { margin-top:8px; overflow-x:auto; }
+  .result-table { border-collapse:collapse; font-size:12.5px; width:100%; }
+  .result-table th, .result-table td { border:1px solid var(--border); padding:4px 10px;
+                                       text-align:left; white-space:nowrap; }
+  .result-table th { background:rgba(148,163,184,.12); color:var(--muted); font-weight:600; }
+  .result-meta { font-size:11px; color:var(--muted); margin-top:4px; }
   footer { border-top:1px solid var(--border); padding:12px 22px; }
   .chips { display:flex; gap:8px; margin-bottom:10px; flex-wrap:wrap; }
   .chip { font-size:12px; color:var(--muted); background:var(--card); border:1px solid var(--border);
@@ -80,6 +93,7 @@
 <body>
   <header>
     <h1>数仓多 Agent 协作平台</h1>
+    <span class="token-box">操作人 <input id="operatorName" value="local-user" style="width:110px"></span>
     <span class="token-box">Token <input type="password" id="apiToken" placeholder="API_TOKEN（可选）"></span>
     <span class="links">
       <button class="theme-btn" id="themeToggle" onclick="toggleTheme()">☀️</button>
@@ -108,45 +122,18 @@
     </main>
   </div>
 
+<script src="/static/common.js"></script>
 <script>
-const $ = id => document.getElementById(id);
-const TOKEN_KEY = 'dataagent_api_token';
+const pollers = new Set();
+let submitting = false;
 const EXAMPLES = [
   '把 MySQL 的 src_user 表同步到 ES 的 src_user_index',
   '把 ods_user 加工到 dwd_user',
   '把 MySQL 的 src_user 表增量同步到 ES',
   '诊断最近失败的任务',
+  '分析用户数按日期',
 ];
 
-function token() { return $('apiToken').value || localStorage.getItem(TOKEN_KEY) || ''; }
-function headers() { const t = token(); return t ? {'X-API-Token': t} : {}; }
-function escapeHtml(s) {
-  return (s == null ? '' : String(s)).replace(/[&<>"']/g, c =>
-    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-}
-async function api(url, opts) {
-  const r = await fetch(url, Object.assign({headers: headers()}, opts || {}));
-  if (r.status === 401) { alert('未授权：请在右上角填入 API_TOKEN'); throw new Error('unauthorized'); }
-  const data = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(data.detail || ('HTTP ' + r.status));
-  return data;
-}
-const sleep = ms => new Promise(r => setTimeout(r, ms));
-
-function applyTheme(theme) {
-  document.documentElement.dataset.theme = theme;
-  $('themeToggle').textContent = theme === 'dark' ? '☀️' : '🌙';
-}
-function initTheme() {
-  const saved = localStorage.getItem('dataagent_theme');
-  const theme = saved || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
-  applyTheme(theme);
-}
-function toggleTheme() {
-  const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
-  applyTheme(next);
-  localStorage.setItem('dataagent_theme', next);
-}
 
 const TERMINAL = ['success', 'failed', 'cancelled'];
 const STAGE_LABEL = {
@@ -195,8 +182,10 @@ function addMsg(html, cls) {
 }
 
 async function send() {
+  if (submitting) return;
   const query = $('query').value.trim();
   if (!query) return;
+  submitting = true;
   $('query').value = '';
   $('sendBtn').disabled = true;
   addMsg(escapeHtml(query).replace(/\n/g,'<br>'), 'user');
@@ -209,11 +198,16 @@ async function send() {
     loadHistory();
   } catch (e) {
     addMsg('❌ ' + escapeHtml(e.message), 'assistant');
+  } finally {
+    submitting = false;
+    $('sendBtn').disabled = false;
   }
-  $('sendBtn').disabled = false;
 }
 
 async function pollTask(taskId, card) {
+  if (pollers.has(taskId)) return;
+  pollers.add(taskId);
+  try {
   const box = () => $('card-' + taskId);
   while (box()) {
     try {
@@ -228,6 +222,29 @@ async function pollTask(taskId, card) {
     } catch (e) { /* 轮询失败继续 */ }
     await sleep(2000);
   }
+  } finally { pollers.delete(taskId); }
+}
+
+function renderAnalysis(t) {
+  // 问数任务：SQL 一生成就展示（执行中可见），结果/总结到位后追加
+  if (!t.analysis_sql && !t.analysis_result) return '';
+  let html = '';
+  if (t.analysis_sql) {
+    html += `<div class="sql-block"><span class="sql-label">📊 语义层生成 SQL（只读）</span>` +
+            `<code>${escapeHtml(t.analysis_sql)}</code></div>`;
+  }
+  const r = t.analysis_result;
+  if (r && r.columns && r.rows && r.rows.length) {
+    const cols = r.columns;
+    html += `<div class="result-wrap"><table class="result-table"><thead><tr>` +
+      cols.map(c => `<th>${escapeHtml(c)}</th>`).join('') + `</tr></thead><tbody>` +
+      r.rows.map(row => `<tr>${cols.map(c => `<td>${escapeHtml(row[c] == null ? '' : row[c])}</td>`).join('')}</tr>`).join('') +
+      `</tbody></table><div class="result-meta">共 ${r.row_count || r.rows.length} 行</div></div>`;
+  }
+  if (t.analysis_summary) {
+    html += `<div class="ok-text">🤖 ${escapeHtml(t.analysis_summary)}</div>`;
+  }
+  return html;
 }
 
 function renderTask(t, logs) {
@@ -269,6 +286,7 @@ function renderTask(t, logs) {
     const v = t.validation_result || {};
     body += `<div class="ok-text">✅ ${escapeHtml(v.summary || '任务成功')}</div>`;
   }
+  body += renderAnalysis(t);
   if (t.status === 'cancelled') body += `<div class="error">任务已取消</div>`;
   if (!TERMINAL.includes(t.status) && t.status !== 'pending_approval') {
     body = `<span class="spinner"></span> 处理中…<div class="stage">${stageHtml}</div>` + body;
@@ -312,7 +330,7 @@ initTheme();
 $('chips').innerHTML = EXAMPLES.map(e => `<span class="chip" onclick="$('query').value='${escapeHtml(e)}';$('query').focus()">${escapeHtml(e)}</span>`).join('');
 loadHistory();
 setInterval(loadHistory, 10000);
-addMsg('👋 你好！输入自然语言指令即可驱动数仓 Agent 协作：<b>数据集成</b>（同步/增量）、<b>ETL 开发</b>（加工）、<b>运维</b>（诊断/重试）。也可以点下面的示例。', 'assistant');
+addMsg('👋 你好！输入自然语言指令即可驱动数仓 Agent 协作：<b>数据集成</b>（同步/增量）、<b>ETL 开发</b>（加工）、<b>数据分析</b>（问数）、<b>运维</b>（诊断/重试）。也可以点下面的示例。', 'assistant');
 </script>
 </body>
 </html>

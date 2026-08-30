@@ -17,8 +17,8 @@ class Config:
     """系统配置。"""
 
     # ---- DataX ----
-    DATAX_HOME: str = os.getenv("DATAX_HOME", r"G:\databases\datax")
-    DATAX_WORK_DIR: str = os.getenv("DATAX_WORK_DIR", r"F:\dataagent\jobs")
+    DATAX_HOME: str = os.getenv("DATAX_HOME", "")
+    DATAX_WORK_DIR: str = os.getenv("DATAX_WORK_DIR", str(_PROJECT_ROOT / "jobs"))
     DATAX_PYTHON: str = os.path.join(DATAX_HOME, "bin", "datax.py")
 
     # ---- MySQL 8.0 ----
@@ -47,10 +47,10 @@ class Config:
         "password": os.getenv("ES_PASSWORD", ""),
     }
 
-    # ---- StarRocks（容器部署，FE 走 MySQL 协议 9030）----
+    # ---- StarRocks（4.0 容器部署，FE MySQL 协议映射到宿主机 9031）----
     STARROCKS_CONFIG: Dict[str, Any] = {
         "host": os.getenv("STARROCKS_HOST", "127.0.0.1"),
-        "port": int(os.getenv("STARROCKS_PORT", "9030")),
+        "port": int(os.getenv("STARROCKS_PORT", "9031")),
         "username": os.getenv("STARROCKS_USERNAME", "datax"),
         "password": os.getenv("STARROCKS_PASSWORD", ""),
         "database": os.getenv("STARROCKS_DATABASE", "datax_test"),
@@ -107,8 +107,12 @@ class Config:
     # ---- Web API ----
     API_HOST: str = os.getenv("API_HOST", "0.0.0.0")
     API_PORT: int = int(os.getenv("API_PORT", "8000"))
-    # 可选 API Token：配置后除 /health /ui /metrics 外所有接口需 Bearer 鉴权
+    # 可选 API Token：配置后除健康检查和静态页面外，所有数据接口都需要鉴权
     API_TOKEN: str = os.getenv("API_TOKEN", "")
+    CORS_ALLOWED_ORIGINS: str = os.getenv(
+        "CORS_ALLOWED_ORIGINS",
+        "http://127.0.0.1:8000,http://localhost:8000",
+    )
     # 同时执行的任务数上限（信号量控制，避免 DataX/数据库资源竞争）
     MAX_CONCURRENT_TASKS: int = int(os.getenv("MAX_CONCURRENT_TASKS", "2"))
 
@@ -117,13 +121,11 @@ class Config:
     # sqlite   : 本地文件持久化，轻量单机场景（默认）
     # mysql    : MySQL 持久化，多进程/分布式场景
     STATE_STORE_TYPE: str = os.getenv("STATE_STORE_TYPE", "sqlite")
-    STATE_STORE_PATH: str = os.getenv(
-        "STATE_STORE_PATH", r"F:\dataagent\state\checkpoints.db"
-    )
+    STATE_STORE_PATH: str = os.getenv("STATE_STORE_PATH", str(_PROJECT_ROOT / "state" / "checkpoints.db"))
 
     # ---- 日志 ----
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
-    LOG_FILE: str = os.getenv("LOG_FILE", r"F:\dataagent\logs\app.log")
+    LOG_FILE: str = os.getenv("LOG_FILE", str(_PROJECT_ROOT / "logs" / "app.log"))
 
     # ---- 工具方法 ----
     @classmethod

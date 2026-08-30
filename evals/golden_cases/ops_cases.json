@@ -1,0 +1,10 @@
+[
+  {
+    "name": "incident-version-lifecycle",
+    "operations": [
+      {"record": {"incident_id": "golden-datax-timeout", "title": "DataX 超时", "component": "datax", "severity": "high", "status": "investigating", "symptom": "任务卡住直到超时", "impact": "同步延迟", "root_cause": "DataX 通道配置过高", "solution": "降低 channel 并设置超时", "keywords": ["datax", "timeout"]}, "expect": {"success": true, "action": "created", "version": 1}},
+      {"record": {"incident_id": "golden-datax-timeout", "title": "DataX 超时", "component": "datax", "severity": "high", "status": "investigating", "symptom": "任务卡住直到超时", "impact": "同步延迟", "root_cause": "DataX 通道配置过高", "solution": "降低 channel 并设置超时", "keywords": ["datax", "timeout"]}, "expect": {"success": true, "action": "noop", "version": 1}},
+      {"record": {"incident_id": "golden-datax-timeout", "title": "DataX 超时", "component": "datax", "severity": "high", "status": "resolved", "symptom": "任务卡住直到超时", "impact": "同步延迟", "root_cause": "DataX 通道配置过高", "solution": "降低 channel、设置超时并增加熔断", "keywords": ["datax", "timeout"]}, "expect": {"success": true, "action": "updated", "version": 2, "supersedes_version": 1}}
+    ]
+  }
+]

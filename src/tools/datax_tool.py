@@ -10,6 +10,7 @@ import sys
 import time
 import threading
 import subprocess
+import tempfile
 import logging
 from typing import Dict, Any, Optional
 from datetime import datetime
@@ -71,14 +72,9 @@ class DataXTool:
                     "job_name": job_name,
                 }
 
-            # 写入配置文件
+            # 写入配置文件：同目录临时文件 + fsync + 原子替换，避免半截 JSON。
             config_path = os.path.join(self.work_dir, f"{job_name}.json")
-            # 先写临时文件再原子替换，避免进程被杀时留下半截 JSON
-            tmp_path = config_path + ".tmp"
-            with open(tmp_path, "w", encoding="utf-8") as f:
-                json.dump(datax_config, f, ensure_ascii=False, indent=2)
-            os.replace(tmp_path, config_path)
-
+            self._atomic_write_json(config_path, datax_config)
             logger.info(f"配置已写入: {config_path}")
 
             # 执行
@@ -88,6 +84,25 @@ class DataXTool:
             logger.error(f"DataX 任务失败: {e}")
             self._cancel_events.pop(job_name, None)
             return {"success": False, "error": str(e), "job_name": job_name}
+
+    @staticmethod
+    def _atomic_write_json(config_path: str, datax_config: Dict[str, Any]) -> None:
+        """原子写入 DataX JSON。"""
+        tmp_fd, tmp_path = tempfile.mkstemp(
+            prefix=".datax-", suffix=".tmp", dir=os.path.dirname(config_path)
+        )
+        try:
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+                json.dump(datax_config, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, config_path)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
     @staticmethod
     def _terminate_process_tree(proc: subprocess.Popen) -> bool:
@@ -240,6 +255,14 @@ class DataXTool:
             return False
         ev.set()
         return True
+
+    def cancel_all_jobs(self) -> int:
+        """通知所有运行中的 DataX 任务取消（服务关闭时使用）。"""
+        count = 0
+        for ev in list(self._cancel_events.values()):
+            ev.set()
+            count += 1
+        return count
 
     def kill_datax_process_tree(
         self,

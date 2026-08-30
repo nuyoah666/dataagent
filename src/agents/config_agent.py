@@ -18,6 +18,10 @@ from ..utils import llm_circuit_breaker, rag_circuit_breaker
 from ..utils.llm import get_agent_llm, llm_json, LLMJsonError
 from ..config import config
 from ..tools.credentials import apply_intent_defaults
+from ..tools.intent_rules import (
+    DB_TYPE_KEYWORDS, DB_TYPE_RE, db_defaults,
+    detect_target_db_type, extract_source_table, strip_leading_verbs,
+)
 from ..schemas import SyncIntent
 from .base import BaseAgent, register_agent
 
@@ -174,69 +178,62 @@ class ConfigAgent(BaseAgent):
         return apply_intent_defaults(intent)
 
     def _fallback_intent(self, text: str) -> Dict[str, Any]:
+        """LLM 不可用时的规则兜底：关键词/正则回填意图。
+
+        规则集中在 tools/intent_rules，与校验 Agent、配置后处理共用一份，
+        避免"LLM 失败走 fallback 时目标端被硬编码成 ES"这类规则漂移。
+        """
+        my, es = db_defaults("mysql"), db_defaults("elasticsearch")
         intent = {
-            "source_db_type": "mysql", "source_host": "127.0.0.1", "source_port": 3306,
-            "source_username": config.MYSQL_CONFIG["username"],
-            "source_password": config.MYSQL_CONFIG["password"],
-            "source_database": config.MYSQL_CONFIG["database"], "source_table": "",
-            "target_db_type": "elasticsearch", "target_host": config.ES_CONFIG["host"],
-            "target_port": config.ES_CONFIG["port"],
+            "source_db_type": "mysql", "source_host": my["host"], "source_port": my["port"],
+            "source_username": my["username"], "source_password": my["password"],
+            "source_database": my["database"], "source_table": "",
+            "target_db_type": "elasticsearch", "target_host": es["host"],
+            "target_port": es["port"],
             "target_username": "", "target_password": "", "target_database": "",
             "target_table": "", "sync_type": "full", "update_cycle": "day",
         }
-        # 去掉引导动词，避免"把"被误抓进表名（如"把用户表"）
-        clean = re.sub(r"^\s*(?:把|将|请|帮我|帮忙|对|给)\s*", "", text or "")
-        for pat in [
-            r"表[：:]\s*(\w+)",
-            r"(\w+)\s*表",
-            r"同步\s*([\w]+?)\s*到",
-            r"同步\s*(\w+)",
-        ]:
-            m = re.search(pat, clean)
-            if m:
-                intent["source_table"] = m.group(1)
-                break
+        clean = strip_leading_verbs(text)
+        intent["source_table"] = extract_source_table(text)
         if "增量" in clean:
             intent["sync_type"] = "incremental"
         if re.search(r"每\s*(?:个)?\s*小时|每小时|每\s*\d+\s*小时", clean):
             intent["update_cycle"] = "hour"
-        if "mongo" in clean.lower():
-            intent["source_db_type"] = "mongodb"
-            intent["source_host"] = config.MONGODB_CONFIG["host"]
-            intent["source_port"] = config.MONGODB_CONFIG["port"]
-            intent["source_database"] = config.MONGODB_CONFIG["database"]
 
-        # 目标端解析：fallback 不能只认源端——用户明确说 starrocks/es/mongo/mysql 时必须跟随
-        # （曾出现：用户说"同步到 starrocks"，LLM 配额用尽走 fallback，目标被硬编码为 ES）
         low = clean.lower()
-        for keywords, db_type, cfg in [
-            (("starrocks", "sr"), "starrocks", config.STARROCKS_CONFIG),
-            (("elasticsearch", "es"), "elasticsearch", config.ES_CONFIG),
-            (("mongodb", "mongo"), "mongodb", config.MONGODB_CONFIG),
-            (("mysql",), "mysql", config.MYSQL_CONFIG),
-        ]:
-            hit = any(
-                re.search(rf"(?:到|同步到|写入|导入|进|至)\s*{kw}\b|\b{kw}(?:库|中|里|索引)", low)
-                for kw in keywords
-            )
-            if hit:
-                intent["target_db_type"] = db_type
-                intent["target_host"] = cfg["host"]
-                intent["target_port"] = cfg["port"]
-                intent["target_database"] = cfg.get("database", "")
-                break
-        # 目标表：分层匹配，避免把目标类型词/连接词当表名
+        # 源端切换：mongo 出现在"到"之前才算源（"同步到 mongo" 是目标，不能误切源端）
+        target_pos = low.find("到")
+        mongo_idx = low.find("mongo")
+        if mongo_idx != -1 and (target_pos == -1 or mongo_idx < target_pos):
+            mg = db_defaults("mongodb")
+            intent.update({
+                "source_db_type": "mongodb", "source_host": mg["host"],
+                "source_port": mg["port"], "source_username": mg.get("username", ""),
+                "source_password": mg.get("password", ""),
+                "source_database": mg["database"],
+            })
+
+        # 目标端：跟随用户显式指定（starrocks/es/mongo/mysql）
+        target_type = detect_target_db_type(clean)
+        if target_type:
+            cfg = db_defaults(target_type)
+            intent["target_db_type"] = target_type
+            intent["target_host"] = cfg["host"]
+            intent["target_port"] = cfg["port"]
+            intent["target_database"] = cfg.get("database", "")
+
+        # 目标表：分层匹配，类型词/连接词不当表名（标识符只取 ASCII，中文"中/里"不会混入）
         _stop = ("中", "里", "的", "库", "索引", "表", "后")
-        _types = r"starrocks|elasticsearch|es|mongodb|mongo|mysql|sr"
         m2 = re.search(
-            rf"到\s*(?:{_types})\b\s*(?:的|中|里)?\s*([\w.]+)", low
+            rf"到\s*(?:{DB_TYPE_RE})(?![a-z0-9])\s*(?:的|中|里)?\s*([A-Za-z0-9_.]+)", low
         )
         if m2 and m2.group(1) not in _stop:
             intent["target_table"] = m2.group(1)
         else:
-            m2 = re.search(rf"到\s*([\w.]+)", low)
-            if m2 and m2.group(1).lower() not in _stop and not re.fullmatch(
-                rf"(?:{_types})", m2.group(1).lower()
+            m2 = re.search(r"到\s*([A-Za-z0-9_.]+)", low)
+            if m2 and m2.group(1).lower() not in _stop and m2.group(1).lower() not in (
+                *DB_TYPE_KEYWORDS.keys(),
+                *(kw for kws in DB_TYPE_KEYWORDS.values() for kw in kws),
             ):
                 intent["target_table"] = m2.group(1)
 

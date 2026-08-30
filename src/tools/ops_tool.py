@@ -87,7 +87,10 @@ def _check_one(name: str) -> tuple[bool, str]:
             [f"http://{c['host']}:{c['port']}"],
             request_timeout=3,
         )
-        return bool(es.ping()), "ping OK"
+        ok = bool(es.ping())
+        if not ok:
+            raise RuntimeError(f"ES ping 失败: http://{c['host']}:{c['port']} 无响应")
+        return True, "ping OK"
 
     if name == "datax":
         datax_py = os.path.join(config.DATAX_HOME, "bin", "datax.py")
@@ -104,8 +107,10 @@ def retry_failed_task(task_id: str) -> Dict[str, Any]:
         return {"success": False, "error": "缺少 task_id"}
     try:
         # 延迟导入避免循环依赖（workflow -> agents -> tools）
-        from ..workflow import AgentWorkflow
-        wf = AgentWorkflow(use_checkpointer=True, task_type="data_integration")
+        from ..workflow import AgentWorkflow, get_task_manager
+        old = get_task_manager().get_task(task_id)
+        task_type = (old or {}).get("task_type", "data_integration")
+        wf = AgentWorkflow(use_checkpointer=True, task_type=task_type)
         result = wf.retry_task(task_id)
         if result is None:
             return {"success": False, "error": "只有已失败或已取消的任务可以重试"}

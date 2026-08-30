@@ -16,10 +16,11 @@ import logging
 from contextlib import contextmanager
 
 from ..config import config
+from .intent_rules import normalize_db_type
 
 logger = logging.getLogger(__name__)
 
-# db_type -> Config 类属性名（连接参数默认值来源）
+# db_type -> Config 类属性名（连接参数默认值来源；别名先经 normalize_db_type 归一）
 _DEFAULTS = {
     "mysql": "MYSQL_CONFIG",
     "mongodb": "MONGODB_CONFIG",
@@ -29,7 +30,8 @@ _DEFAULTS = {
 
 
 def _resolve(db_type, host, port, username, password, database) -> tuple:
-    defaults = getattr(config, _DEFAULTS.get(str(db_type).lower(), ""), None) or {}
+    canonical = normalize_db_type(str(db_type))
+    defaults = getattr(config, _DEFAULTS.get(canonical, ""), None) or {}
     return (
         host if host is not None else defaults.get("host", "127.0.0.1"),
         int(port if port is not None else defaults.get("port", 0)),

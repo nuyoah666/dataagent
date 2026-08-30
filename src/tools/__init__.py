@@ -10,8 +10,7 @@ from .web_search_tool import search_web
 from .config_processor import process_config, normalize_intent
 from .incremental import (
     detect_incremental_field, enhance_config_with_incremental,
-    inject_ods_partition_column,
-    analyze_table_dependencies, build_execution_order, build_batch_configs,
+    build_execution_order,
 )
 
 
@@ -19,7 +18,6 @@ from .incremental import (
 register_tool("search_datax_docs")(search_datax_docs)
 register_tool("search_ops_knowledge")(search_ops_knowledge)
 register_tool("add_ops_incident")(add_ops_incident)
-register_tool("ingest_ops_knowledge")(ingest_ops_knowledge)
 register_tool("check_component_health")(check_component_health)
 register_tool("retry_failed_task")(retry_failed_task)
 register_tool("kill_datax_process_tree")(kill_datax_process_tree)
@@ -31,4 +29,3 @@ register_tool("web_search")(search_web)
 register_tool("process_config")(process_config)
 register_tool("detect_incremental_field")(detect_incremental_field)
 register_tool("enhance_config_with_incremental")(enhance_config_with_incremental)
-register_tool("inject_ods_partition_column")(inject_ods_partition_column)

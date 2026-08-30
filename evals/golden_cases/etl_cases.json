@@ -1,0 +1,23 @@
+[
+  {
+    "name": "passthrough-nonpartition-idempotent",
+    "func": "build_passthrough_sql",
+    "kwargs": {"target_table": "dwd_user", "source_table": "ods_user", "columns": [{"name": "id", "type": "BIGINT"}, {"name": "name", "type": "VARCHAR(50)"}], "partition_date": "2026-08-17", "source_partitioned": false, "target_partitioned": false},
+    "contains": ["INSERT OVERWRITE dwd_user", "FROM ods_user s"],
+    "not_contains": ["DELETE FROM", "WHERE"]
+  },
+  {
+    "name": "partition-target-delete-then-insert",
+    "func": "build_passthrough_sql",
+    "kwargs": {"target_table": "dwd_user_day_inc", "source_table": "ods_user_day_inc", "columns": [{"name": "id", "type": "BIGINT"}, {"name": "dt", "type": "DATE"}], "partition_date": "2026-08-17", "source_partitioned": true, "target_partitioned": true},
+    "contains": ["DELETE FROM dwd_user_day_inc WHERE `dt` = '2026-08-17'", "INSERT INTO dwd_user_day_inc", "s.`dt` = '2026-08-17'"],
+    "not_contains": ["INSERT OVERWRITE dwd_user_day_inc"]
+  },
+  {
+    "name": "enum-mapping-left-join-dim-mapping",
+    "func": "build_enum_mapping_sql",
+    "kwargs": {"target_table": "dwd_user", "source_table": "ods_user", "columns": [{"name": "id", "type": "BIGINT"}, {"name": "sex", "type": "TINYINT"}], "enum_mappings": [{"column": "sex", "code_type": "gender"}], "partition_date": "2026-08-17", "source_partitioned": false, "target_partitioned": false},
+    "contains": ["cm_0.name AS `sex_name`", "LEFT JOIN dim_mapping cm_0", "cm_0.code_type = 'gender'"],
+    "not_contains": ["RIGHT JOIN"]
+  }
+]

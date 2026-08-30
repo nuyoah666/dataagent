@@ -7,6 +7,9 @@ LLM 输出 → 字段标准化 → JSON Schema 校验 → 模板兜底
 import copy
 import json
 import logging
+import jsonschema
+from ..config import config
+from .intent_rules import normalize_db_type  # noqa: F401  re-export
 import re
 from dataclasses import dataclass, field
 from typing import Dict, Any, List, Optional, Tuple
@@ -16,19 +19,6 @@ logger = logging.getLogger(__name__)
 # ================================================================== #
 #  1. 字段标准化器
 # ================================================================== #
-
-# db_type 别名映射
-_DB_TYPE_ALIAS = {
-    "es": "elasticsearch",
-    "elastic": "elasticsearch",
-    "elastic search": "elasticsearch",
-    "mongo": "mongodb",
-    "mongodb": "mongodb",
-    "mysql": "mysql",
-    "mariadb": "mysql",
-    "starrocks": "starrocks",
-    "sr": "starrocks",
-}
 
 # DataX reader/writer 插件名映射
 _READER_MAP = {
@@ -168,21 +158,21 @@ _PLUGIN_SPECS: List[PluginSpec] = [
 ]
 
 
-def _get_plugin_spec(name: str, role: str) -> Optional[PluginSpec]:
+def _get_plugin_spec(name: str, role: str, db_type: str = None) -> Optional[PluginSpec]:
     """按插件名（子串匹配）与角色解析规范；无匹配返回 None。"""
     name_lower = (name or "").lower()
+    if db_type:
+        for spec in _PLUGIN_SPECS:
+            if spec.role != role or spec.db_type != db_type:
+                continue
+            if spec.name == name_lower or any(alias in name_lower for alias in spec.aliases):
+                return spec
     for spec in _PLUGIN_SPECS:
         if spec.role != role:
             continue
         if any(alias in name_lower for alias in spec.aliases):
             return spec
     return None
-
-
-def normalize_db_type(value: str) -> str:
-    """标准化数据库类型名称。"""
-    return _DB_TYPE_ALIAS.get(value.strip().lower(), value.strip().lower())
-
 
 def normalize_host(host: str) -> str:
     """去除 host 中的协议前缀和尾部斜杠。"""
@@ -422,7 +412,7 @@ def normalize_datax_config(config: Dict[str, Any], intent: Dict[str, Any]) -> Di
 def _fix_reader(item: Dict[str, Any], intent: Dict[str, Any]):
     """修正 reader 配置。"""
     reader = item.get("reader", {})
-    spec = _get_plugin_spec(reader.get("name", ""), "reader")
+    spec = _get_plugin_spec(reader.get("name", ""), "reader", intent.get("source_db_type"))
     if spec is None:
         return
     reader["name"] = spec.name
@@ -462,7 +452,7 @@ def _fix_reader(item: Dict[str, Any], intent: Dict[str, Any]):
 def _fix_writer(item: Dict[str, Any], intent: Dict[str, Any]):
     """修正 writer 配置。"""
     writer = item.get("writer", {})
-    spec = _get_plugin_spec(writer.get("name", ""), "writer")
+    spec = _get_plugin_spec(writer.get("name", ""), "writer", intent.get("target_db_type"))
     if spec is None:
         return
     writer["name"] = spec.name
@@ -499,7 +489,7 @@ def _fix_writer(item: Dict[str, Any], intent: Dict[str, Any]):
         _normalize_mysql_connections(
             param,
             intent.get("target_host", "127.0.0.1"),
-            intent.get("target_port", 9030),
+            intent.get("target_port", config.STARROCKS_CONFIG["port"]),
             intent.get("target_database", ""),
             table,
             as_list=False,
@@ -880,12 +870,9 @@ def validate_datax_config(config: Dict[str, Any]) -> Tuple[bool, List[str]]:
             if not writer.get("parameter"):
                 errors.append(f"content[{i}].writer.parameter 为空")
 
-    # 尝试 jsonschema 校验（如果安装了）
+    # jsonschema 校验（硬依赖）
     try:
-        import jsonschema
         jsonschema.validate(config, _DATAX_SCHEMA)
-    except ImportError:
-        pass  # jsonschema 未安装，仅用基本检查
     except jsonschema.ValidationError as e:
         errors.append(f"Schema 校验失败: {e.message}")
 

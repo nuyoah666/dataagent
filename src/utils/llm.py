@@ -76,6 +76,74 @@ def llm_json(
         raise LLMJsonError(str(e)) from e
 
 
+def parse_llm_json(content: Any) -> Dict[str, Any]:
+    """从 LLM 文本中容错提取 JSON 对象。
+
+    覆盖常见模型输出波动：
+    - ```json ... ``` / ``` ... ``` 代码块包裹
+    - JSON 前后有解释文字
+    - 对象/数组最后一个元素后多余逗号
+    - 嵌套字符串中的花括号不会误截断
+
+    仅做结构容错，不使用 eval/ast.literal_eval，避免把伪 JSON 当代码执行。
+    """
+    text = (content or "").strip()
+    if not isinstance(text, str):
+        text = str(text)
+
+    # 优先提取 markdown 代码块，避免解释文字中的 JSON 示例干扰真实输出。
+    fence = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL | re.IGNORECASE)
+    if fence:
+        text = fence.group(1).strip()
+
+    candidates = [text]
+
+    # 若直接解析失败，从第一个 `{` 开始做带字符串感知的括号匹配。
+    start = text.find("{")
+    if start >= 0:
+        depth = 0
+        in_str = False
+        escape = False
+        quote = ""
+        end = -1
+        for i, ch in enumerate(text[start:], start):
+            if in_str:
+                if escape:
+                    escape = False
+                elif ch == "\\":
+                    escape = True
+                elif ch == quote:
+                    in_str = False
+                continue
+            if ch in ('"', "'"):
+                in_str = True
+                quote = ch
+                continue
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    break
+        if end > start:
+            candidates.append(text[start:end])
+
+    last_error = None
+    for candidate in candidates:
+        cleaned = re.sub(r",\s*([}\]])", r"\1", candidate)
+        try:
+            value = json.loads(cleaned)
+            if isinstance(value, dict):
+                return value
+            last_error = ValueError("JSON 根节点不是对象")
+        except json.JSONDecodeError as e:
+            last_error = e
+
+    preview = text[:200].replace("\n", " ")
+    raise LLMJsonError(f"LLM 输出非 JSON: {preview}") from last_error
+
+
 def _invoke_json(system: str, human: str, llm: Any) -> Dict[str, Any]:
     from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -84,8 +152,4 @@ def _invoke_json(system: str, human: str, llm: Any) -> Dict[str, Any]:
     # 元组会被 ChatPromptTemplate 当作模板解析，提示词里的 JSON 大括号
     # （如 {"source_db_type": ...}）会被误识别为模板变量导致调用失败。
     result = runnable.invoke([SystemMessage(content=system), HumanMessage(content=human)])
-    content = getattr(result, "content", str(result))
-    m = re.search(r"\{.*\}", content, re.DOTALL)
-    if not m:
-        raise LLMJsonError("LLM 输出非 JSON")
-    return json.loads(m.group())
+    return parse_llm_json(getattr(result, "content", result))

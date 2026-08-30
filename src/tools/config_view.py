@@ -171,9 +171,6 @@ def extract_side(cfg: Dict[str, Any], role: str) -> Dict[str, Any]:
             host = str(a0)
 
     table_name = str(tables or "")
-    # staging 装载方案：展示层剥掉 stg_ 前缀，显示真实目标表
-    if table_name.startswith("stg_"):
-        table_name = table_name[4:]
     return {
         "plugin": name,
         "db_type": db_type,
@@ -198,8 +195,6 @@ def build_target_table_ddl(
     目标库由目标端连接指定（与 schema 探测一致）。不支持的类型返回空串。
     """
     table = str(table or "").strip()
-    if table.startswith("stg_"):
-        table = table[4:]  # staging 装载方案：只建真实目标表
     tdb = str(target_db_type or "").lower()
     if tdb not in ("mysql", "starrocks"):
         return ""

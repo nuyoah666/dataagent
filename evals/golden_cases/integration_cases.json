@@ -1,0 +1,62 @@
+[
+  {
+    "name": "mysql-to-starrocks-uses-jdbc-writer",
+    "intent": {
+      "source_db_type": "mysql",
+      "target_db_type": "starrocks",
+      "source_table": "user",
+      "target_table": "ods_user",
+      "source_database": "biz",
+      "target_database": "dw"
+    },
+    "expect": {
+      "job.content.0.reader.name": "mysqlreader",
+      "job.content.0.writer.name": "mysqlwriter",
+      "job.content.0.writer.parameter.writeMode": "insert",
+      "job.content.0.writer.parameter.connection.0.table.0": "ods_user",
+      "job.content.0.writer.parameter.preSql": [],
+      "job.content.0.writer.parameter.postSql": []
+    }
+  },
+  {
+    "name": "mysql-to-es-safe-cleanup",
+    "intent": {
+      "source_db_type": "mysql",
+      "target_db_type": "es",
+      "source_table": "user",
+      "target_table": "idx_user"
+    },
+    "expect": {
+      "job.content.0.writer.name": "elasticsearchwriter",
+      "job.content.0.writer.parameter.cleanup": false,
+      "job.content.0.writer.parameter.dynamic": true,
+      "job.content.0.writer.parameter.index": "idx_user"
+    }
+  },
+  {
+    "name": "mongo-source-single-channel",
+    "intent": {
+      "source_db_type": "mongodb",
+      "target_db_type": "mysql",
+      "source_table": "orders",
+      "target_table": "orders"
+    },
+    "expect": {
+      "job.content.0.reader.name": "mongodbreader",
+      "job.setting.speed.channel": 1
+    }
+  },
+  {
+    "name": "es-database-moves-to-index",
+    "intent": {
+      "source_db_type": "mysql",
+      "target_db_type": "elasticsearch",
+      "source_table": "user",
+      "target_database": "idx_user"
+    },
+    "expect": {
+      "job.content.0.writer.parameter.index": "idx_user",
+      "intent.target_table": "idx_user"
+    }
+  }
+]

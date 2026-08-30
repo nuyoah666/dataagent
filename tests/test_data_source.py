@@ -129,3 +129,86 @@ class TestApi:
             dl = client.delete(f"/datasources/{sid}")
             assert dl.json()["success"] is True
             assert client.get("/datasources").json()["sources"] == []
+
+    def test_write_actions_are_audited_without_secrets(self):
+        from src.workflow.task_manager import get_task_manager
+
+        headers = {"X-Operator": "datasource-admin"}
+        with TestClient(app) as client:
+            created = client.post(
+                "/datasources",
+                json=_fields(name="审计源", host="127.0.0.2", database="audit_db"),
+                headers=headers,
+            )
+            sid = created.json()["id"]
+            client.put(
+                f"/datasources/{sid}",
+                json={"remark": "变更备注", "host": "127.0.0.3"},
+                headers=headers,
+            )
+            client.delete(f"/datasources/{sid}", headers=headers)
+
+        tm = get_task_manager()
+        create_log = tm.get_audit_logs(action="datasource_create")[0]
+        update_log = tm.get_audit_logs(action="datasource_update")[0]
+        delete_log = tm.get_audit_logs(action="datasource_delete")[0]
+
+        assert create_log["operator"] == "datasource-admin"
+        assert create_log["metadata"] == {
+            "datasource_id": sid,
+            "name": "审计源",
+            "db_type": "mysql",
+            "host": "127.0.0.2",
+            "port": 3306,
+            "database": "audit_db",
+        }
+        assert update_log["metadata"]["changes"] == ["host", "remark"]
+        assert delete_log["metadata"]["datasource_id"] == sid
+        client.post("/datasources", json=_fields(name="失败源"))
+        failed_create = client.post("/datasources", json=_fields(name="失败源"))
+        failed_update = client.put(
+            "/datasources/999999",
+            json={"remark": "不存在", "password": "secret2"},
+        )
+        failed_delete = client.delete("/datasources/999999")
+        assert failed_create.json()["success"] is False
+        assert failed_update.json()["success"] is False
+        assert failed_delete.json()["success"] is False
+
+        all_logs = [
+            create_log, update_log, delete_log,
+            *tm.get_audit_logs(action="datasource_create_failed"),
+            *tm.get_audit_logs(action="datasource_update_failed"),
+            *tm.get_audit_logs(action="datasource_delete_failed"),
+        ]
+        assert "secret" not in str(all_logs)
+        assert "secret2" not in str(all_logs)
+        assert "password" not in str(update_log["metadata"])
+
+
+def test_datasource_sensitive_actions_are_audited(monkeypatch):
+    from src.tools import data_source as ds
+    from src.workflow.task_manager import get_task_manager
+
+    monkeypatch.setattr(ds, "_ping", lambda raw: None)
+    monkeypatch.setattr(
+        ds, "discover_source",
+        lambda source_id, database=None: {"success": True, "databases": ["audit_db"], "tables": []},
+    )
+
+    with TestClient(app) as client:
+        created = client.post("/datasources", json=_fields(name="敏感操作源"))
+        sid = created.json()["id"]
+        client.post(f"/datasources/{sid}/test")
+        client.post(f"/datasources/{sid}/discover?database=audit_db")
+        client.post(
+            "/datasources/test",
+            json=_fields(name="未保存测试源", host="127.0.0.3", database="probe_db"),
+        )
+
+    tm = get_task_manager()
+    assert tm.get_audit_logs(action="datasource_test")
+    assert tm.get_audit_logs(action="datasource_discover")
+    all_text = str(tm.get_audit_logs(limit=20))
+    assert "secret" not in all_text
+    assert "password" not in all_text

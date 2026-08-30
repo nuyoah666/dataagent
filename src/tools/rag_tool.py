@@ -85,12 +85,8 @@ class RAGTool:
             return {"success": False, "error": "RAG 系统初始化失败", "results": []}
 
         try:
-            # 纯召回（BM25 + 向量 + RRF）：显式传原始 query 跳过 LLM 改写，
-            # 检索路径零 LLM 依赖（快、可离线、Agent 侧已自带 LLM 可自行改写）。
-            contexts, context_str, rewritten = self.rag.retrieve(
-                query, rewritten_query=query,
-                top_n=top_n, use_hyde=False, use_multi_query=False,
-            )
+            # 纯召回（BM25 + 向量 + RRF），检索路径零 LLM 依赖。
+            contexts, context_str = self.rag.retrieve(query, top_n=top_n)
             results = [
                 {"index": i, "content": txt, "source": src, "score": sc}
                 for i, (txt, src, sc) in enumerate(contexts, 1)
@@ -98,7 +94,7 @@ class RAGTool:
             return {
                 "success": True,
                 "query": query,
-                "rewritten_query": rewritten,
+                "rewritten_query": query,
                 "total_results": len(results),
                 "context_str": context_str,
                 "results": results,

@@ -30,6 +30,7 @@ _TASK_ID_RE = re.compile(r"(?:任务|task)\s*[:：#]?\s*([A-Za-z0-9_-]{6,})")
 _RETRY_RE = re.compile(r"重试|retry", re.IGNORECASE)
 _KILL_RE = re.compile(r"清理|杀进程|kill", re.IGNORECASE)
 _WEB_SEARCH_RE = re.compile(r"搜索|网上|查一下|web\s*search", re.IGNORECASE)
+_LATEST_FAILED_RE = re.compile(r"最近|最新|上一次|上次|latest|recent|last", re.IGNORECASE)
 
 
 def extract_task_id(query: str) -> Optional[str]:
@@ -51,7 +52,19 @@ class OpsDiagnosisAgent(BaseAgent):
     """收集失败任务信息，检索事故知识库，生成结构化诊断。"""
 
     def run(self, state: DataIntegrationState) -> DataIntegrationState:
+        tm = get_task_manager()
+        current_task_id = state.get("_task_id")
         task_id = state.get("diagnose_task_id") or extract_task_id(state.get("user_query", ""))
+        if not task_id and _LATEST_FAILED_RE.search(state.get("user_query", "")):
+            latest = tm.find_latest_failed_task(exclude_task_id=state.get("_task_id"))
+            if latest:
+                task_id = latest.get("task_id")
+                logger.info("未指定 task_id，自动选择最近失败任务: %s", task_id)
+                if current_task_id and tm.get_task(current_task_id):
+                    tm.log(
+                        current_task_id, "INFO",
+                        f"自动选择最近失败任务: {task_id}",
+                    )
         if not task_id:
             return {
                 **state,
@@ -59,7 +72,6 @@ class OpsDiagnosisAgent(BaseAgent):
                 "current_step": "config_error",
             }
 
-        tm = get_task_manager()
         task = tm.get_task(task_id)
         if not task:
             return {
@@ -128,8 +140,9 @@ class OpsDiagnosisAgent(BaseAgent):
         tm.log(task_id, "INFO", f"[Ops诊断] 根因: {diagnosis.get('root_cause', '')[:200]}")
         tm.log(task_id, "INFO", f"[Ops诊断] 置信度: {diagnosis.get('confidence')}, "
                                 f"关联事故: {len(diagnosis.get('related_incidents', []))} 条")
-        tm.log(state.get("_task_id", ""), "INFO",
-               f"Ops 诊断完成: {task_id} -> {diagnosis.get('root_cause', '')[:100]}")
+        if current_task_id and tm.get_task(current_task_id):
+            tm.log(current_task_id, "INFO",
+                   f"Ops 诊断完成: {task_id} -> {diagnosis.get('root_cause', '')[:100]}")
 
         return {
             **state,

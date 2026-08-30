@@ -1,8 +1,52 @@
 [project]
 name = "dataagent"
 version = "1.0.0"
-description = "基于 LangChain + LangGraph 的数仓多 Agent 协作平台（数据集成 / ETL / 运维 / 分析）"
+description = "基于 LangGraph 的数仓多 Agent 协作平台（数据集成 / ETL / 运维 / 分析）"
 requires-python = ">=3.11"
+dependencies = [
+    # 核心框架
+    "langgraph>=0.1.0",
+    "langchain-core>=0.2.0",
+    "langchain-openai>=0.1.0",
+    "langgraph-checkpoint-sqlite>=3.0.0",
+
+    # 数据库驱动
+    "pymysql>=1.1.0",
+    "pymongo>=4.6.0",
+    "elasticsearch>=8.12.0",
+
+    # 工具
+    "python-dotenv>=1.0.0",
+    "pydantic>=2.6.0",
+    "requests>=2.31.0",
+    "jsonschema>=4.20.0",
+    "loguru>=0.7.0",
+
+    # Web API
+    "fastapi>=0.110.0",
+    "uvicorn>=0.29.0",
+
+    # MCP Server
+    "mcp>=1.2",
+]
+
+[project.optional-dependencies]
+# 向量检索（ops_incident collection 需要；默认 BM25 不需要）
+rag = [
+    "sentence-transformers>=2.0.0",
+    "langchain-huggingface>=0.1.0",
+    "numpy>=1.24.0",
+    "jieba>=0.42.1",
+]
+# MySQL 状态存储（默认用 SQLite）
+mysql-state = [
+    "langgraph-checkpoint-mysql>=3.0.0",
+]
+# 开发与测试
+dev = [
+    "pytest>=8.0.0",
+    "httpx>=0.27.0",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

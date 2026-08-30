@@ -3,13 +3,14 @@
 在 DataX 执行成功后触发，自动构建校验逻辑并输出校验报告。
 """
 import logging
-import re
 from typing import Dict, Any
 
 from ..state import DataIntegrationState
 from ..tools import validate_data_quality, DatabaseConfig
 from ..tools.config_view import extract_side
-from ..config import config
+from ..tools.intent_rules import (
+    DB_TYPE_KEYWORDS, db_defaults, extract_source_table, normalize_db_type,
+)
 from .base import BaseAgent, register_agent
 
 logger = logging.getLogger(__name__)
@@ -119,18 +120,8 @@ class ValidationAgent(BaseAgent):
     def _build_db_config(intent: Dict[str, Any], side: str) -> DatabaseConfig:
         """从 intent 中提取数据库配置。"""
         prefix = side  # "source" or "target"
-        db_type = intent.get(f"{prefix}_db_type", "mysql").lower()
-        # 标准化别名
-        alias = {"es": "elasticsearch", "mongo": "mongodb"}
-        db_type = alias.get(db_type, db_type)
-
-        defaults = {
-            "mysql": config.MYSQL_CONFIG,
-            "mongodb": config.MONGODB_CONFIG,
-            "elasticsearch": config.ES_CONFIG,
-            "starrocks": config.STARROCKS_CONFIG,
-        }
-        d = defaults.get(db_type, config.MYSQL_CONFIG)
+        db_type = normalize_db_type(intent.get(f"{prefix}_db_type", "mysql"))
+        d = db_defaults(db_type)  # 未知类型回退 MySQL 默认
 
         return DatabaseConfig(
             db_type=db_type,
@@ -143,27 +134,27 @@ class ValidationAgent(BaseAgent):
 
     @staticmethod
     def _extract_intent(text: str) -> Dict[str, Any]:
-        """简单关键词提取（备用）。"""
+        """简单关键词提取（备用，规则与 ConfigAgent fallback 共用 intent_rules）。"""
+        my, es = db_defaults("mysql"), db_defaults("elasticsearch")
         intent = {
             "source_db_type": "mysql",
-            "source_host": config.MYSQL_CONFIG["host"],
-            "source_port": config.MYSQL_CONFIG["port"],
-            "source_username": config.MYSQL_CONFIG["username"],
-            "source_password": config.MYSQL_CONFIG["password"],
-            "source_database": config.MYSQL_CONFIG["database"],
-            "source_table": "",
+            "source_host": my["host"],
+            "source_port": my["port"],
+            "source_username": my["username"],
+            "source_password": my["password"],
+            "source_database": my["database"],
+            "source_table": extract_source_table(text),
             "target_db_type": "elasticsearch",
-            "target_host": config.ES_CONFIG["host"],
-            "target_port": config.ES_CONFIG["port"],
+            "target_host": es["host"],
+            "target_port": es["port"],
             "target_table": "",
         }
-        for pat in [r"表[：:]\s*(\w+)", r"(\w+)\s*表", r"同步\s*(\w+)"]:
-            m = re.search(pat, text)
-            if m:
-                intent["source_table"] = m.group(1)
-                break
-        if "mongo" in text.lower():
+        low = (text or "").lower()
+        if any(kw in low for kw in DB_TYPE_KEYWORDS["mongodb"]):
+            mg = db_defaults("mongodb")
             intent["source_db_type"] = "mongodb"
-            intent["source_port"] = config.MONGODB_CONFIG["port"]
+            intent["source_host"] = mg["host"]
+            intent["source_port"] = mg["port"]
+            intent["source_database"] = mg["database"]
         return intent
 

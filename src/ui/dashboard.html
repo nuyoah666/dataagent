@@ -71,7 +71,14 @@
   .card.active { border-color:var(--accent); outline:2px solid rgba(56,189,248,.35); }
   .card .num { font-size:26px; font-weight:600; }
   .card .label { font-size:12px; color:var(--muted); margin-top:2px; }
-  .card.ok .num { color:var(--ok); } .card.err .num { color:var(--err); }
+  .card.ok .num { color:var(--ok); } .card.err .num { color:var(--err); }  .metric-strip { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px; margin:-4px 0 16px; }
+  .metric { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:12px 14px; }
+  .metric .v { font-size:20px; font-weight:600; }
+  .metric .k { font-size:12px; color:var(--muted); margin-bottom:6px; }
+  .metric .sub { font-size:12px; color:var(--muted); margin-top:4px; }
+  .metric.ok .v { color:var(--ok); } .metric.warn .v { color:var(--warn); } .metric.err .v { color:var(--err); }
+  .err-rank { margin:0; padding-left:18px; font-size:12px; color:var(--text); }
+  .err-rank li { margin:3px 0; }
   .card.run .num { color:var(--run); } .card.warn .num { color:var(--warn); }
   .toolbar { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:12px; }
   .toolbar .grow { flex:1; }
@@ -194,6 +201,9 @@
         <button class="btn-wizard" onclick="location.href='/ui/wizard'">⚡ 同步向导</button>
         <button class="btn btn-ghost" id="themeToggle" onclick="toggleTheme()">☀️</button>
         <span style="display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px">
+          操作人 <input class="input" id="operatorName" value="local-user" style="width:110px">
+        </span>
+        <span style="display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px">
           Token <input type="password" class="input" id="apiToken" placeholder="API_TOKEN（可选）" style="width:150px">
         </span>
         <a href="/chat" target="_blank" style="color:var(--accent);font-size:13px">去交互 ↗</a>
@@ -202,7 +212,7 @@
   <div class="content">
 
   <div id="tab-tasks">
-    <div class="cards" id="cards"></div>
+    <div class="cards" id="cards"></div>    <div class="metric-strip" id="metrics"></div>
     <div class="toolbar">
       <input class="input search" id="search" placeholder="搜索：任务ID / 指令 / 表名…">
       <select class="select" id="filterStatus">
@@ -255,7 +265,7 @@
   <div id="tab-audit" style="display:none">
     <div class="table-wrap">
       <table>
-        <thead><tr><th>时间</th><th>任务 ID</th><th>动作</th><th>操作人</th><th>详情</th></tr></thead>
+        <thead><tr><th>时间</th><th>任务/对象</th><th>类型</th><th>动作</th><th>操作人</th><th>详情</th></tr></thead>
         <tbody id="auditRows"></tbody>
       </table>
     </div>
@@ -324,6 +334,7 @@
   </div>
 </div>
 
+<script src="/static/common.js"></script>
 <script>
 // URL 参数 ?wizard=1 时跳转到独立同步向导页（供 chat 页入口跳转）
 window.addEventListener('DOMContentLoaded', () => {
@@ -332,26 +343,10 @@ window.addEventListener('DOMContentLoaded', () => {
   }
 });
 
-const $ = id => document.getElementById(id);
-const TOKEN_KEY = 'dataagent_api_token';
 const TYPE_LABELS = { data_integration:'数据集成', etl_development:'ETL', data_ops:'运维', data_analysis:'分析' };
 const DBTYPE_LABELS = { mysql:'MySQL', mongodb:'MongoDB', elasticsearch:'Elasticsearch', starrocks:'StarRocks' };
 const state = { status:'all', type:'all', q:'', time:'all', sort:'created_at', order:'desc',
                 page:1, size:20, tab:'tasks' };
-
-function token() { return $('apiToken').value || localStorage.getItem(TOKEN_KEY) || ''; }
-function headers() { const t = token(); return t ? {'X-API-Token': t} : {}; }
-function escapeHtml(s) {
-  return (s == null ? '' : String(s)).replace(/[&<>"']/g, c =>
-    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-}
-async function api(url, opts) {
-  const r = await fetch(url, Object.assign({headers: headers()}, opts || {}));
-  if (r.status === 401) { alert('未授权：请在右上角填入 API_TOKEN'); throw new Error('unauthorized'); }
-  const data = await r.json().catch(() => ({}));
-  if (!r.ok) { throw new Error(data.detail || ('HTTP ' + r.status)); }
-  return data;
-}
 
 function statusText(s) {
   return {pending_approval:'待审批', success:'成功', failed:'失败', cancelled:'已取消',
@@ -363,22 +358,6 @@ function durationSec(a, b) {
   return ((new Date(b) - new Date(a)) / 1000).toFixed(1) + 's';
 }
 function fmtTime(t) { return (t || '').slice(0, 19).replace('T', ' '); }
-
-// ---------- 主题 ----------
-function applyTheme(theme) {
-  document.documentElement.dataset.theme = theme;
-  $('themeToggle').textContent = theme === 'dark' ? '☀️' : '🌙';
-}
-function initTheme() {
-  const saved = localStorage.getItem('dataagent_theme');
-  const theme = saved || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
-  applyTheme(theme);
-}
-function toggleTheme() {
-  const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
-  applyTheme(next);
-  localStorage.setItem('dataagent_theme', next);
-}
 
 // ---------- 数据加载 ----------
 function timeRange() {
@@ -415,6 +394,29 @@ function taskActions(t, withRow = true) {
   return b || '—';
 }
 
+function fmtDuration(sec) {
+  sec = Number(sec || 0);
+  if (sec < 60) return sec.toFixed(1) + 's';
+  const m = Math.floor(sec / 60), s = Math.round(sec % 60);
+  return m + 'm ' + s + 's';
+}
+function renderMetrics(m) {
+  if (!m) return;
+  const terminal = (m.success || 0) + (m.failed || 0) + (m.cancelled || 0);
+  const rate = terminal ? ((m.success / terminal) * 100).toFixed(1) + '%' : '—';
+  const cls = m.success_rate >= 0.8 ? 'ok' : (m.success_rate >= 0.5 ? 'warn' : 'err');
+  const errs = (m.top_errors || []).slice(0, 3);
+  $('metrics').innerHTML = `
+    <div class="metric ${cls}"><div class="k">终态成功率</div><div class="v">${rate}</div>
+      <div class="sub">成功 ${m.success || 0} / 失败 ${m.failed || 0}</div></div>
+    <div class="metric"><div class="k">平均执行耗时</div><div class="v">${m.avg_execution_seconds ? fmtDuration(m.avg_execution_seconds) : '—'}</div>
+      <div class="sub">started_at → completed_at</div></div>
+    <div class="metric"><div class="k">平均审批等待</div><div class="v">${m.avg_approval_wait_seconds ? fmtDuration(m.avg_approval_wait_seconds) : '—'}</div>
+      <div class="sub">created_at → approved_at</div></div>
+    <div class="metric"><div class="k">失败原因 Top 3</div>
+      <ol class="err-rank">${errs.length ? errs.map(e => `<li title="${escapeHtml(e.error)}">${escapeHtml(e.error)} <b>×${e.count}</b></li>`).join('') : '<li style="list-style:none;color:var(--muted)">暂无</li>'}</ol></div>
+  `;
+}
 const CARD_DEFS = [
   {key:'total', label:'总数'},
   {key:'pending_approval', label:'待审批', filter:'pending_approval'},
@@ -450,7 +452,7 @@ function renderTasks(tasks) {
       <td><span class="tag ${t.status}">${statusText(t.status)}</span></td>
       <td>${fmtTime(t.created_at)}</td>
       <td>${fmtTime(t.completed_at) || '—'}</td>
-      <td>${durationSec(t.created_at, t.completed_at)}</td>
+      <td>${durationSec(t.started_at || t.created_at, t.completed_at)}</td>
       <td class="err-cell" title="${escapeHtml(t.error || '')}">${escapeHtml(t.error || '')}</td>
       <td style="white-space:nowrap">${taskActions(t)}</td>
     </tr>`;
@@ -489,9 +491,10 @@ function goPage(p) {
 
 async function loadTasks() {
   try {
-    const data = await api(tasksUrl());
+    const [data, metrics] = await Promise.all([api(tasksUrl()), api('/metrics/summary').catch(() => null)]);
     $('pager').dataset.total = data.total;
     renderCards(data.counts || {});
+    renderMetrics(metrics);
     renderTasks(data.tasks || []);
     renderPager(data.total || 0);
     $('arr-' + state.sort).textContent = state.order === 'asc' ? ' ↑' : ' ↓';
@@ -516,7 +519,7 @@ function renderPipelines(tasks) {
       <td><span class="tag ${t.status}">${statusText(t.status)}</span></td>
       <td>${link}</td><td>${fmtTime(t.created_at)}</td>
       <td>${fmtTime(t.completed_at) || '—'}</td>
-      <td>${durationSec(t.created_at, t.completed_at)}</td>
+      <td>${durationSec(t.started_at || t.created_at, t.completed_at)}</td>
       <td class="err-cell" title="${escapeHtml(t.error || '')}">${escapeHtml(t.error || '')}</td></tr>`;
     for (const k of kids) {
       const klink = (k.source_table && k.target_table) ? `${escapeHtml(k.source_table)} → ${escapeHtml(k.target_table)}` : '—';
@@ -541,17 +544,26 @@ async function loadPipelines() {
 
 function renderAudit(logs) {
   const tbody = $('auditRows');
-  if (!logs.length) { tbody.innerHTML = '<tr><td colspan="5" class="empty">暂无审计记录</td></tr>'; return; }
-  tbody.innerHTML = logs.map(l => `<tr>
-    <td>${fmtTime(l.created_at)}</td><td>${l.task_id || '—'}</td>
-    <td>${escapeHtml(l.action)}</td><td>${escapeHtml(l.operator)}</td>
-    <td class="audit-detail">${escapeHtml(l.detail || '')}</td></tr>`).join('');
+  if (!logs.length) { tbody.innerHTML = '<tr><td colspan="6" class="empty">暂无审计记录</td></tr>'; return; }
+  tbody.innerHTML = logs.map(l => {
+    const dsId = l.metadata && l.metadata.datasource_id ? ` #${l.metadata.datasource_id}` : '';
+    const target = l.task_id || (l.metadata && l.metadata.name ? `${l.metadata.name}${dsId}` : '—');
+    const meta = l.metadata ? `<div class="audit-detail">${escapeHtml(JSON.stringify(l.metadata))}</div>` : '';
+    return `<tr>
+      <td>${fmtTime(l.created_at)}</td>
+      <td>${escapeHtml(target)}</td>
+      <td>${escapeHtml(l.task_type || '—')}</td>
+      <td>${escapeHtml(l.action)}</td>
+      <td>${escapeHtml(l.operator)}</td>
+      <td class="audit-detail">${escapeHtml(l.detail || '')}${meta}</td>
+    </tr>`;
+  }).join('');
 }
 async function loadAudit() {
   try {
     const data = await api('/audit?limit=200');
     renderAudit(data.logs || []);
-  } catch (e) { $('auditRows').innerHTML = `<tr><td colspan="5" class="empty">${escapeHtml(e.message)}</td></tr>`; }
+  } catch (e) { $('auditRows').innerHTML = `<tr><td colspan="6" class="empty">${escapeHtml(e.message)}</td></tr>`; }
 }
 
 function renderHealth(h) {
@@ -932,16 +944,16 @@ async function showDetail(taskId) {
     ` : '';
     const opsRec = task.ops_record_result ? `
       <div class="section-title">事故沉淀</div><div>${escapeHtml(task.ops_record_result.summary || '')}</div>` : '';
-    const anal = task.analysis_result ? `
+    const anal = (task.analysis_result || task.analysis_sql) ? `
       <div class="section-title">分析结果</div>
       ${task.analysis_summary ? `<div style="margin-bottom:6px">${escapeHtml(task.analysis_summary)}</div>` : ''}
-      <table style="width:100%;font-size:12.5px;border-collapse:collapse"><thead><tr>
+      ${task.analysis_result ? `<table style="width:100%;font-size:12.5px;border-collapse:collapse"><thead><tr>
         ${(task.analysis_result.columns || []).map(c => `<th style="text-align:left;border-bottom:1px solid var(--border);padding:4px">${escapeHtml(c)}</th>`).join('')}
       </tr></thead><tbody>
         ${(task.analysis_result.rows || []).slice(0, 50).map(r =>
           `<tr>${(task.analysis_result.columns || []).map(c =>
             `<td style="padding:3px 6px;border-bottom:1px solid var(--border)">${escapeHtml(r[c])}</td>`).join('')}</tr>`).join('')}
-      </tbody></table>
+      </tbody></table><div style="font-size:11px;color:var(--muted);margin-top:4px">共 ${task.analysis_result.row_count || (task.analysis_result.rows || []).length} 行</div>` : '<div style="color:var(--muted);font-size:12px">查询执行中…</div>'}
       ${task.analysis_sql ? `<div class="audit-detail" style="margin-top:6px">${escapeHtml(task.analysis_sql)}</div>` : ''}` : '';
     const etl = task.etl_sql ? `
       <div class="section-title">ETL 透传</div>
@@ -1037,6 +1049,8 @@ function loadAll() {
 
 $('apiToken').value = localStorage.getItem(TOKEN_KEY) || '';
 $('apiToken').onchange = e => localStorage.setItem(TOKEN_KEY, e.target.value);
+$('operatorName').value = localStorage.getItem(OPERATOR_KEY) || 'local-user';
+$('operatorName').onchange = e => localStorage.setItem(OPERATOR_KEY, e.target.value.trim() || 'local-user');
 $('modal').onclick = e => { if (e.target === $('modal')) closeModal(); };
 $('dsModal').onclick = e => { if (e.target === $('dsModal')) closeDsModal(); };
 initTheme();

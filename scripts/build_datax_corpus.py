@@ -493,7 +493,7 @@ varchar/char→keyword（精确匹配）, text/longtext→text（全文搜索）
     (
         "starrocks_write",
         """# 经验：本机容器 StarRocks 写入两种方式
-方式一（已验证）: 用 mysqlwriter 走 StarRocks FE 的 MySQL 协议（jdbc:mysql://127.0.0.1:9030/），writeMode 用 insert，
+方式一（已验证）: 用 mysqlwriter 走 StarRocks FE 的 MySQL 协议（jdbc:mysql://127.0.0.1:9031/），writeMode 用 insert，
 适合小数据量/个人环境，规避容器网络与 StreamLoad 端口映射问题。
 方式二（官方）: starrockswriter 通过 StreamLoad 以 csv 格式导入，需配置 loadUrl（BE:8030）、selectedDatabase、column。
 注意: 两种方式的 column 顺序必须与目标表列一致；preSql/postSql 可用于导入前后清理。""",

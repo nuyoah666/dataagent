@@ -26,7 +26,7 @@ def _ensure_starrocks_table(table: str, database: str = "datax_test"):
     load_dotenv(Path(__file__).resolve().parent.parent / ".env")
     conn = pymysql.connect(
         host=os.getenv("STARROCKS_HOST", "127.0.0.1"),
-        port=int(os.getenv("STARROCKS_PORT", "9030")),
+        port=int(os.getenv("STARROCKS_PORT", "9031")),
         user=os.getenv("STARROCKS_ADMIN_USERNAME", "root"),
         password=os.getenv("STARROCKS_ADMIN_PASSWORD", ""),
         database=database,

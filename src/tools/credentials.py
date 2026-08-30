@@ -3,16 +3,9 @@
 import logging
 from typing import Any, Dict, Optional
 
-from ..config import config
+from .intent_rules import db_defaults_or_none, normalize_db_type
 
 logger = logging.getLogger(__name__)
-
-_DEFAULTS_MAP = {
-    "mysql": config.MYSQL_CONFIG,
-    "mongodb": config.MONGODB_CONFIG,
-    "elasticsearch": config.ES_CONFIG,
-    "starrocks": config.STARROCKS_CONFIG,
-}
 
 # 空值或脱敏占位（任务记录落库时密码会脱敏为 ***）
 _MISSING = ("", "***")
@@ -43,14 +36,15 @@ def apply_intent_defaults(intent: Dict[str, Any]) -> Dict[str, Any]:
     """
     result = dict(intent or {})
     for side in ("source", "target"):
-        db_type = str(result.get(f"{side}_db_type", "")).lower()
+        db_type = normalize_db_type(result.get(f"{side}_db_type", ""))
+        result[f"{side}_db_type"] = db_type
         side_name = str(result.get(f"{side}_name") or "").strip()
         named = _named_source(side, result)
         if side_name and named is None:
             # 用户显式指定了命名源但注册表里没有：报错，不回退到默认实例
             result["_source_name_error"] = f"命名数据源不存在: {side_name}"
             continue
-        defaults = named or _DEFAULTS_MAP.get(db_type)
+        defaults = named or db_defaults_or_none(db_type)
         if not defaults:
             continue
 

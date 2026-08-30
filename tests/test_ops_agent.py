@@ -95,6 +95,42 @@ def test_diagnosis_task_not_found():
     assert state["current_step"] == "config_error"
 
 
+def test_diagnosis_latest_failed_task_auto_selects_non_ops(monkeypatch):
+    tm = get_task_manager()
+    target = _failed_task(tm, error="DataX 退出码 1")
+    # 最近失败的是运维任务自身/旧诊断时，不能递归选择 data_ops。
+    ops_latest = tm.create_task("诊断最近失败的任务", task_type="data_ops")
+    tm.update_task(ops_latest, status=TaskStatus.FAILED.value, error="旧诊断失败")
+
+    monkeypatch.setattr("src.agents.ops_agent.search_ops_knowledge", lambda q, top_n=5: _fake_rag())
+    monkeypatch.setattr("src.agents.ops_agent.llm_json", lambda *a, **k: _fake_llm())
+
+    agent = OpsDiagnosisAgent()
+    state = agent.run({
+        "user_query": "诊断最近失败的任务",
+        "_task_id": "currentops1234",
+        "diagnose_task_id": None,
+        "current_step": "start",
+        "error": None,
+    })
+    assert state["current_step"] == "config_complete"
+    assert state["diagnose_task_id"] == target
+    assert state["ops_diagnosis"]["task_id"] == target
+
+
+def test_diagnosis_latest_failed_task_none():
+    agent = OpsDiagnosisAgent()
+    state = agent.run({
+        "user_query": "诊断最近失败的任务",
+        "_task_id": "currentops1234",
+        "diagnose_task_id": None,
+        "current_step": "start",
+        "error": None,
+    })
+    assert state["current_step"] == "config_error"
+    assert "无法识别" in state["error"]
+
+
 def test_diagnosis_happy_path(monkeypatch):
     tm = get_task_manager()
     task_id = _failed_task(tm)

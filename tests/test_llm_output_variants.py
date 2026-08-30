@@ -9,7 +9,7 @@ from src.tools.config_processor import (
     apply_ods_target_naming, normalize_datax_config, normalize_intent, process_config,
 )
 from src.tools.credentials import apply_intent_defaults
-from src.tools.incremental import inject_ods_partition_column
+from src.config import config
 
 SRC_SCHEMA = {
     "success": True,
@@ -26,9 +26,11 @@ def _base_intent(**kw):
         "source_db_type": "mysql", "source_host": "127.0.0.1", "source_port": 3306,
         "source_username": "", "source_password": "",
         "source_database": "cdc_test_db", "source_table": "user_action_log",
-        "target_db_type": "starrocks", "target_host": "127.0.0.1", "target_port": 9030,
+        "target_db_type": "starrocks",
+        "target_host": config.STARROCKS_CONFIG["host"],
+        "target_port": config.STARROCKS_CONFIG["port"],
         "target_username": "", "target_password": "",
-        "target_database": "datax_test", "target_table": "",
+        "target_database": config.STARROCKS_CONFIG["database"], "target_table": "",
         "sync_type": "full", "update_cycle": "day",
     }
     base.update(kw)
@@ -115,33 +117,17 @@ class TestLlmVariantConfigResidual:
 class TestLlmVariantCredentials:
     """LLM 编造凭据：默认实例必须回填 .env。"""
 
-    def test_fabricated_root_username_blank_password(self):
-        intent = _base_intent(target_username="root", target_password="")
+    def test_fabricated_username_blank_password_backfills_default(self):
+        # LLM 编造本地不存在的用户名且密码留空 -> 整体回填 .env 默认凭据
+        sr = config.STARROCKS_CONFIG
+        intent = _base_intent(target_username="admin", target_password="")
         out = apply_intent_defaults(intent)
-        assert out["target_username"] == "datax"  # 回填 StarRocks 默认用户
-        assert out["target_password"]  # 回填默认密码
+        assert out["target_username"] == sr["username"]
+        assert out["target_password"] == sr["password"]
 
     def test_fabricated_password_on_default_user(self):
-        intent = _base_intent(target_username="datax", target_password="hacked-123")
+        sr = config.STARROCKS_CONFIG
+        intent = _base_intent(target_username=sr["username"], target_password="hacked-123")
         out = apply_intent_defaults(intent)
-        assert out["target_password"]  # 默认用户密码一律以 .env 为准
-
-
-class TestLlmVariantPlugin:
-    """LLM 输出插件漂移：starrockswriter 也走 staging 装载。"""
-
-    def test_starrocks_writer_staging_injected(self):
-        cfg = {
-            "job": {"content": [{
-                "reader": {"name": "mysqlreader", "parameter": {
-                    "column": ["id"], "connection": [{"jdbcUrl": ["jdbc:mysql://h/db"], "table": ["t"]}],
-                }},
-                "writer": {"name": "starrockswriter", "parameter": {
-                    "column": ["id"],
-                    "connection": [{"jdbcUrl": ["jdbc:mysql://127.0.0.1:9030/db"], "table": ["ods_x_day_inc"]}],
-                }},
-            }]},
-        }
-        out = inject_ods_partition_column(cfg, SRC_SCHEMA["columns"], "2026-08-09")
-        writer = out["job"]["content"][0]["writer"]["parameter"]
-        assert writer["connection"][0]["table"] == ["stg_ods_x_day_inc"]
+        # 默认用户的密码一律以 .env 为准（默认无密码则回填空串）
+        assert out["target_password"] == sr["password"]

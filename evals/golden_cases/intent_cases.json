@@ -1,0 +1,12 @@
+[
+  {"query": "把 MySQL 的 user 表同步到 StarRocks", "expected_type": "data_integration"},
+  {"query": "将 ods_user 加工到 dwd_user", "expected_type": "etl_development"},
+  {"query": "诊断任务 abc123", "expected_type": "data_ops"},
+  {"query": "分析最近7天用户活跃趋势", "expected_type": "data_analysis"},
+  {"query": "/etl 把 ods_order 透传到 dwd_order", "expected_type": "etl_development", "expected_source": "explicit"},
+  {"query": "@ops 排查失败任务", "expected_type": "data_ops", "expected_source": "explicit"},
+  {"query": "增量同步订单表到 ES", "expected_type": "data_integration", "expected_keywords": ["同步", "增量"]},
+  {"query": "查询订单金额指标", "expected_type": "data_analysis", "expected_keywords": ["查询", "指标"]},
+  {"query": "重试失败任务", "expected_type": "data_ops"},
+  {"query": "把用户表迁移到 MongoDB", "expected_type": "data_integration"}
+]

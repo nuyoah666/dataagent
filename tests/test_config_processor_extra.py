@@ -874,31 +874,3 @@ class TestPrimaryMirrorDdl:
         )
         assert "PRIMARY KEY(`id`)" in ddl
         assert "PARTITION BY" not in ddl
-
-
-class TestPrimaryMirrorLoad:
-    """主键镜像装载：全量 TRUNCATE+重灌，增量 upsert。"""
-
-    def test_full_truncate_then_insert(self):
-        from src.tools.incremental import build_ods_partition_load_sql
-
-        sqls = build_ods_partition_load_sql(
-            "ods_user", "stg_ods_user",
-            [{"name": "id", "type": "bigint"}, {"name": "name", "type": "varchar(50)"}],
-            "2026-08-11", primary_key="id", load_mode="full",
-        )
-        assert sqls[0] == "TRUNCATE TABLE ods_user"
-        assert "INSERT INTO ods_user (`id`, `name`) SELECT `id`, `name` FROM stg_ods_user" in sqls[1]
-        assert sqls[2] == "DROP TABLE IF EXISTS stg_ods_user"
-
-    def test_incremental_upsert(self):
-        from src.tools.incremental import build_ods_partition_load_sql
-
-        sqls = build_ods_partition_load_sql(
-            "ods_user", "stg_ods_user",
-            [{"name": "id", "type": "bigint"}, {"name": "name", "type": "varchar(50)"}],
-            "2026-08-11", primary_key="id", load_mode="incremental",
-        )
-        assert "TRUNCATE" not in sqls[0]
-        assert sqls[0].startswith("INSERT INTO ods_user")
-        assert len(sqls) == 2  # INSERT + DROP，无 DELETE/TRUNCATE

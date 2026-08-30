@@ -473,7 +473,8 @@ def test_approve_uses_recorded_task_type(monkeypatch):
             seen["task_type"] = "data_integration"
             return {"current_step": "execution_complete", "error": None}
 
-    monkeypatch.setattr(api, "get_workflow", lambda t: _FakeWF())
+    from src.routers import _support as _sup
+    monkeypatch.setattr(_sup, "get_workflow", lambda t: _FakeWF())
     with TestClient(api.app) as client:
         r = client.post(f"/tasks/{task_id}/approve")
         assert r.status_code == 200, r.text

@@ -9,7 +9,7 @@
 
 - **自然语言交互**：用户通过自然语言描述数据同步需求
 - **智能配置生成**：基于 RAG 检索 DataX 官方文档，生成精准配置
-- **全链路自动化**：规划、执行、校验全流程无需人工干预
+- **人工审批门禁**：写操作（集成/ETL）生成配置后挂起，人工确认才执行
 - **多数据源支持**：MySQL、MongoDB、Elasticsearch
 - **源表歧义消除**：跨库按表名/表注释发现候选（`discover_tables`），
   唯一命中自动采用；多个候选或找不到时强制用户明确 `库.表`，
@@ -71,6 +71,10 @@ flowchart LR
 
 ```bash
 pip install -r requirements.txt
+# 或开发模式（含测试依赖）：
+pip install -e ".[dev]"
+# 如需向量检索（ops_incident）：
+pip install -e ".[rag]"
 ```
 
 ### 2. 配置环境变量
@@ -117,9 +121,11 @@ Web 界面：
 
 ```bash
 pytest
+python scripts/eval_golden.py
 ```
 
 测试覆盖配置后处理、数据源标识符校验、DataX 执行、任务状态流转、敏感信息脱敏和 Web API。
+`eval_golden.py` 是 Agent 确定性回归集，离线验证意图路由、配置归一化、ETL SQL、运维事故版本化等关键行为。
 全部测试离线可跑（mock DataX、打桩数据库连接），无需真实数据库/ES/LLM，
 CI（GitHub Actions）在 Ubuntu / Windows 双平台自动执行。
 
@@ -209,9 +215,9 @@ curl -X POST http://localhost:8000/ops/diagnose \
 
 StarRocks / Doris 的 FE 兼容 MySQL 协议，Agent 可直接把它们作为目标库：
 
-- 配置 `STARROCKS_HOST/PORT/USERNAME/PASSWORD/DATABASE`（默认 `127.0.0.1:9030`）
+- 配置 `STARROCKS_HOST/PORT/USERNAME/PASSWORD/DATABASE`（StarRocks 4.0 容器 FE MySQL 协议映射到宿主机 `127.0.0.1:9031`，容器内 root 默认无密码）
 - 目标类型识别：`StarRocks` / `SR` 均归一化为 `starrocks`
-- 写入方式：统一降级为 `mysqlwriter` 走 FE 的 MySQL 协议（9030），
+- 写入方式：统一降级为 `mysqlwriter` 走 FE 的 MySQL 协议（宿主机 9031），
   不依赖 Stream Load 直连 BE，规避容器网络下 BE 内网 IP 不可达问题（个人项目数据量下足够）
 - 已内置的防御：`writeMode` 强制 `insert`（StarRocks 不支持 REPLACE/UPDATE）、
   清空 LLM 生成的 `preSql/postSql`（建表/清表 DDL 不可靠且有风险）、
@@ -265,7 +271,7 @@ SQL 型 MVP：指令中带"加工/清洗/聚合"（或 `/etl`）即路由到 `et
 - 两段式 LLM：先解析意图（`ETLIntent`），再注入源表结构生成加工 SQL（`ETLPlan`）
 - SQL 安全校验（`src/tools/sql_validator.py`）：只允许 `INSERT INTO ... SELECT`，
   拦截 DROP/DELETE/TRUNCATE/ALTER/UPDATE/多语句/注释，执行前二次校验
-- 执行：StarRocks FE MySQL 协议（9030），行数校验后完成
+- 执行：StarRocks 4.0 FE MySQL 协议（宿主机 9031），行数校验后完成
 - 示例：`python -m src.main "把 src_user_sr 加工到 dwd_user_sr"`
 
 ## 多表批量同步
@@ -524,7 +530,7 @@ src/
 ## 文档
 
 - [部署指南](DEPLOY.md)
-- [API 文档](docs/api.md)（待编写）
+- [API 文档](docs/API.md)
 
 ## 许可证
 

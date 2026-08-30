@@ -103,12 +103,31 @@ def test_audit_reject_and_cancel(gate_agents):
     assert "task_cancel" in actions2
 
 
+def test_audit_filters(gate_agents):
+    tm = get_task_manager()
+    task_id = _make_pending_task()
+
+    logs = tm.get_audit_logs(
+        action="task_create",
+        operator="system",
+        task_type="data_integration",
+    )
+    assert logs
+    assert all(log["action"] == "task_create" for log in logs)
+    assert all(log["operator"] == "system" for log in logs)
+    assert all(log["task_type"] == "data_integration" for log in logs)
+    assert any(log["task_id"] == task_id for log in logs)
+    assert tm.get_audit_logs(action="definitely_not_exists") == []
+
+
 def test_api_audit_endpoint(gate_agents):
     task_id = _make_pending_task()
     with TestClient(api.app) as client:
-        r = client.get("/audit", params={"task_id": task_id})
+        r = client.get("/audit", params={"task_id": task_id, "action": "task_create"})
         assert r.status_code == 200
-        assert any(l["action"] == "task_create" for l in r.json()["logs"])
+        logs = r.json()["logs"]
+        assert logs
+        assert all(l["action"] == "task_create" for l in logs)
 
 
 # ---- API Token 鉴权 ----
@@ -138,7 +157,7 @@ def test_api_token_required(auth_env):
 def test_api_token_exempt_paths(auth_env):
     with TestClient(api.app) as client:
         assert client.get("/health").status_code == 200
-        assert client.get("/metrics").status_code == 200
+        assert client.get("/metrics").status_code == 401
         assert client.get("/ui").status_code == 200
 
 

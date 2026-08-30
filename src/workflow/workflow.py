@@ -6,15 +6,15 @@ import json
 import logging
 import os
 import uuid
+from datetime import datetime
 from typing import Dict, Any, Optional
 from langgraph.graph import StateGraph, END
 
 from ..state import DataIntegrationState
 from ..agents import get_step_agents, get_task_approval
-from ..tools import detect_incremental_field, enhance_config_with_incremental, inject_ods_partition_column
-from ..tools.db_tool import validate_identifier
+from ..tools import detect_incremental_field, enhance_config_with_incremental
+from .task_manager import get_task_manager, TaskStatus, _NON_TERMINAL_STATUSES
 from .checkpointer import create_checkpointer
-from .task_manager import get_task_manager, TaskStatus
 from ..utils.security import redact_secrets, _is_secret_key
 from ..utils.tracing import trace_step
 
@@ -85,7 +85,11 @@ class AgentWorkflow:
 
     def _run_config(self, state: DataIntegrationState) -> DataIntegrationState:
         task_id = state.get("_task_id", "")
-        self.task_mgr.update_task(task_id, status=TaskStatus.RUNNING.value, current_step="config_agent")
+        if not self.task_mgr.transition_status(
+            task_id, TaskStatus.RUNNING, _NON_TERMINAL_STATUSES,
+            current_step="config_agent",
+        ):
+            return {**state, "error": "任务已结束或取消", "current_step": "cancelled"}
         self.task_mgr.log(task_id, "INFO", "ConfigAgent 开始执行")
 
         result = self.config_agent.run(state)
@@ -118,28 +122,8 @@ class AgentWorkflow:
                               "incremental_field": incremental_field,
                               "last_value": last_value}
 
-            # 分区形态 ODS 表（ods_<x>_day_inc / _day_snapshot）：写入带 dt 分区列
-            if cfg and str(intent.get("target_db_type", "")).lower() == "starrocks":
-                from ..tools.ods_naming import kind_from_table
-
-                kind = kind_from_table(str(intent.get("target_table", "")))
-                primary_key = str((schema or {}).get("primary_key") or "")
-                # 分区明细表或主键镜像表都走 staging 装载（base 无主键的显式表除外）
-                if kind != "base" or primary_key:
-                    from datetime import datetime
-
-                    dt = datetime.now().strftime("%Y-%m-%d")
-                    cfg = inject_ods_partition_column(
-                        cfg, (schema or {}).get("columns") or [], dt,
-                    )
-                    result = {**result, "datax_config": cfg}
-                    self.task_mgr.log(
-                        task_id, "INFO",
-                        f"ODS 装载: {intent.get('target_table')}"
-                        + (f"（主键镜像 {primary_key}）" if primary_key else f"，分区 dt={dt}"),
-                    )
-
-            self.task_mgr.update_task(task_id, status=TaskStatus.CONFIG_DONE.value,
+            saved = self.task_mgr.transition_status(task_id, TaskStatus.CONFIG_DONE, [TaskStatus.RUNNING],
+                                       current_step="config_done",
                                        parsed_intent=result.get("parsed_intent"),
                                        source_schema=result.get("source_schema"),
                                        datax_config=result.get("datax_config"),
@@ -158,6 +142,7 @@ class AgentWorkflow:
                                        or intent.get("source_table", ""),
                                        incremental_field=incremental_field,
                                        last_value=last_value)
+            if not saved: return {**result, "error": "任务已结束或取消", "current_step": "cancelled"}
             self.task_mgr.log(task_id, "INFO", "ConfigAgent 完成")
         else:
             self.task_mgr.log(task_id, "ERROR", f"ConfigAgent 失败: {result.get('error')}")
@@ -170,15 +155,15 @@ class AgentWorkflow:
     def _run_approval_gate(self, state: DataIntegrationState) -> DataIntegrationState:
         """人工审批门禁：配置完成后挂起，等待人工确认。"""
         task_id = state.get("_task_id", "")
-        self.task_mgr.update_task(
-            task_id, status=TaskStatus.PENDING_APPROVAL.value,
+        self.task_mgr.transition_status(
+            task_id, TaskStatus.PENDING_APPROVAL, [TaskStatus.CONFIG_DONE],
             current_step="awaiting_approval",
         )
         self.task_mgr.log(
             task_id, "WARNING",
             "配置已生成，等待人工审批（POST /tasks/{id}/approve 通过 / reject 拒绝）",
         )
-        logger.info(f"[task={task_id}] 进入人工审批等待")
+        logger.info("进入人工审批等待", extra={"task_id": task_id, "agent": self.task_type})
         return {
             **state,
             "current_step": "awaiting_approval",
@@ -187,46 +172,26 @@ class AgentWorkflow:
 
     def _run_execution(self, state: DataIntegrationState) -> DataIntegrationState:
         task_id = state.get("_task_id", "")
-        self.task_mgr.update_task(task_id, status=TaskStatus.EXECUTING.value)
+        if not self.task_mgr.transition_status(
+            task_id, TaskStatus.EXECUTING,
+            [TaskStatus.CONFIG_DONE, TaskStatus.PENDING_APPROVAL, TaskStatus.EXECUTING],
+            started_at=datetime.now().isoformat(),
+            current_step="execution_agent",
+        ):
+            return {**state, "error": "任务已结束或取消", "current_step": "cancelled"}
         self.task_mgr.log(task_id, "INFO", "ExecutionAgent 开始执行")
-
-        # 分区形态 ODS（ods_x_day_inc/_day_snapshot）：先确保 staging 表存在
-        load_info = self._partition_load_info(state)
-        if load_info:
-            try:
-                self._prepare_ods_staging(task_id, load_info)
-            except Exception as e:
-                self.task_mgr.log(task_id, "ERROR", f"staging 表准备失败: {e}")
-                self.task_mgr.complete_task(
-                    task_id, TaskStatus.FAILED, error=f"staging 表准备失败: {e}"
-                )
-                return {**state, "error": f"staging 表准备失败: {e}",
-                        "current_step": "execution_error"}
-
         result = self.execution_agent.run(state)
-
-        # 执行成功且为分区形态：staging -> 分区装载（DELETE 当日分区 -> INSERT SELECT -> DROP）
-        if result.get("execution_status", {}).get("success") and load_info:
-            try:
-                self._load_ods_partition(task_id, load_info)
-                result = {**result, "ods_partition_load": {"success": True,
-                                                          "table": load_info["real_table"],
-                                                          "dt": load_info["dt"]}}
-            except Exception as e:
-                self.task_mgr.log(task_id, "ERROR", f"分区装载失败: {e}")
-                self.task_mgr.complete_task(
-                    task_id, TaskStatus.FAILED, error=f"分区装载失败: {e}"
-                )
-                return {**result, "error": f"分区装载失败: {e}",
-                        "current_step": "execution_error"}
 
         if result.get("execution_status", {}).get("cancelled"):
             self.task_mgr.complete_task(task_id, TaskStatus.CANCELLED, error="任务已取消")
         elif result.get("execution_status", {}).get("success"):
-            self.task_mgr.update_task(task_id, status=TaskStatus.EXEC_DONE.value,
-                                       execution_status=result.get("execution_status"),
-                                       analysis_result=result.get("analysis_result"),
-                                       analysis_summary=result.get("analysis_summary"))
+            self.task_mgr.transition_status(
+                task_id, TaskStatus.EXEC_DONE, [TaskStatus.EXECUTING],
+                current_step="exec_done",
+                execution_status=result.get("execution_status"),
+                analysis_result=result.get("analysis_result"),
+                analysis_summary=result.get("analysis_summary"),
+            )
             self.task_mgr.log(task_id, "INFO", "ExecutionAgent 完成")
         else:
             self.task_mgr.log(task_id, "ERROR", f"ExecutionAgent 失败: {result.get('error')}")
@@ -236,122 +201,13 @@ class AgentWorkflow:
 
         return result
 
-    @staticmethod
-    def _partition_load_info(state: dict) -> Optional[dict]:
-        """分区形态 ODS（StarRocks）：返回 {real_table, staging, columns, dt, date_field}。
-
-        - 快照表：dt = 同步日期，date_field 为空（全量装载到同步日分区）
-        - 增量表：dt = 增量窗口起点（min(水位日+1, 今天)，与增量 where 一致），
-          date_field = 增量字段，装载按数据业务日期分区
-        """
-        from datetime import datetime, timedelta
-
-        from ..tools.incremental import _staging_table_for
-        from ..tools.ods_naming import kind_from_table
-
-        intent = state.get("parsed_intent") or {}
-        if str(intent.get("target_db_type", "")).lower() != "starrocks":
-            return None
-        real_table = str(intent.get("target_table") or "")
-        kind = kind_from_table(real_table)
-        columns = ((state.get("source_schema") or {}).get("columns")) or []
-        if not columns:
-            return None
-        primary_key = str((state.get("source_schema") or {}).get("primary_key") or "")
-        if kind == "base" and not primary_key:
-            return None  # 无主键显式 base 表：DataX 直写
-
-        today = datetime.now()
-        dt = today.strftime("%Y-%m-%d")
-        date_field = ""
-        if kind == "inc":
-            incremental_field = str(state.get("incremental_field") or "").strip()
-            if incremental_field:
-                date_field = incremental_field
-                last_value = str(state.get("last_value") or "")[:10]
-                if last_value:
-                    try:
-                        start = min(
-                            datetime.strptime(last_value, "%Y-%m-%d") + timedelta(days=1),
-                            today,
-                        )
-                    except ValueError:
-                        start = today
-                else:
-                    start = today - timedelta(days=7)
-                dt = start.strftime("%Y-%m-%d")
-
-        load_mode = str(intent.get("sync_type") or "full").lower()
-        return {
-            "real_table": real_table,
-            "staging": _staging_table_for(real_table),
-            "columns": columns,
-            "dt": dt,
-            "date_field": date_field,
-            "primary_key": primary_key,
-            "load_mode": load_mode,
-            "database": str(intent.get("target_database") or "").strip()
-            or config.STARROCKS_CONFIG.get("database", ""),
-        }
-
-    def _prepare_ods_staging(self, task_id: str, load_info: dict) -> None:
-        """重建 staging 表（先 DROP 再 CREATE，保证每次执行干净）。
-
-        不能只用 CREATE TABLE IF NOT EXISTS：若上次任务失败残留了非空 staging，
-        DataX 会追加写入导致装载重复。
-        """
-        from ..agents.etl_agent import _admin_conn
-        from ..tools.incremental import build_ods_staging_ddl
-
-        staging = load_info["staging"]
-        ddl = build_ods_staging_ddl(staging, load_info["columns"])
-        self._exec_starrocks_sql(
-            task_id, [f"DROP TABLE IF EXISTS {staging}", ddl],
-            load_info.get("database", ""),
-        )
-        self.task_mgr.log(
-            task_id, "INFO", f"staging 表已重建: {staging}",
-        )
-
-    def _load_ods_partition(self, task_id: str, load_info: dict) -> None:
-        """staging -> 分区装载（幂等：DELETE 当日分区 -> INSERT SELECT 带 dt -> DROP）。"""
-        from ..tools.incremental import build_ods_partition_load_sql
-
-        sqls = build_ods_partition_load_sql(
-            load_info["real_table"], load_info["staging"],
-            load_info["columns"], load_info["dt"],
-            date_field=load_info.get("date_field", ""),
-            primary_key=load_info.get("primary_key", ""),
-            load_mode=load_info.get("load_mode", "full"),
-        )
-        self._exec_starrocks_sql(task_id, sqls, load_info.get("database", ""))
-        self.task_mgr.log(
-            task_id, "INFO",
-            f"分区装载完成: {load_info['real_table']} dt={load_info['dt']}",
-        )
-
-    def _exec_starrocks_sql(self, task_id: str, sqls: list, database: str = "") -> None:
-        """在 StarRocks 上顺序执行 SQL（管理账号优先，失败抛异常）。"""
-        from ..agents.etl_agent import _admin_conn
-        from ..tools.db import mysql_conn
-
-        db = database or config.STARROCKS_CONFIG["database"]
-        ctx = _admin_conn(db)
-        if ctx is None:
-            ctx = mysql_conn(
-                "starrocks", database=db,
-                username=config.STARROCKS_CONFIG["username"],
-                password=config.STARROCKS_CONFIG["password"],
-            )
-        with ctx as conn:
-            with conn.cursor() as cur:
-                for sql in sqls:
-                    cur.execute(sql)
-                conn.commit()
-
     def _run_validation(self, state: DataIntegrationState) -> DataIntegrationState:
         task_id = state.get("_task_id", "")
-        self.task_mgr.update_task(task_id, status=TaskStatus.VALIDATING.value)
+        if not self.task_mgr.transition_status(
+            task_id, TaskStatus.VALIDATING, [TaskStatus.EXEC_DONE],
+            current_step="validation_agent",
+        ):
+            return {**state, "error": "任务已结束或取消", "current_step": "cancelled"}
         self.task_mgr.log(task_id, "INFO", "ValidationAgent 开始执行")
 
         result = self.validation_agent.run(state)
@@ -359,6 +215,7 @@ class AgentWorkflow:
         if result.get("validation_result", {}).get("success"):
             self.task_mgr.update_task(
                 task_id,
+                current_step="complete",
                 validation_result=result.get("validation_result"),
                 analysis_result=result.get("analysis_result"),
                 analysis_summary=result.get("analysis_summary"),
@@ -367,6 +224,7 @@ class AgentWorkflow:
         else:
             self.task_mgr.update_task(
                 task_id,
+                current_step="failed",
                 validation_result=result.get("validation_result"),
             )
             self.task_mgr.complete_task(task_id, TaskStatus.FAILED,
@@ -416,7 +274,8 @@ class AgentWorkflow:
         # 默认用 task_id 作为 checkpoint 线程，避免多个任务复用同一线程导致状态串扰
         thread_id = thread_id or task_id
         logger.info(
-            f"[task={task_id} thread={thread_id}] 开始: {redact_secrets(user_query)}"
+            "开始: %s", redact_secrets(user_query),
+            extra={"task_id": task_id, "thread_id": thread_id, "agent": self.task_type},
         )
 
         init: DataIntegrationState = {
@@ -462,10 +321,10 @@ class AgentWorkflow:
                     self.task_mgr.update_task(task_id, **ops_fields)
             # 增量任务成功后更新水位（按天窗口：存日期）
             self._persist_incremental_watermark(final, task_id)
-            logger.info(f"[task={task_id}] 完成: {final.get('current_step')}")
+            logger.info("完成: %s", final.get("current_step"), extra={"task_id": task_id})
             return final
         except Exception as e:
-            logger.error(f"[task={task_id}] 异常: {e}")
+            logger.error("异常: %s", e, exc_info=True, extra={"task_id": task_id})
             self.task_mgr.complete_task(task_id, TaskStatus.FAILED, error=str(e))
             return {**init, "error": str(e), "current_step": "error"}
 
@@ -484,7 +343,7 @@ class AgentWorkflow:
             return None
         if task["status"] not in (TaskStatus.FAILED.value, TaskStatus.CANCELLED.value):
             return None
-        logger.info(f"[task={task_id}] 重试，原查询: {redact_secrets(task['user_query'])}")
+        logger.info("重试，原查询: %s", redact_secrets(task["user_query"]), extra={"task_id": task_id})
         self.task_mgr.audit(task_id, "task_retry", detail="以原指令新建任务重试")
         return self.run(task["user_query"])
 
@@ -496,16 +355,23 @@ class AgentWorkflow:
         if task.get("status") != TaskStatus.PENDING_APPROVAL.value:
             return None
 
-        logger.info(f"[task={task_id}] 人工审批通过，开始执行")
+        now = datetime.now().isoformat()
+        state = self._restore_pending_state(task)
+        if state is None:
+            self.task_mgr.log(task_id, "ERROR", "审批状态恢复失败，无法执行")
+            return {"error": "审批状态恢复失败（缺少配置）", "current_step": "approval_error"}
+        if not self.task_mgr.transition_status(
+            task_id, TaskStatus.EXECUTING, [TaskStatus.PENDING_APPROVAL],
+            approved_at=now, started_at=now, current_step="approved",
+        ):
+            return None
+
+        logger.info("人工审批通过，开始执行", extra={"task_id": task_id})
         self.task_mgr.log(task_id, "INFO", "人工审批通过，开始执行")
         self.task_mgr.audit(
             task_id, "task_approve", operator=operator,
             detail=f"config_digest={self._config_digest(task)}",
         )
-        state = self._restore_pending_state(task)
-        if state is None:
-            self.task_mgr.log(task_id, "ERROR", "审批状态恢复失败，无法执行")
-            return {"error": "审批状态恢复失败（缺少配置）", "current_step": "approval_error"}
         state = self._run_execution(state)
         if state.get("error"):
             return state
@@ -618,7 +484,7 @@ class AgentWorkflow:
         self.task_mgr.log(task_id, "WARNING", "人工拒绝执行，任务取消")
         self.task_mgr.audit(task_id, "task_reject", operator=operator)
         self.task_mgr.complete_task(task_id, TaskStatus.CANCELLED, error="人工拒绝执行")
-        logger.info(f"[task={task_id}] 人工拒绝执行")
+        logger.info("人工拒绝执行", extra={"task_id": task_id})
         return self.task_mgr.get_task(task_id)
 
     def run_batch(

@@ -163,3 +163,40 @@ def test_datax_tool_cancel_running_job(fake_datax, tmp_path, monkeypatch):
     assert not t.is_alive()
     assert results["r"]["cancelled"] is True
     assert tool.cancel_job("nonexistent") is False
+
+
+def test_complete_does_not_override_terminal_status():
+    tm = get_task_manager()
+    tid = tm.create_task("q")
+    assert tm.cancel_task(tid) is True
+
+    assert tm.complete_task(tid, TaskStatus.FAILED, error="晚到的失败") is False
+    assert tm.get_task(tid)["status"] == TaskStatus.CANCELLED.value
+
+
+def test_double_approve_executes_once(monkeypatch):
+    monkeypatch.setenv("APPROVAL_GATE", "true")
+    _patch_agents(monkeypatch)
+    wf = DataIntegrationWorkflow(use_checkpointer=False)
+    result = wf.run("把 MySQL 的 t1 表同步到 ES")
+    tid = result["_task_id"]
+    assert wf.get_task(tid)["status"] == TaskStatus.PENDING_APPROVAL.value
+
+    calls = {"n": 0}
+    original_run = wf.execution_agent.run
+
+    def counted_run(state):
+        calls["n"] += 1
+        return original_run(state)
+
+    wf.execution_agent.run = counted_run
+
+    first = wf.approve_task(tid, operator="alice")
+    second = wf.approve_task(tid, operator="bob")
+
+    assert first is not None
+    assert second is None
+    assert calls["n"] == 1
+    task = get_task_manager().get_task(tid)
+    assert task["status"] == TaskStatus.SUCCESS.value
+    assert task["approved_at"]

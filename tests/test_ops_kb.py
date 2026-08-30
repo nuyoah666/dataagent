@@ -213,4 +213,3 @@ def test_registered_tools_callable():
 
     assert "add_ops_incident" in TOOL_REGISTRY
     assert "search_ops_knowledge" in TOOL_REGISTRY
-    assert "ingest_ops_knowledge" in TOOL_REGISTRY

@@ -240,6 +240,7 @@ def add_ops_incident(
         "success": True,
         "incident_id": iid,
         "version": rec["version"],
+        "supersedes_version": rec.get("supersedes_version"),
         "action": action,
         "ingested": ingested,
     }

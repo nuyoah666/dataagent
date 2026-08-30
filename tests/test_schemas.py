@@ -92,4 +92,7 @@ def test_parse_intent_non_json_falls_back(monkeypatch):
     agent = _agent_with_llm("抱歉，我无法解析")
     intent = agent._parse_intent("同步 MySQL 的 orders 表到 MongoDB")
     assert intent["source_table"] == "orders"
-    assert intent["source_db_type"] == "mongodb"
+    # "到 MongoDB" 是目标端：源保持 MySQL，目标切到 mongodb
+    # （旧规则见 "mongo" 就切源端，会把 mysql→mongo 误判成 mongo→mongo）
+    assert intent["source_db_type"] == "mysql"
+    assert intent["target_db_type"] == "mongodb"

@@ -25,6 +25,7 @@ from .intent_router import get_router
 from .semantic import get_catalog
 from .tools.data_source import list_sources
 from .tools.ops_kb_tool import search_ops_knowledge
+from .utils import setup_logging
 from .workflow import AgentWorkflow
 from .workflow.task_manager import TaskStatus, get_task_manager
 
@@ -312,7 +313,7 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=9000)
     args = parser.parse_args()
 
-    logging.basicConfig(level=getattr(logging, config.LOG_LEVEL, logging.INFO))
+    setup_logging()
     logger.info("启动 dataagent MCP Server (transport=%s)", args.transport)
     if args.transport == "stdio":
         server.run(transport="stdio")

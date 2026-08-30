@@ -229,3 +229,26 @@ def test_sync_etl_routed():
         assert r.status_code == 200
         body = r.json()
         assert body["status"] == "success"
+
+
+def test_retry_uses_original_task_type(monkeypatch):
+    from src import api
+
+    tm = api.get_task_manager()
+    tid = tm.create_task("ETL 重试", task_type="etl_development")
+    tm.update_task(tid, status="failed", error="boom")
+
+    called = []
+    class DummyWorkflow:
+        def retry_task(self, task_id):
+            called.append(task_id)
+            return {"_task_id": "new-task"}
+
+    from src.routers import _support as _sup
+    monkeypatch.setattr(_sup, "get_workflow", lambda task_type: (called.append(task_type) or DummyWorkflow()))
+
+    with TestClient(api.app) as client:
+        r = client.post(f"/tasks/{tid}/retry")
+        assert r.status_code == 200
+        assert r.json()["task_id"] == "new-task"
+        assert called[-2:] == ["etl_development", tid]

@@ -142,38 +142,9 @@
     </div>
   </div>
 
+<script src="/static/common.js"></script>
 <script>
-const $ = id => document.getElementById(id);
-const TOKEN_KEY = 'dataagent_api_token';
 const DBTYPE_LABELS = { mysql:'MySQL', mongodb:'MongoDB', elasticsearch:'Elasticsearch', starrocks:'StarRocks' };
-
-function applyTheme(theme) {
-  document.documentElement.dataset.theme = theme;
-  $('themeToggle').textContent = theme === 'dark' ? '☀️' : '🌙';
-}
-function initTheme() {
-  const saved = localStorage.getItem('dataagent_theme');
-  applyTheme(saved || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'));
-}
-function toggleTheme() {
-  const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
-  applyTheme(next);
-  localStorage.setItem('dataagent_theme', next);
-}
-
-function token() { return localStorage.getItem(TOKEN_KEY) || ''; }
-function headers() { const t = token(); return t ? {'X-API-Token': t} : {}; }
-function escapeHtml(s) {
-  return (s == null ? '' : String(s)).replace(/[&<>"']/g, c =>
-    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-}
-async function api(url, opts) {
-  const r = await fetch(url, Object.assign({headers: headers()}, opts || {}));
-  if (r.status === 401) { alert('未授权：请配置 API_TOKEN'); throw new Error('unauthorized'); }
-  const data = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(data.detail || ('HTTP ' + r.status));
-  return data;
-}
 
 function setStep(n) {
   [1, 2, 3].forEach(i => {
