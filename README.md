@@ -120,13 +120,25 @@ Web 界面：
 ### 5. 运行测试
 
 ```bash
-pytest
-python scripts/eval_golden.py
+pytest                          # 单元/集成测试（离线，mock DataX/数据库/LLM）
+python scripts/eval_golden.py   # 第①层：确定性回归（不调 LLM/不连库），CI 门禁
+python scripts/eval_llm_quality.py            # 第②层：LLM 开放点质量评测（发版前手动跑）
+python scripts/eval_llm_quality.py --judge    # 追加 LLM 主观打分（额外消耗 token）
 ```
 
+评测按「确定性 vs 开放性」分两层：
+
+- **第①层 确定性回归**（`eval_golden.py`，进 CI）：意图路由、配置归一化、Pydantic
+  强校验、ETL SQL、运维事故版本化、轨迹顺序等**规则可判定**的行为，精确断言，零 LLM/网络。
+- **第②层 LLM 质量评测**（`eval_llm_quality.py`，发版前跑）：对三个开放 LLM 点
+  （意图解析、问数语义解析、运维诊断）用冻结 golden case 真实调用 LLM 打分。
+  评分**以结构化断言为主**（字段是否抽对、指标/维度是否命中语义层、只读 SQL 是否
+  合法、根因是否点到关键词），`--judge` 可选 LLM-as-judge 对主观质量（根因/摘要好不好）
+  打 1-5 分；同时统计 token/延迟成本。case 见 `evals/llm_cases/`。
+
 测试覆盖配置后处理、数据源标识符校验、DataX 执行、任务状态流转、敏感信息脱敏和 Web API。
-`eval_golden.py` 是 Agent 确定性回归集，离线验证意图路由、配置归一化、ETL SQL、运维事故版本化等关键行为。
-全部测试离线可跑（mock DataX、打桩数据库连接），无需真实数据库/ES/LLM，
+失败任务可回流为 Bad Case（`POST /tasks/{id}/badcase`），分诊后转入 golden 回归集，形成数据飞轮。
+全部单测离线可跑（mock DataX、打桩数据库连接），无需真实数据库/ES/LLM，
 CI（GitHub Actions）在 Ubuntu / Windows 双平台自动执行。
 
 ## MCP Server（模型上下文协议）

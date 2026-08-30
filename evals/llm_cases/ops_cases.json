@@ -1,0 +1,82 @@
+[
+  {
+    "id": "ops_empty_password",
+    "task_id": "eval-pwd",
+    "task_status": "failed",
+    "error": "DataX 退出码 1。Caused by: java.lang.RuntimeException: DataX无法连接该数据库. Code:[DBUtilErrorCode-03], 描述：数据库访问账号/密码为空. mysqlwriter 用户名为空",
+    "log_tail": "经DataX智能分析，该错误通常是由于您的配置文件指定的账号/密码错误. writer plugin[mysqlwriter] password is empty",
+    "rag_hits": [
+      {
+        "source": "incident-demo",
+        "content": "StarRocks root 账号无密码，DataX mysqlwriter getNecessaryValue 拒绝空密码，需创建带密码的专用 datax 同步账号。"
+      }
+    ],
+    "web_results": [],
+    "expect": {
+      "root_cause_contains_any": [
+        "密码",
+        "账号",
+        "password",
+        "凭据",
+        "用户名"
+      ],
+      "min_solution_steps": 2,
+      "confidence_min": 0.0,
+      "confidence_max": 1.0
+    },
+    "judge": "根因是否准确指出账号/密码为空或凭据问题，解决步骤是否可操作（创建带密码账号/检查配置）"
+  },
+  {
+    "id": "ops_unknown_database",
+    "task_id": "eval-db",
+    "task_status": "failed",
+    "error": "DataX 退出码 1。一键建表失败：Unknown database 'cdc_test_db' on target StarRocks",
+    "log_tail": "目标端 StarRocks 9031 执行 CREATE TABLE 报错 Unknown database cdc_test_db，目标库应为 datax_test",
+    "rag_hits": [
+      {
+        "source": "incident-demo2",
+        "content": "目标端 database 被 LLM 误写成源库名，credentials 归一后目标库一律以 .env 默认 datax_test 为准。"
+      }
+    ],
+    "web_results": [],
+    "expect": {
+      "root_cause_contains_any": [
+        "库",
+        "database",
+        "库名",
+        "目标"
+      ],
+      "min_solution_steps": 1,
+      "confidence_max": 1.0
+    },
+    "judge": "根因是否指出目标数据库名错误/不存在，解决是否涉及核对或修正目标库"
+  },
+  {
+    "id": "ops_connection_refused",
+    "task_id": "eval-conn",
+    "task_status": "failed",
+    "error": "DataX 退出码 1。Communications link failure: Connection refused: connect 127.0.0.1:3306",
+    "log_tail": "mysqlreader 连接源库 127.0.0.1:3306 失败 Connection refused，MySQL 服务可能未启动或端口不通",
+    "rag_hits": [],
+    "web_results": [
+      {
+        "title": "MySQL Connection refused troubleshooting",
+        "url": "https://example.com/mysql-conn",
+        "snippet": "Connection refused 通常是数据库服务未启动、端口错误或网络防火墙阻断，需检查服务状态与连通性。"
+      }
+    ],
+    "expect": {
+      "root_cause_contains_any": [
+        "连接",
+        "网络",
+        "服务",
+        "connect",
+        "端口",
+        "启动"
+      ],
+      "min_solution_steps": 1,
+      "confidence_max": 1.0
+    },
+    "judge": "根因是否指出连接/网络/服务不可达，解决是否涉及检查数据库服务与端口连通性"
+  }
+]

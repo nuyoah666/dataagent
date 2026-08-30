@@ -1,0 +1,56 @@
+[
+  {
+    "id": "intent_full_mysql_to_starrocks",
+    "query": "把 src_user 表全量同步到 StarRocks",
+    "expect": {
+      "source_table": "src_user",
+      "target_db_type": "starrocks",
+      "sync_type": "full"
+    }
+  },
+  {
+    "id": "intent_incremental_user_action",
+    "query": "把 user_action_log 增量同步到 starrocks",
+    "expect": {
+      "source_table": "user_action_log",
+      "target_db_type": "starrocks",
+      "sync_type": "incremental"
+    },
+    "judge": "是否正确识别为增量同步、源表 user_action_log、目标 StarRocks，且未臆造凭据"
+  },
+  {
+    "id": "intent_sync_to_es",
+    "query": "将 enum_src 同步到 Elasticsearch",
+    "expect": {
+      "source_table": "enum_src",
+      "target_db_type": "elasticsearch",
+      "sync_type": "full"
+    }
+  },
+  {
+    "id": "intent_sync_to_mongodb",
+    "query": "把 src_user 同步到 mongodb",
+    "expect": {
+      "source_table": "src_user",
+      "target_db_type": "mongodb"
+    }
+  },
+  {
+    "id": "intent_hourly_incremental",
+    "query": "把 user_action_log 每小时增量同步到 StarRocks",
+    "expect": {
+      "source_table": "user_action_log",
+      "target_db_type": "starrocks",
+      "sync_type": "incremental",
+      "update_cycle": "hour"
+    }
+  },
+  {
+    "id": "intent_explicit_db_table",
+    "query": "把 cdc_test_db.user_action_log 同步到 StarRocks",
+    "expect": {
+      "source_table": "user_action_log",
+      "target_db_type": "starrocks"
+    }
+  }
+]

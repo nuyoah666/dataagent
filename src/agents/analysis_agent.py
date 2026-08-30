@@ -81,6 +81,12 @@ class AnalysisConfigAgent(BaseAgent):
         if not query.metrics:
             raise ValueError("未识别到指标（示例：分析用户数按日期）")
 
+        # 1.5 确定性兜底（按日/月/年统计 = 时间维度分组）：
+        #   a) LLM 偶发漏抽粒度 -> 从原文 年/月/日 关键词补 granularity
+        #   b) 有粒度却没 date 维度 -> 补语义层 date 维度
+        self._ensure_granularity(query, user_query)
+        self._ensure_date_dim(query, catalog)
+
         # 2. 确定性生成 SQL + 白名单校验
         sql = catalog.query_sql(
             metric_names=query.metrics,
@@ -135,6 +141,44 @@ class AnalysisConfigAgent(BaseAgent):
                 last_err = e
                 logger.warning(f"分析语义解析失败(第{attempt + 1}次): {e}")
         raise ValueError(f"分析语义解析失败，请换个说法（如：分析用户数按月）。{last_err}")
+
+    @staticmethod
+    def _ensure_granularity(query: "AnalysisQuery", user_query: str) -> None:
+        """从原文关键词确定性补时间粒度（年/月/日），LLM 漏抽时兜底。"""
+        if query.granularity:
+            return
+        text = user_query or ""
+        # 优先级 年 > 月 > 日/天（复用规则路径同一份词表）
+        for word, gran in _GRANULARITY_HINT.items():
+            if word in text:
+                query.granularity = gran
+                logger.info("从文本确定性补时间粒度: %s（命中「%s」）", gran, word)
+                return
+
+    @staticmethod
+    def _ensure_date_dim(query: "AnalysisQuery", catalog) -> None:
+        """时间粒度（day/month/year）必须落在 date 类型维度上。
+
+        LLM 对"按月统计 X"这类说法偶发只给 granularity 不给分组维度，
+        生成的 SQL 会退化成整表 COUNT。这里确定性补一个语义层 date 维度。
+        """
+        if not query.granularity:
+            return
+        try:
+            table = catalog.pick_table(query.metrics, query.dimensions)
+        except Exception:
+            return
+
+        def _is_date(dim_name: str) -> bool:
+            d = table.find_dimension(dim_name)
+            return bool(d and d.get("type") == "date")
+
+        if any(_is_date(d) for d in query.dimensions):
+            return
+        date_dims = [name for name, d in table.dimensions.items() if d.get("type") == "date"]
+        if date_dims:
+            query.dimensions = [date_dims[0]] + [d for d in query.dimensions if not _is_date(d)]
+            logger.info("时间粒度统计缺日期维度，规则补: %s", date_dims[0])
 
     @staticmethod
     def _rule_query(user_query: str, catalog) -> Optional[AnalysisQuery]:

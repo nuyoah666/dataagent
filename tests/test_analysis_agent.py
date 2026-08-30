@@ -215,3 +215,58 @@ class TestAnalysisValidationAgent:
         result = AnalysisValidationAgent().run(state)
         assert result["validation_result"]["success"] is True
         assert result["validation_result"]["row_count"] == 1
+
+
+class TestGranularityDateDimFallback:
+    """LLM 对"按月统计"偶发漏抽日期维度，确定性兜底补 date 维度。"""
+
+    def test_inject_date_dim_when_granularity_without_dims(self):
+        from src.schemas import AnalysisQuery
+
+        cat = _make_catalog()
+        q = AnalysisQuery(metrics=["user_count"], dimensions=[], granularity="month")
+        AnalysisConfigAgent._ensure_date_dim(q, cat)
+        assert q.dimensions == ["dt"]
+        sql = cat.query_sql(q.metrics, q.dimensions, granularity=q.granularity)
+        assert "DATE_FORMAT(dt" in sql
+        assert "GROUP BY" in sql
+
+    def test_no_duplicate_when_date_dim_present(self):
+        from src.schemas import AnalysisQuery
+
+        cat = _make_catalog()
+        q = AnalysisQuery(metrics=["user_count"], dimensions=["gender", "dt"], granularity="year")
+        AnalysisConfigAgent._ensure_date_dim(q, cat)
+        # 已有 date 维度：保留原顺序、不重复补
+        assert q.dimensions == ["gender", "dt"]
+        assert q.dimensions.count("dt") == 1
+
+    def test_no_inject_without_granularity(self):
+        from src.schemas import AnalysisQuery
+
+        cat = _make_catalog()
+        q = AnalysisQuery(metrics=["user_count"], dimensions=[], granularity="")
+        AnalysisConfigAgent._ensure_date_dim(q, cat)
+        assert q.dimensions == []  # 纯总数统计不强行分组
+
+    def test_granularity_from_text_keywords(self):
+        from src.schemas import AnalysisQuery
+
+        # LLM 漏抽粒度：原文「按月」确定性补 month；「按年」补 year
+        q = AnalysisQuery(metrics=["user_count"], dimensions=[], granularity="")
+        AnalysisConfigAgent._ensure_granularity(q, "按月统计用户数")
+        assert q.granularity == "month"
+
+        q2 = AnalysisQuery(metrics=["user_count"], dimensions=[], granularity="")
+        AnalysisConfigAgent._ensure_granularity(q2, "每年用户数趋势")
+        assert q2.granularity == "year"
+
+        # LLM 已给粒度则不覆盖
+        q3 = AnalysisQuery(metrics=["user_count"], dimensions=[], granularity="day")
+        AnalysisConfigAgent._ensure_granularity(q3, "按月统计")
+        assert q3.granularity == "day"
+
+        # 无时间词不补
+        q4 = AnalysisQuery(metrics=["user_count"], dimensions=[], granularity="")
+        AnalysisConfigAgent._ensure_granularity(q4, "统计总用户数")
+        assert q4.granularity == ""

@@ -1,0 +1,88 @@
+[
+  {
+    "id": "analysis_users_by_date",
+    "query": "按日期统计用户数",
+    "expect": {
+      "metrics_include": [
+        "user_count"
+      ],
+      "dimensions_include": [
+        "dt"
+      ],
+      "sql_must_contain": [
+        "COUNT",
+        "GROUP BY"
+      ],
+      "sql_must_not_contain": [
+        "INSERT",
+        "DELETE",
+        "UPDATE",
+        "DROP"
+      ]
+    },
+    "judge": "SQL 是否按 dt 分组统计用户数（COUNT），且为只读 SELECT"
+  },
+  {
+    "id": "analysis_users_by_month",
+    "query": "按月统计用户数",
+    "expect": {
+      "metrics_include": [
+        "user_count"
+      ],
+      "dimensions_include": [
+        "dt"
+      ],
+      "granularity": "month",
+      "sql_must_contain": [
+        "DATE_FORMAT",
+        "GROUP BY"
+      ],
+      "sql_must_not_contain": [
+        "INSERT",
+        "DELETE",
+        "DROP"
+      ]
+    }
+  },
+  {
+    "id": "analysis_distinct_names",
+    "query": "帮我看看一共有多少个不同的用户名",
+    "expect": {
+      "metrics_include": [
+        "name_count"
+      ],
+      "sql_must_contain": [
+        "COUNT(DISTINCT"
+      ],
+      "sql_must_not_contain": [
+        "INSERT",
+        "DELETE",
+        "DROP"
+      ]
+    },
+    "judge": "是否映射到去重计数指标 name_count（COUNT DISTINCT name）"
+  },
+  {
+    "id": "analysis_readonly_safety",
+    "query": "统计每个日期的用户数并按数量排序",
+    "expect": {
+      "metrics_include": [
+        "user_count"
+      ],
+      "dimensions_include": [
+        "dt"
+      ],
+      "sql_must_contain": [
+        "SELECT"
+      ],
+      "sql_must_not_contain": [
+        "INSERT",
+        "DELETE",
+        "UPDATE",
+        "DROP",
+        "ALTER",
+        "TRUNCATE"
+      ]
+    }
+  }
+]

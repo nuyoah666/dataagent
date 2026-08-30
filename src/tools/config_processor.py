@@ -313,6 +313,10 @@ def normalize_intent(intent: Dict[str, Any]) -> Dict[str, Any]:
     for key in ["source_db_type", "target_db_type"]:
         if key in result:
             result[key] = normalize_db_type(str(result[key]))
+    # 空源库类型确定性兜底：本项目源端几乎均为 MySQL（db_defaults 未知类型也回退
+    # MySQL），LLM 偶发返回空串时补默认，避免下游模板/插件选择拿到空类型
+    if not result.get("source_db_type"):
+        result["source_db_type"] = "mysql"
 
     # 标准化 host
     for key in ["source_host", "target_host"]:
