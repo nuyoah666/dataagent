@@ -128,7 +128,7 @@ async def approve_task(task_id: str, request: Request):
         raise HTTPException(status_code=409, detail="任务缺少 task_type，无法执行")
     try:
         wf = _support.get_workflow(task_type)
-        operator = request.headers.get("X-Operator", "system")[:50]
+        operator = _operator_from_request(request)
         result = await asyncio.to_thread(wf.approve_task, task_id, operator)
         if result is None:
             raise HTTPException(status_code=409, detail="只有待审批任务可以审批")
@@ -158,7 +158,7 @@ async def reject_task(task_id: str, request: Request):
     if not task_type:
         raise HTTPException(status_code=409, detail="任务缺少 task_type")
     wf = _support.get_workflow(task_type)
-    operator = request.headers.get("X-Operator", "system")[:50]
+    operator = _operator_from_request(request)
     result = await asyncio.to_thread(wf.reject_task, task_id, operator)
     if result is None:
         raise HTTPException(status_code=409, detail="只有待审批任务可以拒绝")
@@ -184,7 +184,7 @@ async def reap_badcase(task_id: str, req: BadCaseRequest, request: Request):
         raise HTTPException(status_code=409, detail="只有失败/已取消的任务可以沉淀为 Bad Case")
     from src.eval.badcase import reap_bad_case
 
-    operator = request.headers.get("X-Operator", "system")[:50]
+    operator = _operator_from_request(request)
     logs = await asyncio.to_thread(tm.get_task_logs, task_id)
     case = await asyncio.to_thread(reap_bad_case, task, logs, (req.note or "")[:500], operator)
     tm.audit(task_id, "badcase_reap", operator=operator, detail=(req.note or "")[:200])
@@ -219,7 +219,7 @@ async def reap_goodcase(task_id: str, req: BadCaseRequest, request: Request):
         raise HTTPException(status_code=409, detail="只有成功任务可以沉淀为 Good Case")
     from src.eval.goodcase import reap_good_case
 
-    operator = request.headers.get("X-Operator", "system")[:50]
+    operator = _operator_from_request(request)
     case = await asyncio.to_thread(reap_good_case, task, (req.note or "")[:500], operator)
     tm.audit(task_id, "goodcase_reap", operator=operator, detail=(req.note or "")[:200])
     if case.get("duplicate"):
@@ -308,7 +308,7 @@ async def create_target_table(task_id: str, request: Request):
     if not ddl:
         raise HTTPException(status_code=422, detail="字段映射无有效列，无法生成建表 DDL")
 
-    operator = request.headers.get("X-Operator", "system")[:50]
+    operator = _operator_from_request(request)
     try:
         if target_db_type == "starrocks":
             from src.agents.etl_agent import _admin_conn
@@ -376,7 +376,7 @@ async def update_task_config(task_id: str, req: ConfigUpdateRequest, request: Re
         if not content or not (content[0].get("reader") and content[0].get("writer")):
             raise HTTPException(status_code=422, detail="DataX 配置缺少 reader/writer")
 
-    operator = request.headers.get("X-Operator", "system")[:50]
+    operator = _operator_from_request(request)
     tm.update_task(
         task_id,
         datax_config=req.datax_config if req.datax_config is not None else task.get("datax_config"),
@@ -429,7 +429,7 @@ async def update_task_mapping(task_id: str, req: MappingUpdateRequest, request: 
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"字段映射转换失败: {e}")
 
-    operator = request.headers.get("X-Operator", "system")[:50]
+    operator = _operator_from_request(request)
     tm.update_task(task_id, datax_config=new_cfg)
     tm.audit(task_id, "mapping_edit", operator=operator, detail="可视化编辑字段映射")
     updated = tm.get_task(task_id)
