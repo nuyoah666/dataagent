@@ -137,9 +137,22 @@ python scripts/eval_llm_quality.py --judge    # 追加 LLM 主观打分（额外
   打 1-5 分；同时统计 token/延迟成本。case 见 `evals/llm_cases/`。
 
 测试覆盖配置后处理、数据源标识符校验、DataX 执行、任务状态流转、敏感信息脱敏和 Web API。
-失败任务可回流为 Bad Case（`POST /tasks/{id}/badcase`），分诊后转入 golden 回归集，形成数据飞轮。
 全部单测离线可跑（mock DataX、打桩数据库连接），无需真实数据库/ES/LLM，
 CI（GitHub Actions）在 Ubuntu / Windows 双平台自动执行。
+
+**评测数据飞轮（bad case 闭环）**：失败任务回流为素材，分诊后用「修复后的当前代码」
+重放生成 golden 草稿，人工确认即固化为回归用例，防止同类问题复发：
+
+```bash
+curl -X POST localhost:8010/tasks/<task_id>/badcase -d '{"note":"现象"}'  # 回流素材
+python scripts/triage_badcase.py list                 # 待分诊素材
+python scripts/triage_badcase.py promote <task_id>    # 重放当前代码 -> 生成 golden 草稿
+python scripts/triage_badcase.py reject  <task_id> --reason "非缺陷"  # 丢弃噪声
+python scripts/triage_badcase.py status               # 分诊进度
+```
+
+晋升的草稿带 `needs_review: true`，**不参与评测打分**；人工核对 `expect` 后删掉该标记
+即正式纳入 `evals/llm_cases/` 回归集（人在环里，避免把未确认输出固化成标准）。
 
 ## MCP Server（模型上下文协议）
 

@@ -52,5 +52,15 @@
       "source_table": "user_action_log",
       "target_db_type": "starrocks"
     }
+  },
+  {
+    "id": "intent_from_90f19a80",
+    "promoted_from": "90f19a80014e",
+    "query": "把 enum_src 同步到 starrocks 中",
+    "expect": {
+      "sync_type": "full",
+      "source_table": "enum_src",
+      "target_db_type": "starrocks"
+    }
   }
 ]

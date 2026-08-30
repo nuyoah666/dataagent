@@ -42,11 +42,16 @@ CASE_DIR = ROOT / "evals" / "llm_cases"
 # ---------------------------------------------------------------------- #
 
 
-def _load_cases(category: str) -> List[Dict[str, Any]]:
+def _load_cases(category: str, only_active: bool = True) -> List[Dict[str, Any]]:
+    """加载 golden case。needs_review=true 的是分诊草稿（expect 待人工确认），
+    不参与打分，避免把未核对的输出固化成评测标准。"""
     fp = CASE_DIR / f"{category}_cases.json"
     if not fp.exists():
         return []
-    return json.loads(fp.read_text(encoding="utf-8"))
+    cases = json.loads(fp.read_text(encoding="utf-8"))
+    if only_active:
+        return [c for c in cases if not c.get("needs_review")]
+    return cases
 
 
 class UsageCollector:
@@ -300,6 +305,7 @@ def llm_judge(category: str, case: Dict[str, Any], out: Dict[str, Any]) -> Optio
 
 def run_category(category: str, use_judge: bool) -> Dict[str, Any]:
     cases = _load_cases(category)
+    pending_review = len(_load_cases(category, only_active=False)) - len(cases)
     runner, asserter = RUNNERS[category]
     results = []
     passed = 0
@@ -333,10 +339,13 @@ def run_category(category: str, use_judge: bool) -> Dict[str, Any]:
             jm = "ok" if judge_ok else "LOW"
             print(f"         judge={judge.get('score')} [{jm}] {judge.get('reason','')[:80]}")
 
+    if pending_review:
+        print(f"  （另有 {pending_review} 条分诊草稿 needs_review，待人工确认后纳入回归）")
     return {
         "category": category,
         "total": len(cases),
         "passed": passed,
+        "pending_review": pending_review,
         "results": results,
     }
 
