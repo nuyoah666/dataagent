@@ -202,8 +202,3 @@ def get_router() -> IntentRouter:
     if _router is None:
         _router = IntentRouter()
     return _router
-
-
-def route_intent(query: str) -> Dict[str, Any]:
-    """供 API/Agent 调用的包装函数。"""
-    return get_router().route(query).to_dict()

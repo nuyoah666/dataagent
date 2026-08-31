@@ -25,10 +25,6 @@ _write_lock = threading.Lock()
 _LOG_TAIL = 15
 
 
-def backlog_path() -> Path:
-    return _backlog_path
-
-
 def reap_bad_case(
     task: Dict[str, Any],
     logs: List[Dict[str, Any]],

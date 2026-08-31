@@ -14,7 +14,7 @@ from src.workflow import get_task_manager, TaskStatus
 from src.intent_router import get_router
 from . import _support
 from ._support import (
-    get_workflow as _unused_get_workflow, _run_with_slot, _task_semaphore, _public_error,
+_run_with_slot, _task_semaphore, _public_error,
     _operator_from_request, _datasource_audit_metadata, _changed_datasource_fields,
 )
 

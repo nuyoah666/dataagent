@@ -113,8 +113,6 @@ class Config:
     ANALYSIS_MAX_ROWS: int = int(os.getenv("ANALYSIS_MAX_ROWS", "1000"))
 
     # ---- Web API ----
-    API_HOST: str = os.getenv("API_HOST", "0.0.0.0")
-    API_PORT: int = int(os.getenv("API_PORT", "8000"))
     # 可选 API Token：配置后除健康检查和静态页面外，所有数据接口都需要鉴权
     API_TOKEN: str = os.getenv("API_TOKEN", "")
     CORS_ALLOWED_ORIGINS: str = os.getenv(

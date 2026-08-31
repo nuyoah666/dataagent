@@ -163,7 +163,7 @@ class ValidationTool:
                     "detail": content_check.get("message") or "抽样比对完成",
                 })
 
-            summary = self._generate_summary(checks, incremental=allow_count_mismatch)
+            summary = self._generate_summary(checks)
 
             # 仅 error 级且 supported 的规则参与成败；info 级（增量行数）只展示不判失败
             success = all(
@@ -634,7 +634,7 @@ class ValidationTool:
             logger.warning(f"抽样内容比对跳过: {e}")
             return {"supported": False, "message": f"抽样内容比对不可用: {e}"}
 
-    def _generate_summary(self, checks: list, incremental: bool = False) -> str:
+    def _generate_summary(self, checks: list) -> str:
         """由结构化规则结果生成人类可读总结（✅ 通过 / ❌ 失败 / ⏭️ 跳过）。"""
         parts = []
         for c in checks:

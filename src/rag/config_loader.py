@@ -84,22 +84,6 @@ def _fill_env(cfg: dict) -> dict:
     return cfg
 
 
-def list_collections() -> list[dict]:
-    """列出所有可用的 collection 配置。"""
-    collections = []
-    if not COLLECTIONS_DIR.is_dir():
-        return collections
-    for fp in sorted(COLLECTIONS_DIR.glob("*.json")):
-        try:
-            with open(fp, "r", encoding="utf-8") as f:
-                col = json.load(f)
-            col["_path"] = str(fp)
-            collections.append(col)
-        except Exception as e:
-            logger.warning("加载 collection %s 失败: %s", fp.name, e)
-    return collections
-
-
 def load_collection(name: str, cfg: dict = None) -> dict:
     """加载指定 collection 配置并合并到全局配置。
 

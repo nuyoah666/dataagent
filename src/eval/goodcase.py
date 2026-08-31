@@ -34,10 +34,6 @@ _LAYER_BY_TASK_TYPE = {
 }
 
 
-def good_path() -> Path:
-    return _good_path
-
-
 def _snapshot(task: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """从成功任务提取可推导 expect 的结构化快照；无法提取返回 None。"""
     task_type = task.get("task_type") or ""

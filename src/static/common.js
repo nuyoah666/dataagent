@@ -33,6 +33,14 @@ async function api(url, opts) {
 }
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+// 全站统一中文标签（数据源类型 / 任务类型），各页面共享同一份真源
+function dbTypeLabel(t) {
+  return { mysql:'MySQL', mongodb:'MongoDB', elasticsearch:'Elasticsearch', starrocks:'StarRocks' }[t] || t || '';
+}
+function taskTypeLabel(t) {
+  return { data_integration:'数据集成', etl_development:'ETL', data_ops:'运维', data_analysis:'问数' }[t] || t || '—';
+}
+
 // 页面间导航：若处于 /app 单页外壳的 iframe 中，通知外壳切 tab（保活不整页跳转）；否则直接跳转
 function gotoPage(path) {
   try {

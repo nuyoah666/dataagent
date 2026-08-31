@@ -20,9 +20,6 @@ from . import register
 
 logger = logging.getLogger(__name__)
 
-META_KEY = "_meta"
-
-
 @register("elasticsearch")
 class ElasticsearchRAG(BaseRAG):
     def __init__(self, cfg: dict):

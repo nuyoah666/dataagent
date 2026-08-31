@@ -180,7 +180,7 @@ async function openHistory(taskId) {
       api('/tasks/' + taskId), api('/tasks/' + taskId + '/logs'),
     ]);
     const card = addMsg(`
-      <div class="meta">任务 ${t.task_id} · 识别为 <b>${escapeHtml(t.task_type || '—')}</b></div>
+      <div class="meta">任务 ${t.task_id} · 识别为 <b>${escapeHtml(taskTypeLabel(t.task_type))}</b></div>
       <div class="history-q" style="margin-bottom:8px;color:var(--text)">${escapeHtml(t.user_query || '')}</div>
       <div id="card-${t.task_id}">${renderTask(t, logs.logs || [])}</div>`, 'assistant');
     // 非终态都启动轮询（含待审批）：外部页面审批/拒绝后卡片自动更新

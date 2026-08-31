@@ -32,10 +32,6 @@ def _auto_select(cfg: dict) -> object:
     return rag
 
 
-def list_backends() -> list[str]:
-    return list(_REGISTRY.keys())
-
-
 # 自动导入触发注册（相对导入，支持作为 src.rag 子包使用）
 from . import memory_backend  # noqa: F401
 from . import es_backend      # noqa: F401

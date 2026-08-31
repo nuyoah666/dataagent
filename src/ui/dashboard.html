@@ -402,8 +402,6 @@ window.addEventListener('DOMContentLoaded', () => {
   }
 });
 
-const TYPE_LABELS = { data_integration:'数据集成', etl_development:'ETL', data_ops:'运维', data_analysis:'问数' };
-const DBTYPE_LABELS = { mysql:'MySQL', mongodb:'MongoDB', elasticsearch:'Elasticsearch', starrocks:'StarRocks' };
 const state = { status:'all', type:'all', q:'', time:'all', sort:'created_at', order:'desc',
                 page:1, size:20, tab:'tasks' };
 
@@ -511,7 +509,7 @@ function renderTasks(tasks) {
   const tbody = $('rows');
   if (!tasks.length) { tbody.innerHTML = '<tr><td colspan="9" class="empty">暂无任务</td></tr>'; return; }
   tbody.innerHTML = tasks.map(t => {
-    const type = TYPE_LABELS[t.task_type] || escapeHtml(t.task_type || '—');
+    const type = taskTypeLabel(t.task_type) || escapeHtml(t.task_type || '—');
     const route = syncRoute(t);
     return `<tr onclick="showDetail('${t.task_id}')">
       <td>${t.task_id}</td>
@@ -665,7 +663,7 @@ async function loadSources() {
     if (!srcs.length) { tbody.innerHTML = '<tr><td colspan="7" class="empty">暂无数据源，点击右上角"新增数据源"</td></tr>'; return; }
     tbody.innerHTML = srcs.map(s => `<tr>
       <td><b>${escapeHtml(s.name)}</b></td>
-      <td><span class="tag type">${DBTYPE_LABELS[s.db_type] || escapeHtml(s.db_type)}</span></td>
+      <td><span class="tag type">${dbTypeLabel(s.db_type) || escapeHtml(s.db_type)}</span></td>
       <td>${escapeHtml(s.host)}:${s.port}</td>
       <td>${escapeHtml(s.database || '—')}</td>
       <td>${escapeHtml(s.remark || '—')}</td>
@@ -796,9 +794,6 @@ function buildTimeline(logs, task) {
   }).join('') + '</div>';
 }
 
-function dbTypeLabel(t) {
-  return {mysql:'MySQL', mongodb:'MongoDB', elasticsearch:'Elasticsearch', starrocks:'StarRocks'}[t] || t || '';
-}
 
 function syncRoute(t) {
   const pi = t.parsed_intent || {};
@@ -1084,7 +1079,7 @@ async function showDetail(taskId) {
     const audits = (audit.logs || []).map(l =>
       `<div class="tl-item"><span class="t">${fmtTime(l.created_at)}</span>${escapeHtml(l.action)}
        <span class="d">${escapeHtml(l.operator)}</span><div class="audit-detail">${escapeHtml(l.detail || '')}</div></div>`).join('');
-    const type = TYPE_LABELS[task.task_type] || escapeHtml(task.task_type || '—');
+    const type = taskTypeLabel(task.task_type) || escapeHtml(task.task_type || '—');
     const diagSrc = task.ops_diagnosis && task.ops_diagnosis.task_id && task.ops_diagnosis.task_id !== task.task_id
       ? `<div style="margin-bottom:6px">诊断对象：<a href="#" onclick="showDetail('${escapeHtml(task.ops_diagnosis.task_id)}');return false;" style="font-family:monospace">${escapeHtml(task.ops_diagnosis.task_id)}</a> <span style="color:var(--muted)">（点击查看原任务）</span></div>` : '';
     const diagOps = task.ops_diagnosis && task.ops_diagnosis.ops_task_id

@@ -107,7 +107,7 @@ class CircuitBreaker:
             )
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, exc_type, _exc_val, _exc_tb):
         if exc_type is None:
             self.record_success()
         else:

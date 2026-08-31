@@ -1,7 +1,7 @@
 """RAG backend factory — 注册式，按 config 自动选择。"""
 import logging
 
-from .backends import get_backend, list_backends
+from .backends import get_backend
 
 logger = logging.getLogger(__name__)
 

@@ -153,7 +153,6 @@
 
 <script src="/static/common.js"></script>
 <script>
-const DBTYPE_LABELS = { mysql:'MySQL', mongodb:'MongoDB', elasticsearch:'Elasticsearch', starrocks:'StarRocks' };
 
 function setStep(n) {
   [1, 2, 3].forEach(i => {
@@ -170,7 +169,7 @@ async function initWizard() {
     // 源端：MySQL/StarRocks/MongoDB 可作源；ES 仅作目标端（开源 DataX 无 elasticsearchreader）
     const srcs = (data.sources || []).filter(s => ['mysql', 'starrocks', 'mongodb'].includes(s.db_type));
     $('wizSource').innerHTML = '<option value="">选择源数据源…</option>' +
-      srcs.map(s => `<option value="${escapeHtml(s.name)}">${escapeHtml(s.name)}（${DBTYPE_LABELS[s.db_type] || s.db_type}）</option>`).join('');
+      srcs.map(s => `<option value="${escapeHtml(s.name)}">${escapeHtml(s.name)}（${dbTypeLabel(s.db_type) || s.db_type}）</option>`).join('');
   } catch (e) {
     $('wizSource').innerHTML = '<option value="">数据源加载失败</option>';
     alert(e.message);
