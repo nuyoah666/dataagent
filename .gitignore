@@ -43,3 +43,6 @@ tmp/
 
 # 根目录临时调试产物（手工测试脚本导出的配置/视图快照）
 /tmp_*.json
+
+# 研发知识蒸馏笔记（本地私有，同 INTERVIEW.md 不入库）
+docs/dev-notes/
