@@ -20,6 +20,9 @@ dependencies = [
     "requests>=2.31.0",
     "loguru>=0.7.0",
 
+    # 默认 BM25 事故检索中文分词（非向量专属，故在核心依赖）
+    "jieba>=0.42.1",
+
     # Web API
     "fastapi>=0.110.0",
     "uvicorn>=0.29.0",
@@ -34,7 +37,6 @@ rag = [
     "sentence-transformers>=2.0.0",
     "langchain-huggingface>=0.1.0",
     "numpy>=1.24.0",
-    "jieba>=0.42.1",
 ]
 # MySQL 状态存储（默认用 SQLite）
 mysql-state = [
