@@ -8,7 +8,7 @@
 数仓多 Agent 智能协作平台（个人项目，用于数仓转型 Agent 应用开发的面试作品）。
 
 - 形态：FastAPI 后端 + 原生 HTML 监控/向导页面，单进程跑在 `127.0.0.1:8000`
-- 编排：LangGraph 状态机；4 个业务 Agent —— 数据集成(config→execution→validation)、ETL、数据分析(NL2SQL 语义层)、运维诊断(ops)
+- 编排：LangGraph 状态机；4 个业务 Agent —— 数据集成(config→execution→validation)、ETL、问数(NL2SQL 语义层)、运维诊断(ops)
 - 状态/审计：SQLite 任务表（含 decision_logs 决策轨迹、logs 全量落库可审计）
 - 核心链路：用户指令 → 意图路由 → 配置生成 → **人工审批门禁** → DataX 执行 → 行数/唯一性校验 → 失败转运维 Agent 自动诊断/修复
 

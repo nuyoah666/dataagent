@@ -1,4 +1,4 @@
-"""数据分析 Agent（data_analysis）：语义层驱动的只读查询。
+"""问数 Agent（data_analysis）：语义层驱动的只读查询。
 
 设计（与用户确认的 B 方案）：
   1. LLM 只把自然语言翻译成语义查询（指标/维度/过滤/粒度），不写 SQL
@@ -324,32 +324,107 @@ class AnalysisExecutionAgent(BaseAgent):
 
 @register_agent(
     "data_analysis", "validation",
-    description="分析结果完整性校验（列/行数/错误标记）",
+    description="问数结果自检（空结果/截断/分组汇总交叉复算）",
 )
 class AnalysisValidationAgent(BaseAgent):
+    """问数无"源↔目标"对账（结果本就来自库）；这里做结果合理性自检。"""
+
     def run(self, state: DataIntegrationState) -> DataIntegrationState:
         return self.guarded(
             state, self._run,
-            error_msg="分析结果校验失败",
-            validation_result={"success": False, "error": "分析结果校验失败"},
+            error_msg="问数结果自检失败",
+            validation_result={"success": False, "error": "问数结果自检失败"},
         )
 
     def _run(self, state: DataIntegrationState) -> DataIntegrationState:
-        result = state.get("analysis_result") or {}
+        result = dict(state.get("analysis_result") or {})
         exec_status = state.get("execution_status") or {}
         rows = result.get("rows") or []
         columns = result.get("columns") or exec_status.get("columns") or []
-
         if not columns:
             raise ValueError("分析结果无列信息")
         row_count = len(rows)
-        validation = {
-            "success": True,
-            "row_count": row_count,
-            "column_count": len(columns),
-            "summary": f"✅ 查询返回 {row_count} 行、{len(columns)} 列",
-        }
-        return self.ok(state, validation_result=validation)
+
+        checks = []
+        # 1) 空结果：口径/过滤未命中
+        if row_count == 0:
+            checks.append({"label": "结果为空", "passed": False, "level": "warning",
+                           "detail": "未查到数据，可能是指标/维度/过滤条件未命中，可换个问法或放宽时间范围"})
+        # 2) 截断：返回行数达到 LIMIT
+        sql = state.get("analysis_sql") or ""
+        m = re.search(r"LIMIT\s+(\d+)", sql, re.IGNORECASE)
+        limit = int(m.group(1)) if m else config.ANALYSIS_MAX_ROWS
+        truncated = bool(limit) and row_count >= limit
+        if truncated:
+            checks.append({"label": "结果截断", "passed": False, "level": "warning",
+                           "detail": f"返回行数达到 LIMIT {limit}，可能未看全；请加过滤条件或缩小时间范围"})
+        # 3) 分组∑=总计 交叉复算（仅可加指标 COUNT/SUM、有分组、非空时）
+        self._cross_check_total(state, rows, checks)
+
+        if not checks:
+            checks.append({"label": "结果完整", "passed": True, "level": "info",
+                           "detail": f"查询返回 {row_count} 行、{len(columns)} 列，无截断/空结果异常"})
+        has_error = any(not c["passed"] and c.get("level") == "error" for c in checks)
+
+        self_check = {"checks": checks, "truncated": truncated, "row_count": row_count,
+                      "column_count": len(columns)}
+        result["self_check"] = self_check
+        # validation_result 仅作结构完整性标记（问数不对账，前端不渲染数据校验卡片）
+        validation = {"success": not has_error, "row_count": row_count,
+                      "column_count": len(columns),
+                      "summary": f"查询返回 {row_count} 行、{len(columns)} 列"}
+        return self.ok(state, validation_result=validation, analysis_result=result)
+
+    @staticmethod
+    def _num(v):
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    def _cross_check_total(self, state, rows, checks):
+        """各分组可加指标之和 == 不带 GROUP BY 的总计（抓 join 扇出/截断导致的汇总偏差）。"""
+        aq = state.get("analysis_query") or {}
+        metrics, dims, filters = aq.get("metrics") or [], aq.get("dimensions") or [], aq.get("filters") or []
+        if not dims or not metrics or not rows:
+            return
+        try:
+            catalog = get_catalog()
+            _, mdefs, _ = catalog.resolve(metrics, [])
+            additive = [m for m in mdefs if m.get("agg") in ("count", "sum")]
+            if not additive:
+                return  # AVG/COUNT(DISTINCT)/MAX/MIN 不可加，跳过
+            total_sql = catalog.query_sql(
+                metric_names=metrics, dimension_names=[], filters=filters,
+                granularity="", limit=1)
+            database = state.get("analysis_database") or catalog.default_database
+            with mysql_conn("starrocks", database=database) as conn, conn.cursor() as cur:
+                cur.execute(f"/*+ SET_VAR(query_timeout={config.ANALYSIS_QUERY_TIMEOUT}) */ {total_sql}")
+                tcols = [d[0] for d in cur.description]
+                trow = cur.fetchone()
+            totals = {c: trow[i] for i, c in enumerate(tcols)}
+            for m in additive:
+                name = m.get("name")
+                if name not in totals:
+                    continue
+                grouped = sum(v for v in (self._num(r.get(name)) for r in rows) if v is not None)
+                total = self._num(totals[name])
+                if total is None:
+                    continue
+                ok = abs(grouped - total) <= max(1e-6, abs(total) * 1e-6)
+                checks.append({
+                    "label": f"分组汇总核对·{name}", "passed": ok,
+                    "level": "info" if ok else "error",
+                    "detail": (f"各分组合计 {_fmt_num(grouped)} = 总计 {_fmt_num(total)}，一致"
+                               if ok else
+                               f"各分组合计 {_fmt_num(grouped)} ≠ 总计 {_fmt_num(total)}，可能被 LIMIT 截断或存在 join 扇出"),
+                })
+        except Exception as e:  # 自检失败不阻断结果
+            logger.warning(f"分组汇总核对跳过: {e}")
+
+
+def _fmt_num(v: float) -> str:
+    return f"{v:.2f}".rstrip("0").rstrip(".") if isinstance(v, float) else str(v)
 
 
 def _fmt_cell(v: Any) -> Any:

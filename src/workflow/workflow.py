@@ -14,6 +14,7 @@ from langgraph.graph import StateGraph, END
 
 from ..state import DataIntegrationState
 from ..agents import get_step_agents, get_task_approval
+from ..agents.prompts import PROMPT_VERSION
 from ..tools import detect_incremental_field, enhance_config_with_incremental
 from ..tools.db_tool import validate_identifier
 from .task_manager import get_task_manager, TaskStatus, _NON_TERMINAL_STATUSES
@@ -270,13 +271,20 @@ class AgentWorkflow:
             )
             self.task_mgr.complete_task(task_id, TaskStatus.SUCCESS)
         else:
+            # 问数自检不通过（如分组∑≠总计）：结果连同自检一并落库，
+            # 详情页「问数结果/结果自检」卡片可查，失败原因可读
             self.task_mgr.update_task(
                 task_id,
                 current_step="failed",
                 validation_result=result.get("validation_result"),
+                analysis_result=result.get("analysis_result"),
+                analysis_summary=result.get("analysis_summary"),
             )
+            err = result.get("error")
+            if not err and self.task_type == "data_analysis":
+                err = "问数结果自检未通过：分组汇总与总计不一致（详见结果自检）"
             self.task_mgr.complete_task(task_id, TaskStatus.FAILED,
-                                         error=result.get("error", "校验失败"))
+                                         error=err or "校验失败")
 
         return result
 
@@ -343,6 +351,16 @@ class AgentWorkflow:
             "diagnose_task_id": diagnose_task_id,
             "context_hint": context_hint,
         }
+
+        # prompt 版本戳：本任务所有 LLM 调用共用的 prompt bundle 版本，可复现/可审计
+        try:
+            self.task_mgr.record_decision(
+                task_id, "prompt_bundle",
+                decision=f"prompt 版本 {PROMPT_VERSION}",
+                basis="default", evidence={"prompt_version": PROMPT_VERSION},
+            )
+        except Exception:
+            logger.debug("记录 prompt 版本失败（忽略）", exc_info=True)
 
         ctx_token = bind_task_context(task_id)  # LLM token 度量归属本任务
         try:

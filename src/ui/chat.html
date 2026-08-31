@@ -274,6 +274,7 @@ const NODE_LABEL = {
   route:"意图路由", context:"上下文指代", intent_parse:"意图解析", credential:"凭据来源",
   analysis_parse:"问数解析", analysis_backfill:"规则兜底", semantic_pick:"语义选表",
   ops_diagnose:"运维诊断", ops_auto_fix:"运维自动修复", validation:"校验结论",
+  prompt_bundle:"Prompt 版本",
   task_approve:"审批", task_reject:"拒绝", config_edit:"改配置", mapping_edit:"改映射",
   target_table_create:"建表", badcase_reap:"沉淀BadCase", goodcase_reap:"沉淀GoodCase",
 };
@@ -384,7 +385,7 @@ initTheme();
 $('chips').innerHTML = EXAMPLES.map(e => `<span class="chip" onclick="$('query').value='${escapeHtml(e)}';$('query').focus()">${escapeHtml(e)}</span>`).join('');
 loadHistory();
 setInterval(loadHistory, 10000);
-addMsg('👋 你好！输入自然语言指令即可驱动数仓 Agent 协作：<b>数据集成</b>（同步/增量）、<b>ETL 开发</b>（加工）、<b>数据分析</b>（问数）、<b>运维</b>（诊断/重试）。也可以点下面的示例。', 'assistant');
+addMsg('👋 你好！输入自然语言指令即可驱动数仓 Agent 协作：<b>数据集成</b>（同步/增量）、<b>ETL 开发</b>（加工）、<b>问数</b>（查数分析）、<b>运维</b>（诊断/重试）。也可以点下面的示例。', 'assistant');
 </script>
 </body>
 </html>

@@ -1,4 +1,4 @@
-"""轻量语义层 + 数据分析 Agent 测试。"""
+"""轻量语义层 + 问数 Agent 测试。"""
 import json
 
 import pymysql
@@ -270,3 +270,198 @@ class TestGranularityDateDimFallback:
         q4 = AnalysisQuery(metrics=["user_count"], dimensions=[], granularity="")
         AnalysisConfigAgent._ensure_granularity(q4, "统计总用户数")
         assert q4.granularity == ""
+
+
+class _FakeTotalConn:
+    """交叉复算 mock：description + fetchone 返回无 GROUP BY 总计行。"""
+
+    def __init__(self, total_cols=("user_count",), total_row=(5,)):
+        self._cols = total_cols
+        self._row = total_row
+        self.executed = []
+
+    def cursor(self):
+        return self
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    @property
+    def description(self):
+        return [(c, None) for c in self._cols]
+
+    def execute(self, sql):
+        self.executed.append(sql)
+        return 0
+
+    def fetchone(self):
+        return self._row
+
+    def commit(self):
+        pass
+
+    def close(self):
+        pass
+
+
+def _selfcheck_state(rows, sql=None, query=None, columns=None):
+    return {
+        "analysis_sql": sql or ("SELECT dt AS `dt`, COUNT(id) AS `user_count` "
+                                "FROM dwd_demo GROUP BY dt LIMIT 1000"),
+        "analysis_database": "datax_test",
+        "analysis_query": query or {},
+        "analysis_result": {"columns": columns or ["dt", "user_count"], "rows": rows},
+    }
+
+
+class TestAnalysisSelfCheck:
+    """问数三条确定性自检：空结果 / 截断 / 分组∑=总计交叉复算。"""
+
+    def test_empty_result_warning_not_blocking(self):
+        result = AnalysisValidationAgent().run(_selfcheck_state([]))
+        sc = result["analysis_result"]["self_check"]
+        empty = [c for c in sc["checks"] if c["label"] == "结果为空"][0]
+        assert empty["level"] == "warning" and empty["passed"] is False
+        # warning 不阻断任务
+        assert result["validation_result"]["success"] is True
+
+    def test_truncated_warning(self):
+        rows = [{"dt": f"2026-08-0{i}", "user_count": i} for i in range(1, 4)]
+        result = AnalysisValidationAgent().run(_selfcheck_state(
+            rows,
+            sql="SELECT dt AS `dt`, COUNT(id) AS `user_count` FROM t GROUP BY dt LIMIT 3",
+        ))
+        sc = result["analysis_result"]["self_check"]
+        assert sc["truncated"] is True
+        trunc = [c for c in sc["checks"] if c["label"] == "结果截断"][0]
+        assert trunc["level"] == "warning"
+
+    def test_cross_check_match(self, monkeypatch):
+        _patch_catalog(monkeypatch, _make_catalog())
+        conns = []
+        monkeypatch.setattr(
+            pymysql, "connect",
+            lambda **k: conns.append(_FakeTotalConn(total_row=(5,))) or conns[-1],
+        )
+        rows = [
+            {"dt": "2026-08-05", "user_count": 3},
+            {"dt": "2026-08-06", "user_count": 2},
+        ]
+        state = _selfcheck_state(
+            rows, query={"metrics": ["user_count"], "dimensions": ["dt"], "filters": []}
+        )
+        result = AnalysisValidationAgent().run(state)
+        cross = [c for c in result["analysis_result"]["self_check"]["checks"]
+                 if "分组汇总核对" in c["label"]]
+        assert len(cross) == 1
+        assert cross[0]["passed"] is True and cross[0]["level"] == "info"
+        assert result["validation_result"]["success"] is True
+        # 总计 SQL 不带 GROUP BY（口径不同才叫交叉复算）
+        assert conns and all("GROUP BY" not in q.upper() for q in conns[0].executed)
+
+    def test_cross_check_mismatch_is_error(self, monkeypatch):
+        _patch_catalog(monkeypatch, _make_catalog())
+        monkeypatch.setattr(pymysql, "connect",
+                            lambda **k: _FakeTotalConn(total_row=(10,)))
+        rows = [
+            {"dt": "2026-08-05", "user_count": 3},
+            {"dt": "2026-08-06", "user_count": 2},
+        ]
+        state = _selfcheck_state(
+            rows, query={"metrics": ["user_count"], "dimensions": ["dt"], "filters": []}
+        )
+        result = AnalysisValidationAgent().run(state)
+        cross = [c for c in result["analysis_result"]["self_check"]["checks"]
+                 if "分组汇总核对" in c["label"]]
+        assert cross[0]["passed"] is False and cross[0]["level"] == "error"
+        assert "≠" in cross[0]["detail"]
+        # error 级自检：validation 标记不成功
+        assert result["validation_result"]["success"] is False
+
+    def test_cross_check_skip_non_additive(self, monkeypatch):
+        cat = SemanticCatalog([SemanticTable({
+            "table": "dwd_demo", "alias": "演示",
+            "metrics": [{"name": "avg_amt", "display": "客单价",
+                         "column": "amount", "agg": "avg"}],
+            "dimensions": [{"name": "dt", "display": "日期",
+                            "column": "dt", "type": "date"}],
+        })], default_database="datax_test", default_engine="starrocks")
+        _patch_catalog(monkeypatch, cat)
+
+        def _boom(**k):
+            raise AssertionError("AVG 不可加，不应触发总计查询")
+
+        monkeypatch.setattr(pymysql, "connect", _boom)
+        state = _selfcheck_state(
+            [{"dt": "2026-08-05", "avg_amt": 3.0}],
+            query={"metrics": ["avg_amt"], "dimensions": ["dt"], "filters": []},
+            columns=["dt", "avg_amt"],
+        )
+        result = AnalysisValidationAgent().run(state)
+        checks = result["analysis_result"]["self_check"]["checks"]
+        assert not any("分组汇总核对" in c["label"] for c in checks)
+        assert result["validation_result"]["success"] is True
+
+    def test_cross_check_exception_non_blocking(self, monkeypatch):
+        _patch_catalog(monkeypatch, _make_catalog())
+
+        def _boom(**k):
+            raise RuntimeError("db down")
+
+        monkeypatch.setattr(pymysql, "connect", _boom)
+        state = _selfcheck_state(
+            [{"dt": "2026-08-05", "user_count": 3}],
+            query={"metrics": ["user_count"], "dimensions": ["dt"], "filters": []},
+        )
+        result = AnalysisValidationAgent().run(state)
+        # 自检查询异常只跳过、不阻断结果
+        assert result["validation_result"]["success"] is True
+        checks = result["analysis_result"]["self_check"]["checks"]
+        assert not any("分组汇总核对" in c["label"] for c in checks)
+
+
+class TestAnalysisSelfCheckGate:
+    """自检 error 级（分组∑≠总计）：任务判失败，但结果+自检落库供详情展示。"""
+
+    def test_cross_check_mismatch_fails_task_and_persists_result(self, monkeypatch):
+        from src.agents.base import AGENT_REGISTRY
+        from src.workflow import AgentWorkflow
+        from src.workflow.task_manager import get_task_manager
+
+        class _Cfg:
+            def run(self, state):
+                return {**state, "current_step": "config_complete",
+                        "analysis_sql": ("SELECT dt AS `dt`, COUNT(id) AS `user_count` "
+                                         "FROM dwd_demo GROUP BY dt LIMIT 1000"),
+                        "analysis_query": {"metrics": ["user_count"],
+                                           "dimensions": ["dt"], "filters": []},
+                        "analysis_database": "datax_test"}
+
+        class _Exec:
+            def run(self, state):
+                return {**state, "current_step": "execution_complete",
+                        "execution_status": {"success": True,
+                                             "columns": ["dt", "user_count"]},
+                        "analysis_result": {
+                            "columns": ["dt", "user_count"],
+                            "rows": [{"dt": "2026-08-05", "user_count": 3}],
+                        }}
+
+        _patch_catalog(monkeypatch, _make_catalog())
+        monkeypatch.setattr(pymysql, "connect",
+                            lambda **k: _FakeTotalConn(total_row=(99,)))
+        steps = AGENT_REGISTRY["data_analysis"]
+        monkeypatch.setitem(steps, "config", _Cfg)
+        monkeypatch.setitem(steps, "execution", _Exec)
+
+        r = AgentWorkflow(task_type="data_analysis").run("分析用户数按日期")
+        task = get_task_manager().get_task(r["_task_id"])
+        assert task["status"] == "failed"
+        assert "自检" in (task.get("error") or "")
+        # 失败分支同样持久化 analysis_result，详情页可渲染结果自检卡片
+        sc = task["analysis_result"]["self_check"]
+        cross = [c for c in sc["checks"] if "分组汇总核对" in c["label"]]
+        assert cross and cross[0]["level"] == "error"

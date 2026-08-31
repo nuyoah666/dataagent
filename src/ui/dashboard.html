@@ -402,7 +402,7 @@ window.addEventListener('DOMContentLoaded', () => {
   }
 });
 
-const TYPE_LABELS = { data_integration:'数据集成', etl_development:'ETL', data_ops:'运维', data_analysis:'分析' };
+const TYPE_LABELS = { data_integration:'数据集成', etl_development:'ETL', data_ops:'运维', data_analysis:'问数' };
 const DBTYPE_LABELS = { mysql:'MySQL', mongodb:'MongoDB', elasticsearch:'Elasticsearch', starrocks:'StarRocks' };
 const state = { status:'all', type:'all', q:'', time:'all', sort:'created_at', order:'desc',
                 page:1, size:20, tab:'tasks' };
@@ -759,12 +759,28 @@ function card(title, body, right) {
   return `<div class="dcard"><div class="dcard-title"><span>${title}</span>${right ? `<span>${right}</span>` : ''}</div>${body}</div>`;
 }
 
+// 问数「结果自检」卡片：空结果 / 截断 / 分组∑=总计交叉复算（确定性自检，非源<->目标对账）
+function selfCheckCard(task) {
+  const sc = task.analysis_result && task.analysis_result.self_check;
+  if (!sc || !Array.isArray(sc.checks) || !sc.checks.length) return '';
+  const icon = c => c.passed ? '✅' : (c.level === 'error' ? '❌' : '⚠️');
+  const body = sc.checks.map(c =>
+    `<div style="margin-top:4px">${icon(c)} <b>${escapeHtml(c.label || '')}</b><span class="muted-flag" style="margin-left:6px">${escapeHtml(c.detail || '')}</span></div>`
+  ).join('');
+  return card('结果自检', body);
+}
+
 function buildTimeline(logs, task) {
+  // 问数任务同一 state machine，但阶段语义不同：解析 -> 执行查询 -> 结果自检
+  const isAsk = task.task_type === 'data_analysis';
   const markers = [
-    ['ConfigAgent 开始', '配置生成'], ['ConfigAgent 完成', '配置完成'],
+    ['ConfigAgent 开始', isAsk ? '问数解析' : '配置生成'],
+    ['ConfigAgent 完成', isAsk ? '解析完成' : '配置完成'],
     ['等待人工审批', '等待审批'], ['人工审批通过', '审批通过'],
-    ['ExecutionAgent 开始', '执行同步'], ['ExecutionAgent 完成', '执行完成'],
-    ['ValidationAgent 开始', '数据校验'], ['任务完成', '任务完成'],
+    ['ExecutionAgent 开始', isAsk ? '执行查询' : '执行同步'],
+    ['ExecutionAgent 完成', isAsk ? '查询完成' : '执行完成'],
+    ['ValidationAgent 开始', isAsk ? '结果自检' : '数据校验'],
+    ['任务完成', '任务完成'],
   ];
   const stages = [];
   for (const l of logs) {
@@ -840,7 +856,7 @@ function validationSection(task) {
   const v0 = task.validation_result || null;
   const ds = _dataxRunStats(task);
   // 数据集成/ETL 的 validation_result 是源端↔目标对账（含 checks/源目标行数/count_match）；
-  // 问数任务的 validation_result 只是 {row_count,column_count} 结果自检，行数已在「分析结果」体现，不渲染对账卡片
+  // 问数任务的 validation_result 只是 {row_count,column_count} 结果自检，行数已在「问数结果」体现，不渲染对账卡片
   const isReconcile = !!v0 && (
     (v0.checks && v0.checks.length) ||
     v0.source_count != null || v0.target_count != null || v0.count_match != null);
@@ -1088,7 +1104,8 @@ async function showDetail(taskId) {
         `<div style="margin-top:4px">· ${escapeHtml(a.action)}：${escapeHtml(JSON.stringify(a.result || {}).slice(0, 300))}</div>`).join('')}`) : '';
     const opsRec = task.ops_record_result ? card('事故沉淀',
       `<div>${escapeHtml(task.ops_record_result.summary || '')}</div>`) : '';
-    const anal = (task.analysis_result || task.analysis_sql) ? card('分析结果', `
+    const selfChk = selfCheckCard(task);
+    const anal = (task.analysis_result || task.analysis_sql) ? card('问数结果', `
       ${task.analysis_summary ? `<div style="margin-bottom:6px">${escapeHtml(task.analysis_summary)}</div>` : ''}
       ${task.analysis_result ? `<table class="result-table"><thead><tr>
         ${(task.analysis_result.columns || []).map(c => `<th>${escapeHtml(c)}</th>`).join('')}
@@ -1120,7 +1137,7 @@ async function showDetail(taskId) {
       ${validationSection(task)}
       ${card('阶段时间线', tl)}
       ${llmUsage(task)}
-      ${diag}${opsAct}${opsRec}${anal}${etl}
+      ${diag}${opsAct}${opsRec}${anal}${selfChk}${etl}
       ${card('审计记录', audits || '<div class="muted-flag">（无审计）</div>')}
       ${task.error ? card('错误信息', `<pre>${escapeHtml(task.error)}</pre>`) : ''}
       <div class="audit-detail" style="text-align:center">AI 链路追踪见 LangSmith 项目 dataagent（task_id=${taskId} 对应 thread_id）</div>`;

@@ -103,7 +103,7 @@ class Config:
     # ---- DataX 执行超时（秒），防止任务挂死 ----
     DATAX_TIMEOUT: int = int(os.getenv("DATAX_TIMEOUT", "3600"))
 
-    # ---- 数据分析 Agent ----
+    # ---- 问数 Agent ----
     # 执行后是否用 LLM 生成中文总结（只读查询无副作用）
     ANALYSIS_SUMMARIZE: bool = os.getenv("ANALYSIS_SUMMARIZE", "true").strip().lower() in (
         "1", "true", "yes", "on",

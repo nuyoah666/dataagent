@@ -51,3 +51,24 @@ PROMPTS: List[Dict[str, Any]] = [
 def list_prompts() -> List[Dict[str, Any]]:
     """返回所有 system prompt 的元信息与全文（只读）。"""
     return [dict(p) for p in PROMPTS]
+
+
+def prompt_bundle_version() -> str:
+    """整套 prompt 的内容版本号（sha256 前 8 位）。
+
+    任一 prompt 文本变动版本即变；任务执行时记录到 decision_logs，
+    可回答"这条结果是哪个版本的 prompt 产的"（可复现/可审计）。
+    """
+    import hashlib
+
+    h = hashlib.sha256()
+    for p in PROMPTS:
+        h.update(p["key"].encode("utf-8"))
+        h.update(b"\0")
+        h.update(p["text"].encode("utf-8"))
+        h.update(b"\0")
+    return h.hexdigest()[:8]
+
+
+# 启动即固化：本次进程所有任务共用同一 prompt 版本
+PROMPT_VERSION = prompt_bundle_version()

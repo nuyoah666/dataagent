@@ -1,4 +1,4 @@
-"""一键演示：数据集成 -> ETL 透传 -> 数据分析 三大 Agent 真实链路。
+"""一键演示：数据集成 -> ETL 透传 -> 问数 三大 Agent 真实链路。
 
 通过 Web API 走完整流程（含人工审批门禁），打印每步摘要。
 前置：服务运行中（python -m src.api）、MySQL/StarRocks/ES 可用、
@@ -125,7 +125,7 @@ def step2_etl(source_ods: str) -> str:
 
 def step3_analysis() -> str:
     """语义层只读分析（免审批）。"""
-    print("\n[Step 3] 数据分析：分析用户数按日期")
+    print("\n[Step 3] 问数：分析用户数按日期")
     r = _api("POST", "/chat/submit", {"query": "分析用户数按日期"})
     task_id = r["task_id"]
     task = _wait_terminal(task_id)

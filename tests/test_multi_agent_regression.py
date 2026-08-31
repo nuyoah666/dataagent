@@ -355,7 +355,7 @@ def test_api_natural_language_routes_to_ops(api_ops_env):
     assert result2.task_type == "data_ops"
 
 
-# ---- 数据分析与 ETL 链路回归 ----
+# ---- 问数与 ETL 链路回归 ----
 
 
 def _patch_analysis_ok(monkeypatch):

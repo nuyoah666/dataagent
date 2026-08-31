@@ -155,7 +155,7 @@ class AnalysisFilter(BaseModel):
 
 
 class AnalysisQuery(BaseModel):
-    """数据分析语义查询（LLM 输出，不直接生成 SQL）。"""
+    """问数语义查询（LLM 输出，不直接生成 SQL）。"""
 
     metrics: List[str] = Field(default_factory=list, description="指标名列表（语义层注册）")
     dimensions: List[str] = Field(default_factory=list, description="维度名列表（语义层注册）")

@@ -17,7 +17,7 @@
 - **ETL 确定性透传**：ODS → DWD 走三类固定模板（纯透传 / 字段映射 / 枚举码值映射），
   按 ODS 命名规范（`ods_x` / `ods_x_day_inc` / `ods_x_day_snapshot`）自动推断表与分区，
   `INSERT OVERWRITE PARTITION` 幂等；目标表缺失自动生成 DDL（需管理账号，见 `.env`）
-- **轻量语义层 + 数据分析**：YAML 定义指标/维度与聚合口径（Supersonic 风格），
+- **轻量语义层 + 问数**：YAML 定义指标/维度与聚合口径（Supersonic 风格），
   LLM 只输出结构化语义查询，SQL 由代码确定性生成（SELECT-only + 超时 + LIMIT 防御），
   结果附带**口径说明卡片**（数据来源/指标公式/维度/过滤/粒度，与执行 SQL 同源、LLM 不参与编造），
   可选 LLM 中文总结；只读查询无需人工审批
@@ -537,8 +537,8 @@ Agent 配置阶段会检索 DataX 官方文档 + 本项目踩坑经验，用于�
 - [x] ETL Agent（StarRocks SQL 加工）
 - [x] 运维 Agent（故障诊断 + 事故知识沉淀）
 - [x] RAG 知识库（DataX 官方文档 / 运维事故，collection 隔离）
-- [ ] 数据分析 Agent（LLM → SQL 查询，待 dwd 层数据积累）
-- [ ] 内置轻量定时调度（不引入 DolphinScheduler）
+- [x] 问数 Agent（语义层驱动 NL2SQL：LLM 只出语义查询，SQL 代码确定性拼装 + 结果自检）
+- [x] 内置轻量定时调度（不引入 DolphinScheduler）
 
 ## 项目结构
 

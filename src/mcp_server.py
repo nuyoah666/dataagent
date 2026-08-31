@@ -43,7 +43,7 @@ def _task_slot():
 server = MCPServer(
     "dataagent",
     title="数仓多 Agent 协作平台",
-    description="数据集成 / ETL 透传 / 运维诊断 / 数据分析 / 知识库检索",
+    description="数据集成 / ETL 透传 / 运维诊断 / 问数 / 知识库检索",
     version="1.0.0",
 )
 
@@ -190,7 +190,7 @@ def reject_task(task_id: str) -> str:
 
 @server.tool(
     name="analyze",
-    description="同步只读数据分析（语义层驱动，SQL 由代码生成）。返回结果行与 LLM 中文总结。",
+    description="同步只读问数（语义层驱动，SQL 由代码生成）。返回结果行与 LLM 中文总结。",
 )
 def analyze(query: str) -> str:
     try:

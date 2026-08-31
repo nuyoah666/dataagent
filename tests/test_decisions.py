@@ -75,3 +75,37 @@ class TestDecisionAPI:
         assert "analysis_parse" in nodes
         assert nodes["analysis_parse"]["basis"] == "rule"  # 规则路径
         assert nodes["semantic_pick"]["decision"]  # 选了表
+
+
+def test_prompt_bundle_version_deterministic_and_content_sensitive(monkeypatch):
+    import src.agents.prompts as pm
+
+    # 8 位版本号、进程内稳定
+    assert len(pm.PROMPT_VERSION) == 8
+    assert pm.prompt_bundle_version() == pm.PROMPT_VERSION
+    # 任一 prompt 文本变动 -> 版本变化（可复现/可审计的基础）
+    patched = [dict(pm.PROMPTS[0], text=pm.PROMPTS[0]["text"] + "\n微调一句话")] + list(pm.PROMPTS[1:])
+    monkeypatch.setattr(pm, "PROMPTS", patched)
+    assert pm.prompt_bundle_version() != pm.PROMPT_VERSION
+
+
+def test_workflow_records_prompt_bundle_decision(monkeypatch):
+    """workflow 启动（graph 执行前）即写 prompt_bundle 决策；任务失败也有记录。"""
+    from src.agents.base import AGENT_REGISTRY
+    from src.agents.prompts import PROMPT_VERSION
+    from src.workflow import AgentWorkflow
+
+    class _BoomConfig:
+        def run(self, state):
+            return {**state, "error": "配置失败: 模拟", "current_step": "config_error"}
+
+    monkeypatch.setitem(AGENT_REGISTRY["data_integration"], "config", _BoomConfig)
+    wf = AgentWorkflow(task_type="data_integration")
+    r = wf.run("把 MySQL 的 t1 表同步到 ES")
+
+    ds = get_task_manager().get_task_decisions(r["_task_id"])
+    pb = [d for d in ds if d["node"] == "prompt_bundle"]
+    assert len(pb) == 1
+    assert pb[0]["basis"] == "default"
+    assert pb[0]["evidence"]["prompt_version"] == PROMPT_VERSION
+    assert PROMPT_VERSION in pb[0]["decision"]
