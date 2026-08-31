@@ -1105,13 +1105,26 @@ async function showDetail(taskId) {
       ? `<div style="margin-bottom:6px">诊断对象：<a href="#" onclick="showDetail('${escapeHtml(task.ops_diagnosis.task_id)}');return false;" style="font-family:monospace">${escapeHtml(task.ops_diagnosis.task_id)}</a> <span style="color:var(--muted)">（点击查看原任务）</span></div>` : '';
     const diagOps = task.ops_diagnosis && task.ops_diagnosis.ops_task_id
       ? `<div style="margin-bottom:6px">诊断任务：<a href="#" onclick="showDetail('${escapeHtml(task.ops_diagnosis.ops_task_id)}');return false;" style="font-family:monospace">${escapeHtml(task.ops_diagnosis.ops_task_id)}</a> <span style="color:var(--muted)">（运维 Agent）</span></div>` : '';
+    const diagFix = (d, tid) => {
+      const f = d.auto_fix;
+      if (!f) return '';
+      const byType = {
+        enable_truncate: {label: '⚡ 应用修复：开启同步前清空并重跑审批', fn: `doRemediate('${tid}')`},
+        rebuild_config: {label: '⚡ 一键修复（重建 DataX 配置）', fn: `doRemediate('${tid}')`},
+        create_target_table: {label: '⚡ 一键建表（按源表结构生成）', fn: `doCreateTargetTable('${tid}')`},
+      };
+      const m = byType[f.type];
+      if (!m) return '';
+      return `<div style="margin-top:10px"><button class="btn btn-approve" onclick="event.stopPropagation();${m.fn}">${escapeHtml(m.label)}</button></div>`;
+    };
     const diag = task.ops_diagnosis ? card('运维诊断', `
       ${diagSrc}${diagOps}
       <div>根因：<b>${escapeHtml(task.ops_diagnosis.root_cause || '')}</b></div>
       <div style="margin-top:4px">影响：${escapeHtml(task.ops_diagnosis.impact || '')}</div>
-      <div>置信度：${task.ops_diagnosis.confidence ?? ''}（来源：${escapeHtml(task.ops_diagnosis.source || '')}）</div>
+      <div>置信度：${task.ops_diagnosis.confidence ?? ''}（来源：${String(task.ops_diagnosis.source || '').startsWith('rule') ? '规则诊断（确定性结论，未调用 LLM）' : escapeHtml(task.ops_diagnosis.source || '')}）</div>
       <div style="margin-top:4px">处置步骤：<ol>${(task.ops_diagnosis.solution_steps || []).map(st => `<li>${escapeHtml(st)}</li>`).join('')}</ol></div>
-      ${(task.ops_diagnosis.related_links || []).length ? `<div>参考链接：${task.ops_diagnosis.related_links.map(l =>
+      ${diagFix(task.ops_diagnosis, task.task_id)}
+      ${(task.ops_diagnosis.related_links || []).length ? `<div style="margin-top:6px">参考链接：${task.ops_diagnosis.related_links.map(l =>
         `<a href="${escapeHtml(l.url)}" target="_blank" rel="noopener">${escapeHtml(l.title || l.url)}</a>`).join(' · ')}</div>` : ''}`) : '';
     const opsAct = task.ops_actions ? card('处置动作', `
       ${task.ops_actions.health ? `<div>组件健康：${task.ops_actions.health.healthy ? '✅' : '❌'} ${

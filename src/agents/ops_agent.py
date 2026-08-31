@@ -87,15 +87,17 @@ class OpsDiagnosisAgent(BaseAgent):
         if not error and exec_status.get("error"):
             error = str(exec_status["error"])
 
-        # 0. 结构化校验结论的确定性诊断：DataX 成功但对账不一致时，
-        # validation_result 里已有源/目标行数、主键重复组数等硬证据，
-        # 规则可直接定位根因（如目标端历史残留），高置信则不消耗 LLM
-        from ..tools.ops_rules import diagnose_failure, format_validation_summary
+        # 0. 确定性规则诊断（确定的归规则，高置信不消耗 LLM）：
+        #  a) DataX 成功但对账不一致：validation_result 里有源/目标行数、
+        #     主键重复组数等硬证据，直接定位（如目标端历史残留）
+        #  b) DataX rc!=0：日志模式匹配（连接拒绝/认证失败/表不存在/
+        #     JDBC 参数缺陷等），错误字符串是给人看的，模式签名才是给规则用的
+        from ..tools.ops_rules import diagnose_any_failure, format_validation_summary
         val_summary = format_validation_summary(task)
         if val_summary:
             error = (f"{error}｜校验结论: {val_summary}" if error
                      else f"校验失败: {val_summary}")
-        rule_diag = diagnose_failure(task)
+        rule_diag = diagnose_any_failure(task)
 
         logs = tm.get_task_logs(task_id)
         log_tail = "\n".join(

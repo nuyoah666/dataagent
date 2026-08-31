@@ -164,6 +164,99 @@ def diagnose_failure(task: dict) -> Optional[Dict[str, Any]]:
     return None
 
 
+def diagnose_any_failure(task: dict) -> Optional[Dict[str, Any]]:
+    """统一入口：先看结构化校验结论（DataX 成功但对账失败），
+    再看执行日志模式（DataX rc!=0）；都不确定返回 None 交 LLM。"""
+    return diagnose_failure(task) or diagnose_execution_failure(task)
+
+
+# ---------------------------------------------------------------------------
+# 执行失败（DataX rc!=0）：日志模式确定性诊断
+# ---------------------------------------------------------------------------
+# 每条：(正则, 根因, 处置步骤, 置信度, auto_fix)。按顺序匹配，命中即止——
+# 签名越具体越靠前。服务不可达/认证/表不存在这类环境问题确定性修复不了，
+# 但根因可以 100% 确定，没必要让 LLM 对着 3000 字日志猜。
+_EXEC_PATTERNS = [
+    (r"connection refused|communications link failure|could not connect|failed to connect"
+     r"|max retries|newconnectionerror|connectionerror|connecttimeout|拒绝连接|连接被拒绝"
+     r"|unreachable|no route to host|unknownhostexception",
+     "数据库服务不可达（连接被拒绝/超时）：源端或目标端服务未启动、端口不对或网络不通",
+     ["确认源/目标数据库容器或服务已启动（docker ps）",
+      "核对任务里的 host/port 与数据源注册配置",
+      "服务恢复后重试任务"],
+     0.9, None),
+    (r"access denied for user|authentication failed|401 unauthorized|unauthorized"
+     r"|auth.*fail|用户名或密码|认证失败",
+     "数据库认证失败：用户名/密码错误，或账号无目标库表权限",
+     ["核对数据源凭据（数据源配置页）",
+      "确认账号对目标库/表有读写权限",
+      "修正后重试"],
+     0.9, None),
+    (r"table .* doesn'?t exist|unknown table|unknown database"
+     r"|index_not_found_exception|no such (index|collection)|namespace not found"
+     r"|表.*不存在|集合.*不存在",
+     "目标表/索引不存在：DataX writer 只写数据不建表，目标端缺表时直接失败",
+     ["在任务详情点「一键建表」（DDL 按源表结构幂等生成）",
+      "建表成功后重试任务"],
+     0.9, {"type": "create_target_table", "label": "一键建表（按源表结构生成目标表）"}),
+    (r"characterencoding=utf8mb4|the server time zone|servertimezone"
+     r"|时区|time zone value",
+     "JDBC 连接参数缺陷：字符集误用 utf8mb4（JDBC 应为 utf8）或时区为 UTC",
+     ["这是已知确定性配置缺陷，点「一键修复」用最新模板重建配置",
+      "修复后转人工审批重跑"],
+     0.88, {"type": "rebuild_config", "label": "一键修复（重建 DataX 配置）"}),
+    (r"framework-03|code:\s*framework|配置码率|限速|bps",
+     "DataX 限速配置与本机版本不兼容（Framework-03：总限速 byte/record 参数不被支持）",
+     ["这是已知确定性配置缺陷，点「一键修复」用最新模板重建配置（只保留 channel 并发）",
+      "修复后转人工审批重跑"],
+     0.85, {"type": "rebuild_config", "label": "一键修复（重建 DataX 配置）"}),
+    (r"could not find plugin|plugin .* not found|插件.*不存在|plugin\[",
+     "DataX 插件缺失：当前 DataX 发行版不含该 reader/writer 插件",
+     ["确认插件名拼写与 DataX plugin/reader、plugin/writer 目录",
+      "开源 DataX 无 elasticsearchreader，ES 只能作为目标端"],
+     0.8, None),
+    (r"mapper_parsing_exception|illegal_argument_exception|numberformatexception"
+     r"|incorrect string value|data too long|out of range|cannot deserialize"
+     r"|类型转换|超长|非法字符",
+     "字段类型/内容不兼容：类型转换失败、字符串超长、非法字符或 ES mapping 冲突",
+     ["核对任务详情中的源/目标字段映射与类型",
+      "修正目标列类型/长度或调整映射后重试"],
+     0.7, None),
+    (r"read timed out|sockettimeout|timed out|timeout",
+     "读写超时：目标库负载高、网络抖动或批量过大",
+     ["稍后直接重试（瞬时问题）",
+      "若反复超时，降低 channel 并发或分批同步"],
+     0.5, None),
+]
+
+
+def diagnose_execution_failure(task: dict) -> Optional[Dict[str, Any]]:
+    """DataX 执行失败（rc!=0）的日志模式诊断。"""
+    import re
+    ex = task.get("execution_status") or {}
+    if ex.get("success"):
+        return None
+    log_tail = str(ex.get("log_tail") or "")
+    err = str(task.get("error") or ex.get("error") or "")
+    text = f"{err}\n{log_tail}".lower()
+    if not log_tail and "退出码" not in err:
+        return None  # 没有日志特征（如预检拦截），不硬猜
+    intent = task.get("parsed_intent") or {}
+    tgt_table = intent.get("target_table") or "目标表"
+    for pattern, root, steps, conf, auto_fix in _EXEC_PATTERNS:
+        if re.search(pattern, text):
+            return {
+                "root_cause": f"[执行失败] {root}",
+                "impact": f"任务在 DataX 执行阶段失败（退出码 {ex.get('return_code', '?')}），"
+                          f"目标端 {tgt_table} 未完成写入",
+                "solution_steps": steps,
+                "confidence": conf,
+                "source": "rule",
+                "auto_fix": auto_fix,
+            }
+    return None
+
+
 def format_validation_summary(task: dict) -> str:
     """把结构化校验结论压成一行文本，喂给 LLM 诊断/RAG 检索作为上下文。"""
     vr = task.get("validation_result")
