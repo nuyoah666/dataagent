@@ -205,6 +205,7 @@ python scripts/eval_gate.py --llm                       # 完整门禁：再加�
 python scripts/eval_golden.py   # 第①层：确定性回归（不调 LLM/不连库），CI 门禁
 python scripts/eval_trajectory.py  # 在线轨迹正确性巡检（读 tasks.db，门禁/状态机顺序）
 python scripts/lint_traces.py      # 在线轨迹健康体检（重复步骤/报错、空转、耗时离群）
+python scripts/eval_agent_health.py          # 通用层健康评估（工具/执行/熔断/自愈/规则诊断占比，零 LLM）
 python scripts/eval_llm_quality.py            # 第②层：LLM 开放点质量评测（发版前手动跑）
 python scripts/eval_llm_quality.py --judge    # 追加 LLM 主观打分（额外消耗 token）
 ```
@@ -252,6 +253,44 @@ python scripts/triage_badcase.py status                     # good/bad 分类进
 人工核对后纳入回归集。此后每次 `eval_llm_quality.py` 都会重放这些 query，一旦模型升级/
 切换后意图解析或问数语义偏离已验证的正确行为，评测立即红灯——这就是个人项目里最轻量的
 「模型漂移检测」。
+
+## 生产级对标：数据飞轮与 Agent Protocol
+
+参考业界 Agent 工程化框架（AgentLoop 数据飞轮、Agent Protocol 标准）反向自检，目标不是
+"能跑的 demo"，而是落地生产 Agent 的四项基本能力：**状态持久化、中断恢复、可观测、可评测**。
+
+**数据飞轮（AgentLoop 对标）——每一环都有落点：**
+
+| 飞轮环节 | 业界做法 | 本项目落点 |
+| --- | --- | --- |
+| 接入 / 观测 | 全链路 trace、埋点 | LangSmith trace + `trace_step` 业务埋点（DataX 执行、数据校验均进 trace） |
+| 审计 | 谁在何时做了什么决策 | `audit_logs`（审批/拒绝/取消/重试，含配置指纹、密码脱敏）+ `decision_logs`（每步决策标注 rule / llm / explicit / human） |
+| 数据集 | bad / good case 沉淀 | 失败任务回流 bad case、成功任务快照 good case，人工确认后固化为 golden 回归集 |
+| 评估 | 通用层 + 质量层两层 | 通用层 `eval_agent_health.py`：工具/执行/熔断/自愈/规则诊断占比（零 LLM）；质量层：golden 确定性回归 + LLM 开放点评测 |
+| 实验 | 发版回归 | `eval_gate.py` 一键门禁，阻塞项不达标不发版 |
+| 经验库 | 事故知识沉淀 | 运维事故知识库**自动沉淀、版本化**（同一问题更新走新版本，ES IK 分词 + BM25 检索） |
+
+**Agent Protocol 对齐——标准对象与本项目实现的映射：**
+
+| Protocol 对象 | 含义 | 本项目对应 |
+| --- | --- | --- |
+| Thread | 一次会话 | task（`thread_id` 贯通 LangSmith trace） |
+| Run | 一次执行 | 任务状态机：配置 → 审批 → 执行 → 校验 → 失败转运维 |
+| Step | 单个执行步骤 | Config / Execution / Validation / Ops 各 Agent 节点 |
+| Event | 步骤事件流 | `task_logs` 时间线 + trace 事件 |
+| Artifact | 产出物 | datax_config / etl_sql / validation_result / 诊断报告 |
+| Checkpoint | 状态断点 | tasks.db 持久化 + 启动时 `_restore_pending_state` 断点恢复 |
+| interrupt / resume | 人工中断与恢复 | 审批门禁（pending_approval）+ approve / reject / cancel / retry |
+
+> 区分玩具 Agent 与生产 Agent 的不是模型多强，而是**状态持久化、中断恢复、可观测、可评测**
+> 四项是否齐备——本项目四项全部落地。
+
+**刻意不做**（个人 MVP 的过度工程，也是面试时主动交代的能力边界）：
+
+- **OTel/eBPF 探针接入**：LangSmith trace + 结构化决策/审计日志已满足调试与演示；
+- **一切皆插件的细粒度扩展点**：数仓场景正确的可插拔粒度是 `SyncEngine` 执行引擎
+  （离线 DataX 已落地，实时 Flink CDC → Paimon 仅预留接口），而非把每个节点都插件化；
+- **MCP 网关（鉴权/限流/多租户）**：单用户本地场景用不上，MCP Server 直连即可。
 
 ## MCP Server（模型上下文协议）
 

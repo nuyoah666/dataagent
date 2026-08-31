@@ -10,6 +10,7 @@
   诊断项（读本地 tasks.db 的真实历史，仅提示不阻塞；CI 无历史库时自动为空）：
     - eval_trajectory.py  在线轨迹正确性巡检（门禁/状态机顺序）
     - lint_traces.py      轨迹健康体检（重复步骤/报错、空转、耗时离群）
+    - eval_agent_health.py 通用层健康评估（工具/执行/熔断/自愈/规则诊断占比）
 
 用法：
   python scripts/eval_gate.py            # 快速门禁：确定性回归 + 在线诊断
@@ -29,6 +30,7 @@ PY = sys.executable
 BLOCKING_GOLDEN = ("scripts/eval_golden.py", True, "确定性 golden 回归")
 DIAG_TRAJECTORY = ("scripts/eval_trajectory.py", False, "在线轨迹正确性巡检")
 DIAG_LINT = ("scripts/lint_traces.py", False, "轨迹健康体检（过程/效率层）")
+DIAG_HEALTH = ("scripts/eval_agent_health.py", False, "通用层健康评估（工具/执行/熔断/自愈）")
 BLOCKING_LLM = ("scripts/eval_llm_quality.py", True, "LLM 开放点质量评测")
 
 
@@ -53,6 +55,7 @@ def main() -> int:
     # 诊断项先跑（即便有历史提示也不影响阻塞结论）
     _run(*DIAG_TRAJECTORY)
     _run(*DIAG_LINT)
+    _run(*DIAG_HEALTH)
     # 阻塞项
     results.append(_run(*BLOCKING_GOLDEN))
     if args.llm:
