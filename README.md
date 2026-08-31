@@ -10,7 +10,15 @@
 - **自然语言交互**：用户通过自然语言描述数据同步需求
 - **智能配置生成**：基于 RAG 检索 DataX 官方文档，生成精准配置
 - **人工审批门禁**：写操作（集成/ETL）生成配置后挂起，人工确认才执行
-- **多数据源支持**：MySQL、MongoDB、Elasticsearch
+- **多数据源支持**：MySQL、StarRocks（FE MySQL 协议）、MongoDB、Elasticsearch
+  （ES 仅目标端，开源 DataX 无 reader，源端确定性拦截）
+- **同步前操作（对标 DataWorks preSql）**：全量覆盖/重建场景可声明 `pre_action=truncate`，
+  审批通过后、DataX 写入前清空目标表/集合/索引（TRUNCATE / delete_many / delete_by_query），
+  解决"upsert 收敛不了历史残留导致越跑越多"；增量+清空语义矛盾确定性拦截
+- **运维三层防线与自愈**：① 确定性预检/守卫 ② 结构化诊断——校验结论（行数/主键重复组）
+  与 DataX 日志签名（连接拒绝/认证失败/表不存在…）规则定位根因，置信度 ≥0.85 不调 LLM，
+  能修的一键修复（重建配置/开清空重跑/一键建表）③ RAG 事故库 + web + LLM 兜底；
+  事故自动版本化沉淀回知识库
 - **源表歧义消除**：跨库按表名/表注释发现候选（`discover_tables`），
   唯一命中自动采用；多个候选或找不到时强制用户明确 `库.表`，
   杜绝"猜错表名一路跑到执行才失败"
@@ -27,48 +35,100 @@
 - **多 Agent 协作**：集成失败自动交运维 Agent 诊断，事故自动沉淀为知识
 - **执行引擎可插拔**：编排层与执行引擎解耦（SyncEngine 抽象）——离线 DataX 已落地；实时引擎位（Flink CDC → Paimon 湖仓一体）已预留接口，新增引擎 = 实现接口 + 一套模板，路由/审批/审计/运维零改动（`GET /engines` 查看引擎可用性）
 
+## 设计哲学：确定性优先——LLM 干什么，规则干什么
+
+**一句话：把明确的工作交给规则，把开放的工作交给 LLM。** LLM 不是编排大脑，而是
+四个受限的"解析器"；工作流（状态机）才是大脑。所有写操作必经人工审批，所有
+结论独立复查，所有决策落审计。
+
+| 环节 | 确定性防线（规则/模板/代码，不调 LLM） | LLM 只在兜底时出现 |
+|---|---|---|
+| 意图路由 | 关键词计分 + 显式指令 + db 类型/同步模式/同步前操作关键词 | 规则全不命中才 LLM 分类 |
+| 配置生成 | DataX 模板直出（快乐路径零 RAG 零 LLM）+ Pydantic 强校验 + 预检 | 模板未覆盖的插件对才 RAG 查文档/LLM 补配 |
+| 目标命名 | ODS 命名规范、StarRocks 主键镜像/分区形态推断 | — |
+| 审批 | 写操作（集成/ETL）配置生成后挂起，人工放行；破坏性操作（preSql 清空）审批后才执行 | — |
+| 同步前操作 | truncate 仅全量可用、增量矛盾确定性拦截、标识符白名单防注入 | 关键词识别意图 |
+| 数据校验 | 平台重连源/目标独立复查：行数、主键唯一/非空、抽样逐字段比对 | — |
+| 故障诊断 | 结构化校验结论（源 5/目标 10、5 组重复→历史残留，置信 0.92）+ DataX 日志模式签名（连接拒绝/认证失败/表不存在…）；能修的一键修 | 无规则签名才 RAG+web+LLM 诊断 |
+| 自愈 | 配置缺陷→模板重建配置；目标残留→自动开 truncate；一律弹回人工重审批，写操作不自动放行 | — |
+| 问数 | 语义层 YAML 定义指标口径，代码确定性生成只读 SQL（SELECT-only+超时+LIMIT）；结果分组∑=总计交叉复算 | LLM 只输出结构化语义查询/中文总结 |
+| 可观测 | 决策日志（rule/explicit/llm/default/human）、审计日志、LangSmith trace | trace 里可见 LLM 输入输出 |
+
+> 为什么这样做：每加一道确定性防线，就少一类"LLM 抽风导致的事故"，还省 token、
+> 可单测、可在 CI 里回归。LLM 失败走规则 fallback，规则修不了才升级到 LLM——
+> 故障成本随不确定性递增，而不是一上来就烧 token 猜。
+
 ## 系统架构
 
 ```mermaid
-flowchart LR
-    U[用户自然语言指令] --> R[意图路由器<br/>规则计分 + 显式指令]
-    R -->|data_integration| I[集成工作流]
-    R -->|etl_development| E[ETL 工作流]
-    R -->|data_ops| O[运维工作流]
-    R -->|data_analysis| A[分析工作流<br/>语义层+只读查询]
+flowchart TB
+    U[用户：自然语言 / 同步向导 / MCP 客户端] --> API[FastAPI + Web 工作台<br/>对话·监控·向导·语义层配置]
+    API --> R[意图路由<br/>规则计分 → LLM 兜底]
 
-    subgraph I[数据集成 Agent]
-        C1[配置 Agent<br/>意图解析+表结构+RAG] --> X1[执行 Agent<br/>DataX 进程]
-        X1 --> V1[校验 Agent<br/>数据质量]
+    R --> W1[集成工作流]
+    R --> W2[ETL 工作流]
+    R --> W3[问数工作流]
+    R -.失败自动转运维.-> WO[运维工作流]
+
+    subgraph W1[数据集成（workflow：确定性状态机）]
+        direction LR
+        C1[配置<br/>规则+模板直出<br/>Pydantic/预检] --> G1{{人工审批门禁}}
+        G1 --> PS[同步前操作<br/>preSql 清空目标]
+        PS --> X1[执行<br/>SyncEngine]
+        X1 --> V1[独立复查<br/>行数/主键/抽样]
     end
 
-    subgraph E[ETL Agent]
-        C2[配置 Agent<br/>透传模板+ODS命名推断] --> X2[执行 Agent<br/>建表+OVERWRITE]
-        X2 --> V2[校验 Agent<br/>行数对比]
+    subgraph W2[ETL 开发]
+        direction LR
+        C2[配置<br/>ODS→DWD 透传模板<br/>码值映射] --> G2{{人工审批}}
+        G2 --> X2[执行<br/>建表+INSERT OVERWRITE]
+        X2 --> V2[校验]
     end
 
-    subgraph A[分析 Agent]
-        C3[语义解析<br/>LLM->结构化查询] --> X3[执行 Agent<br/>只读SELECT]
-        X3 --> V3[校验 Agent<br/>结果完整性]
+    subgraph W3[问数（只读，免审批）]
+        direction LR
+        C3[语义解析<br/>LLM→结构化查询] --> X3[代码生成只读 SQL<br/>语义层口径]
+        X3 --> V3[结果自检<br/>∑复算/截断/空结果]
     end
 
-    subgraph O[运维 Agent]
-        D[诊断 Agent<br/>失败任务+事故库检索] --> M[处置 Agent<br/>健康检查/建议]
-        M --> P[沉淀 Agent<br/>事故自动入库]
+    subgraph WO[运维 Agent（真正的 agent：开放题）]
+        direction LR
+        D1[① 确定性诊断<br/>校验结论+日志签名] --> D2[② RAG事故库+Web检索]
+        D2 --> D3[③ LLM 诊断兜底]
+        D3 --> RX[能修→弹回重审批<br/>不能修→根因回写]
+        D3 --> KB[(事故知识库<br/>ES，版本化沉淀)]
     end
 
-    I -->|失败/取消| D
-    E -->|失败/取消| D
-    P --> KB[(RAG 知识库<br/>DataX 文档 / 运维事故)]
-    D -.检索历史事故.-> KB
-    C1 -.检索 DataX 文档.-> KB
+    X1 --> ENGG[(SyncEngine 可插拔)]
+    ENGG --> E1[batch：DataX<br/>已落地]
+    ENGG -.预留位.-> E2[stream：Flink CDC→Paimon]
+
+    DS[(数据源)<br/>MySQL · StarRocks · MongoDB · ES]
+    C1 -.表发现/schema.-> DS
+    X1 --> DS
+    X2 --> DS
+    X3 --> DS
+    V1 -.独立复查.-> DS
+
+    V1 -.失败.-> D1
+    X1 -.rc≠0.-> D1
+
+    OBS[(可观测)<br/>决策日志 · 审计 · LangSmith trace · tasks.db]
+    C1 & G1 & PS & V1 & D3 -.每步决策/审计.-> OBS
 ```
+
+**四类 Agent 的边界（workflow ≠ agent）**：集成/ETL/问数是**确定性 workflow**——
+流程固定（配置→审批→执行→复查），LLM 只做受限解析；**运维是真正的 agent**——
+"找根因"是开放题，检索+推理+知识沉淀，但连它的诊断也先被规则吃一层。
 
 ## 技术栈
 
-- **核心框架**：LangChain、LangGraph
-- **底层引擎**：DataX
-- **检索增强**：基于 Elasticsearch 的 RAG 系统（复用现有资产）
+- **编排**：LangGraph（状态机）、LangChain（LLM 抽象）
+- **执行引擎**：DataX（离线 batch，已落地）；Flink CDC → Paimon（实时 stream，接口预留）
+- **数据源**：MySQL、StarRocks、MongoDB、Elasticsearch
+- **服务与存储**：FastAPI + SQLite（任务/决策/审计单一事实来源）；ES 兼作 RAG 事故知识库
+- **可观测**：LangSmith trace + 结构化决策日志 + 审计日志
+- **质量**：600+ pytest（离线 mock）+ golden 确定性回归 + LLM 质量评测两层门禁
 
 ## 快速开始
 
