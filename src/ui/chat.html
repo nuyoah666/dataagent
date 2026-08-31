@@ -1,5 +1,3 @@
-operatorName.value = localStorage.getItem(OPERATOR_KEY) || 'local-user';
-operatorName.onchange = e => localStorage.setItem(OPERATOR_KEY, e.target.value.trim() || 'local-user');
 <!DOCTYPE html>
 <html lang="zh">
 <head>
@@ -380,6 +378,8 @@ async function diagnose(taskId) {
 
 $('apiToken').value = localStorage.getItem(TOKEN_KEY) || '';
 $('apiToken').onchange = e => localStorage.setItem(TOKEN_KEY, e.target.value);
+$('operatorName').value = localStorage.getItem(OPERATOR_KEY) || 'local-user';
+$('operatorName').onchange = e => localStorage.setItem(OPERATOR_KEY, e.target.value.trim() || 'local-user');
 initTheme();
 $('chips').innerHTML = EXAMPLES.map(e => `<span class="chip" onclick="$('query').value='${escapeHtml(e)}';$('query').focus()">${escapeHtml(e)}</span>`).join('');
 loadHistory();
