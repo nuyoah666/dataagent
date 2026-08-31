@@ -86,6 +86,17 @@ class OpsDiagnosisAgent(BaseAgent):
         exec_status = task.get("execution_status") or {}
         if not error and exec_status.get("error"):
             error = str(exec_status["error"])
+
+        # 0. 结构化校验结论的确定性诊断：DataX 成功但对账不一致时，
+        # validation_result 里已有源/目标行数、主键重复组数等硬证据，
+        # 规则可直接定位根因（如目标端历史残留），高置信则不消耗 LLM
+        from ..tools.ops_rules import diagnose_failure, format_validation_summary
+        val_summary = format_validation_summary(task)
+        if val_summary:
+            error = (f"{error}｜校验结论: {val_summary}" if error
+                     else f"校验失败: {val_summary}")
+        rule_diag = diagnose_failure(task)
+
         logs = tm.get_task_logs(task_id)
         log_tail = "\n".join(
             f"[{l.get('level')}] {l.get('message')}" for l in logs[-30:]
@@ -131,10 +142,17 @@ class OpsDiagnosisAgent(BaseAgent):
                     web_results = wr.get("results", [])
                     logger.info("Web 检索兜底: %d 条结果", len(web_results))
 
-        # 2. LLM 诊断（失败时规则兜底）
-        diagnosis = self._llm_diagnose(
-            task_id, task, error, log_tail, rag_hits, web_results,
-        )
+        # 2. 诊断：高置信规则结论直接采用（确定的归规则）；否则 LLM + RAG/web
+        if rule_diag and rule_diag.get("confidence", 0) >= 0.85:
+            diagnosis = rule_diag
+            logger.info(
+                "规则命中确定性诊断（结构化校验结论），跳过 LLM: %s",
+                str(diagnosis.get("root_cause", ""))[:80],
+            )
+        else:
+            diagnosis = self._llm_diagnose(
+                task_id, task, error, log_tail, rag_hits, web_results,
+            )
         diagnosis.setdefault("diagnosed_at", datetime.now().isoformat(timespec="seconds"))
         diagnosis.setdefault("task_status", task.get("status"))
 
@@ -146,12 +164,15 @@ class OpsDiagnosisAgent(BaseAgent):
             tm.log(current_task_id, "INFO",
                    f"Ops 诊断完成: {task_id} -> {diagnosis.get('root_cause', '')[:100]}")
 
-        # 决策依据：运维诊断（LLM + RAG/web 证据）
+        # 决策依据：运维诊断（规则高置信 / LLM + RAG/web 证据）
+        is_rule = str(diagnosis.get("source", "")).startswith("rule")
         tm.record_decision(
             current_task_id or task_id, "ops_diagnose",
             decision=(diagnosis.get("root_cause") or "")[:200],
-            basis="llm", confidence=diagnosis.get("confidence"),
-            evidence={"rag_hits": len(rag_hits), "web_results": len(web_results),
+            basis="rule" if is_rule else "llm",
+            confidence=diagnosis.get("confidence"),
+            evidence={"source": diagnosis.get("source"),
+                      "rag_hits": len(rag_hits), "web_results": len(web_results),
                       "related_incidents": len(diagnosis.get("related_incidents", [])),
                       "rag_circuit_open": not rag_circuit_breaker.allow_request()},
         )

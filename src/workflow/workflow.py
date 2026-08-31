@@ -436,30 +436,45 @@ class AgentWorkflow:
             return {"fixed": False, "reason": "仅失败/取消的任务可修复"}
 
         # ---- 1. 确定性自动修复（数据集成）----
-        fixed_cfg = None
+        # 两类确定性修复，互斥取先命中者：
+        #  a) 对账失败（DataX 成功但校验不通过）：如目标端历史残留 -> 开 truncate
+        #  b) 执行失败（DataX rc!=0）：配置缺陷 -> 用最新规则重建配置
+        fixed_cfg = fixed_intent = None
         changes = []
         if allow_fix and task.get("task_type") == "data_integration":
-            from ..tools.remediation import auto_remediate_integration
-            r = auto_remediate_integration(task)
-            if r.get("fixed"):
-                fixed_cfg = r["config"]
-                changes = r.get("changes") or []
+            from ..tools.ops_rules import auto_remediate_validation
+            rv = auto_remediate_validation(task)
+            if rv.get("fixed"):
+                fixed_intent = rv["intent"]
+                changes = rv.get("changes") or []
+            else:
+                from ..tools.remediation import auto_remediate_integration
+                r = auto_remediate_integration(task)
+                if r.get("fixed"):
+                    fixed_cfg = r["config"]
+                    changes = r.get("changes") or []
 
-        if fixed_cfg is not None:
-            # 写回修复后配置，状态从 FAILED 回到待审批（写操作仍需人工放行）
+        if fixed_cfg is not None or fixed_intent is not None:
+            # 写回修复后配置/意图，状态从 FAILED 回到待审批（写操作仍需人工放行）
+            updates = {
+                "current_step": "awaiting_approval",
+                "error": None, "execution_status": None,
+                "validation_result": None, "retry_count": 0,
+            }
+            if fixed_cfg is not None:
+                updates["datax_config"] = fixed_cfg
+            if fixed_intent is not None:
+                updates["parsed_intent"] = fixed_intent
             ok = self.task_mgr.transition_status(
                 task_id, TaskStatus.PENDING_APPROVAL,
                 [TaskStatus.FAILED, TaskStatus.CANCELLED],
-                current_step="awaiting_approval",
-                datax_config=fixed_cfg,
-                error=None, execution_status=None, validation_result=None,
-                retry_count=0,
+                **updates,
             )
             if ok:
                 self.task_mgr.log(
                     task_id, "WARNING",
                     f"运维自动修复 {len(changes)} 项：{('；'.join(changes))}，"
-                    f"配置已更新，等待人工重新审批后执行",
+                    f"等待人工重新审批后执行",
                 )
                 self.task_mgr.audit(
                     task_id, "auto_remediate", operator,
