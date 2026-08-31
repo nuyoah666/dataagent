@@ -755,6 +755,53 @@ function syncSection(task) {
     </div>`;
 }
 
+function _dataxRunStats(task) {
+  const ex = task.execution_status;
+  if (!ex) return null;
+  const log = ex.log_tail || '';
+  const total = (log.match(/Total\s+(\d+)\s+records/) || [])[1];
+  const errors = (log.match(/Error\s+(\d+)\s+records/) || [])[1];
+  return {total, errors, rc: ex.return_code, seconds: ex.execution_time};
+}
+
+function validationSection(task) {
+  const v = task.validation_result || null;
+  const ds = _dataxRunStats(task);
+  if (!v && !ds) return '';
+  const canRevalidate = !!(task.datax_config && task.parsed_intent);
+  return `
+    <div class="section-title" style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+      <span>数据校验</span>
+      ${canRevalidate ? `<button class="btn btn-action" onclick="revalidate('${task.task_id}')">重新校验</button>` : ''}
+    </div>
+    <div class="detail-overview" style="padding:10px 14px">
+      ${ds ? `<div>DataX 自报：共处理 <b>${ds.total ?? '—'}</b> 条，失败 <b>${ds.errors ?? '—'}</b> 条，
+        退出码 <b>${ds.rc ?? '—'}</b>${ds.seconds ? `，耗时 ${ds.seconds}s` : ''}</div>` : ''}
+      ${v ? `
+        <div style="margin-top:8px;color:var(--muted);font-size:12.5px">平台独立复查（不依赖 DataX，重新连源库/目标库各 count 一遍）：</div>
+        <table style="width:100%;font-size:13px;border-collapse:collapse;margin-top:4px">
+          <tr><td style="padding:4px 0">源端记录数</td><td><b>${v.source_count ?? '—'}</b></td>
+              <td style="padding:4px 0;color:var(--muted)">目标端记录数</td><td><b>${v.target_count ?? '—'}</b></td></tr>
+          <tr><td style="padding:4px 0">行数一致</td>
+              <td colspan="3">${v.count_match ? '✅ 一致' : '❌ 不一致'}</td></tr>
+          ${v.unique_check ? `<tr><td style="padding:4px 0">主键唯一性</td>
+              <td colspan="3">${v.unique_check.is_unique ? '✅' : '❌'} ${escapeHtml(v.unique_check.message || '')}
+                ${v.unique_check.duplicate_groups ? `（重复组 ${v.unique_check.duplicate_groups}）` : ''}</td></tr>` : ''}
+        </table>
+        <pre class="audit-detail" style="white-space:pre-wrap;margin-top:6px">${escapeHtml(v.summary || '')}</pre>
+        <div style="font-weight:600;color:${v.success ? 'var(--ok, #16a34a)' : 'var(--danger, #dc2626)'}">
+          ${v.success ? '✅ 校验通过' : '❌ 校验未通过（见上方明细）'}</div>`
+        : '<div class="empty" style="margin-top:6px">（任务执行后此处显示独立复查结果；也可点「重新校验」实时复验）</div>'}
+    </div>`;
+}
+
+async function revalidate(taskId) {
+  try {
+    await api('/tasks/' + taskId + '/revalidate', {method: 'POST'});
+    showDetail(taskId);
+  } catch (e) { alert('重新校验失败: ' + e.message); }
+}
+
 function renderMapping(view) {
   const rows = (view.field_mapping || []).map(m => `
     <tr>
@@ -983,7 +1030,6 @@ async function showDetail(taskId) {
       <div class="section-title">ETL 透传</div>
       <div>源：${escapeHtml(task.etl_source_table || '')} → 目标：${escapeHtml(task.etl_target_table || '')}
            <span class="d">（${escapeHtml(task.etl_partition_date || '')}）</span></div>
-      ${task.validation_result ? `<div style="margin-top:4px">校验：${escapeHtml(task.validation_result.summary || '')}</div>` : ''}
       <pre class="audit-detail" style="white-space:pre-wrap">${escapeHtml(task.etl_sql)}</pre>` : '';
     $('detailBody').innerHTML = `
       <div class="detail-overview">
@@ -998,6 +1044,7 @@ async function showDetail(taskId) {
         <span>耗时：${durationSec(task.created_at, task.completed_at)}</span>
       </div>
       ${renderConfigSection(cfg)}
+      ${validationSection(task)}
       <div class="section-title">阶段时间线</div>${tl}
       ${llmUsage(task)}
       ${diag}${opsAct}${opsRec}${anal}${etl}

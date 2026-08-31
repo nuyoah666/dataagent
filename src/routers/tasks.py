@@ -189,6 +189,70 @@ async def remediate_task(task_id: str, request: Request):
             "diagnosis": result.get("diagnosis"),
             "message": result.get("reason", "无法自动修复，已生成运维诊断")}
 
+@router.post("/tasks/{task_id}/revalidate")
+async def revalidate_task(task_id: str, request: Request):
+    """对已完成的数据集成任务重新独立校验（源/目标行数 + 主键唯一性）。
+
+    校验不依赖 DataX 自报，而是任务完成后重新连源库/目标库各 count 一遍，
+    供人工随时复验；结果回写任务记录并审计留痕。
+    """
+    tm = get_task_manager()
+    task = tm.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if task.get("task_type") != "data_integration":
+        raise HTTPException(status_code=400, detail="仅数据集成任务支持重新校验")
+    if not task.get("datax_config"):
+        raise HTTPException(status_code=409, detail="任务尚未生成配置，无法校验")
+
+    def _do():
+        from src.agents.validation_agent import ValidationAgent
+        from src.tools import validate_data_quality
+        from src.tools.config_processor import detect_pk_columns
+        from src.tools.credentials import apply_intent_defaults
+
+        agent = ValidationAgent()
+        intent = dict(task.get("parsed_intent") or {})
+        # 以实际执行的 DataX 配置为准（人工可能编辑过目标表/索引）
+        intent = agent._sync_intent_with_config(intent, task)
+        # 落库时密码被脱敏为 ***，按命名数据源 / .env 回填真实凭据
+        intent = apply_intent_defaults(intent)
+        source_cfg = agent._build_db_config(intent, side="source")
+        target_cfg = agent._build_db_config(intent, side="target")
+        pk_cols = detect_pk_columns(task.get("source_schema") or {})
+        sync_type = str(intent.get("sync_type", "")).lower()
+        return validate_data_quality(
+            source_config=source_cfg,
+            target_config=target_cfg,
+            source_table=intent.get("source_table", ""),
+            target_table=intent.get("target_table", "") or intent.get("source_table", ""),
+            primary_key=pk_cols[0] if pk_cols else None,
+            allow_count_mismatch=(sync_type == "incremental"),
+        )
+
+    try:
+        result = await asyncio.to_thread(_do)
+    except Exception as e:
+        logging.getLogger(__name__).exception("重新校验失败")
+        raise HTTPException(status_code=500, detail=_public_error(e))
+
+    tm.update_task(task_id, validation_result=result)
+    tm.log(
+        task_id, "INFO",
+        f"人工触发重新校验：源 {result.get('source_count')} 条 / 目标 {result.get('target_count')} 条，"
+        f"{'通过' if result.get('success') else '未通过'}",
+    )
+    tm.audit(
+        task_id, "task_revalidate",
+        operator=_operator_from_request(request),
+        detail=(result.get("summary") or "").replace("\n", "；"),
+        metadata={"source_count": result.get("source_count"),
+                  "target_count": result.get("target_count"),
+                  "success": result.get("success")},
+    )
+    return {"task_id": task_id, "validation_result": result}
+
+
 @router.post("/tasks/{task_id}/approve")
 async def approve_task(task_id: str, request: Request):
     """人工审批通过：执行已生成配置的待审批任务。"""

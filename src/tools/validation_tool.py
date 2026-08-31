@@ -56,6 +56,12 @@ class ValidationTool:
             校验结果字典
         """
         try:
+            # ES 是近实时（NRT）引擎：写入/删除后未 refresh 前，count/聚合看到的是
+            # 陈旧视图（可能刚删的数据仍被计入，复查结论失真）。校验前强制 refresh，
+            # 保证独立复查读到真实状态（校验在任务完成后/人工触发时执行，代价可忽略）。
+            if str(getattr(target_config, "db_type", "")).lower() == "elasticsearch":
+                self._es_refresh(target_config, target_table)
+
             # 获取源表记录数
             source_count = self._get_record_count(source_config, source_table)
             if source_count is None:
@@ -162,6 +168,20 @@ class ValidationTool:
             collection = db[table_name]
             return collection.count_documents({})
     
+    def _es_refresh(self, config: DatabaseConfig, table_name: str) -> None:
+        """强制刷新 ES 索引，让 count/聚合读到最新可见状态（失败不阻断校验）。"""
+        try:
+            from .db import es_client
+
+            validate_identifier(table_name, allow_qualified=False, field="索引名")
+            with es_client(
+                host=config.host, port=config.port,
+                username=config.username, password=config.password,
+            ) as es:
+                es.indices.refresh(index=table_name)
+        except Exception as e:  # refresh 失败不应阻断校验主流程
+            logger.warning(f"ES refresh 失败（继续用近实时视图校验）: {e}")
+
     def _get_es_count(self, config: DatabaseConfig, table_name: str) -> Optional[int]:
         """获取 Elasticsearch 索引记录数。"""
         from .db import es_client
