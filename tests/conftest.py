@@ -27,7 +27,7 @@ sys.exit(int(os.environ.get("MOCK_EXIT", "0")))
 def fake_datax(tmp_path):
     """构造一个假的 DataX 安装目录。"""
     home = tmp_path / "datax"
-    (home / "bin").mkdir(parents=True)
+    (home / "bin").mkdir(parents=True, exist_ok=True)
     (home / "bin" / "datax.py").write_text(MOCK_DATAX_SCRIPT, encoding="utf-8")
     return home
 
@@ -42,6 +42,14 @@ def isolate_state(tmp_path, monkeypatch):
 
     monkeypatch.setattr(config, "STATE_STORE_PATH", str(tmp_path / "state" / "tasks.db"))
     monkeypatch.setattr(config, "DATAX_WORK_DIR", str(tmp_path / "jobs"))
+    # 假 DataX 安装目录：引擎可用性检查只看 bin/datax.py 是否存在；
+    # pytest 从不真正跑 DataX 子进程（执行均打桩），统一造假避免依赖开发者本机。
+    # 目录名用独立名（fake_datax_home）：Windows 路径大小写不敏感，不能与测试夹具
+    # 自建的 tmp_path/datax 或 tmp_path/DataX 撞名导致 mkdir FileExistsError
+    datax_home = tmp_path / "fake_datax_home"
+    (datax_home / "bin").mkdir(parents=True, exist_ok=True)
+    (datax_home / "bin" / "datax.py").write_text(MOCK_DATAX_SCRIPT, encoding="utf-8")
+    monkeypatch.setattr(config, "DATAX_HOME", str(datax_home))
     monkeypatch.setattr(config, "LOG_FILE", str(tmp_path / "logs" / "app.log"))
     monkeypatch.setattr(config, "LLM_API_KEY", "test-key")
     monkeypatch.setattr(config, "LLM_BASE_URL", "http://localhost:9/v1")

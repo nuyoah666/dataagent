@@ -1,8 +1,8 @@
 # 环境与密钥
 .env
 
-# 运行时产物
-state/
+# 运行时产物（锚定根目录：/state 是运行时状态与加密主密钥；勿写成 state/，会误伤 src/state 源码包）
+/state/
 logs/
 jobs/
 *.db
@@ -50,4 +50,4 @@ docs/dev-notes/
 logs/*.log
 # 数据源加密主密钥（自动生成，切勿提交）
 .secret_key
-state/.secret_key
+/state/.secret_key

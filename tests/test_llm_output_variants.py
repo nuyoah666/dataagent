@@ -8,8 +8,24 @@
 from src.tools.config_processor import (
     apply_ods_target_naming, normalize_datax_config, normalize_intent, process_config,
 )
+import pytest
+
 from src.tools.credentials import apply_intent_defaults
 from src.config import config
+from src.config.config import Config
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_creds(monkeypatch):
+    """自带凭据，不依赖开发者本机 .env（CI 无 .env 时默认密码为空会被判非法）。"""
+    monkeypatch.setattr(Config, "MYSQL_CONFIG", {
+        "host": "127.0.0.1", "port": 3306,
+        "username": "root", "password": "pw", "database": "cdc_test_db",
+    })
+    monkeypatch.setattr(Config, "STARROCKS_CONFIG", {
+        "host": "127.0.0.1", "port": 9031,
+        "username": "datax", "password": "pw", "database": "datax_test",
+    })
 
 SRC_SCHEMA = {
     "success": True,

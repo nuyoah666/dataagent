@@ -1,8 +1,23 @@
 """运维自动修复闭环（确定性重建配置）测试。"""
+import pytest
+
 from src.tools.remediation import (
     auto_remediate_integration,
     _detect_issues,
 )
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_creds(monkeypatch):
+    """测试自带凭据，不依赖开发者本机 .env（CI 无 .env 时默认密码为空）。"""
+    from src.config.config import Config
+    monkeypatch.setattr(Config, "STARROCKS_CONFIG", {
+        "host": "127.0.0.1", "port": 9031,
+        "username": "datax", "password": "pw", "database": "datax_test",
+    })
+    monkeypatch.setattr(Config, "ES_CONFIG", {
+        "host": "localhost", "port": 9200, "username": "", "password": "",
+    })
 
 
 def _schema():
