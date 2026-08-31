@@ -62,48 +62,48 @@
 
 ```mermaid
 flowchart TB
-    U[用户：自然语言 / 同步向导 / MCP 客户端] --> API[FastAPI + Web 工作台<br/>对话·监控·向导·语义层配置]
-    API --> R[意图路由<br/>规则计分 → LLM 兜底]
+    U["用户：自然语言 / 同步向导 / MCP 客户端"] --> API["FastAPI + Web 工作台<br/>对话·监控·向导·语义层配置"]
+    API --> R["意图路由<br/>规则计分 → LLM 兜底"]
 
-    R --> W1[集成工作流]
-    R --> W2[ETL 工作流]
-    R --> W3[问数工作流]
-    R -.失败自动转运维.-> WO[运维工作流]
+    R --> W1["集成工作流"]
+    R --> W2["ETL 工作流"]
+    R --> W3["问数工作流"]
+    R -.失败自动转运维.-> WO["运维工作流"]
 
-    subgraph W1[数据集成（workflow：确定性状态机）]
+    subgraph W1["数据集成（确定性 workflow）"]
         direction LR
-        C1[配置<br/>规则+模板直出<br/>Pydantic/预检] --> G1{{人工审批门禁}}
-        G1 --> PS[同步前操作<br/>preSql 清空目标]
-        PS --> X1[执行<br/>SyncEngine]
-        X1 --> V1[独立复查<br/>行数/主键/抽样]
+        C1["配置<br/>规则+模板直出<br/>Pydantic/预检"] --> G1{{"人工审批门禁"}}
+        G1 --> PS["同步前操作<br/>preSql 清空目标"]
+        PS --> X1["执行<br/>SyncEngine"]
+        X1 --> V1["独立复查<br/>行数/主键/抽样"]
     end
 
-    subgraph W2[ETL 开发]
+    subgraph W2["ETL 开发"]
         direction LR
-        C2[配置<br/>ODS→DWD 透传模板<br/>码值映射] --> G2{{人工审批}}
-        G2 --> X2[执行<br/>建表+INSERT OVERWRITE]
-        X2 --> V2[校验]
+        C2["配置<br/>ODS→DWD 透传模板<br/>码值映射"] --> G2{{"人工审批"}}
+        G2 --> X2["执行<br/>建表+INSERT OVERWRITE"]
+        X2 --> V2["校验"]
     end
 
-    subgraph W3[问数（只读，免审批）]
+    subgraph W3["问数（只读，免审批）"]
         direction LR
-        C3[语义解析<br/>LLM→结构化查询] --> X3[代码生成只读 SQL<br/>语义层口径]
-        X3 --> V3[结果自检<br/>∑复算/截断/空结果]
+        C3["语义解析<br/>LLM→结构化查询"] --> X3["代码生成只读 SQL<br/>语义层口径"]
+        X3 --> V3["结果自检<br/>∑复算/截断/空结果"]
     end
 
-    subgraph WO[运维 Agent（真正的 agent：开放题）]
+    subgraph WO["运维 Agent（真正的 agent：开放题）"]
         direction LR
-        D1[① 确定性诊断<br/>校验结论+日志签名] --> D2[② RAG事故库+Web检索]
-        D2 --> D3[③ LLM 诊断兜底]
-        D3 --> RX[能修→弹回重审批<br/>不能修→根因回写]
-        D3 --> KB[(事故知识库<br/>ES，版本化沉淀)]
+        D1["① 确定性诊断<br/>校验结论+日志签名"] --> D2["② RAG事故库+Web检索"]
+        D2 --> D3["③ LLM 诊断兜底"]
+        D3 --> RX["能修→弹回重审批<br/>不能修→根因回写"]
+        D3 --> KB[("事故知识库<br/>ES，版本化沉淀")]
     end
 
-    X1 --> ENGG[(SyncEngine 可插拔)]
-    ENGG --> E1[batch：DataX<br/>已落地]
-    ENGG -.预留位.-> E2[stream：Flink CDC→Paimon]
+    X1 --> ENGG[("SyncEngine 可插拔")]
+    ENGG --> E1["batch：DataX<br/>已落地"]
+    ENGG -.预留位.-> E2["stream：Flink CDC→Paimon"]
 
-    DS[(数据源)<br/>MySQL · StarRocks · MongoDB · ES]
+    DS[("数据源<br/>MySQL · StarRocks · MongoDB · ES")]
     C1 -.表发现/schema.-> DS
     X1 --> DS
     X2 --> DS
@@ -113,7 +113,7 @@ flowchart TB
     V1 -.失败.-> D1
     X1 -.rc≠0.-> D1
 
-    OBS[(可观测)<br/>决策日志 · 审计 · LangSmith trace · tasks.db]
+    OBS[("可观测<br/>决策日志 · 审计 · LangSmith trace · tasks.db")]
     C1 & G1 & PS & V1 & D3 -.每步决策/审计.-> OBS
 ```
 
