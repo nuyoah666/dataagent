@@ -76,9 +76,19 @@ _MONGO_TYPE_ALIAS = {"str": "string", "id": "long", "boolean": "bool", "binary":
 
 # Mongo 采样 schema 的 Python 类型名 → DataX mongo 类型
 _PY_TYPE_TO_MONGO = {
-    "str": "string", "int": "int", "float": "double", "bool": "bool",
+    "str": "string", "int": "int", "int32": "int", "int64": "long",
+    "float": "double", "bool": "bool",
     "datetime": "date", "objectid": "objectid", "dict": "string",
     "list": "array", "bytes": "bytes", "nonetype": "string",
+}
+
+# Mongo 采样 schema 的 Python/BSON 类型名 -> DataX ES 插件类型
+# （源端为 Mongo 时，列只有 types 没有 SQL type，writer 侧同样需要映射）
+_PY_TYPE_TO_ES = {
+    "str": "keyword", "int": "integer", "int32": "integer", "int64": "long",
+    "float": "double", "bool": "boolean", "datetime": "date",
+    "objectid": "keyword", "dict": "object", "list": "object",
+    "bytes": "binary", "nonetype": "keyword",
 }
 
 
@@ -94,6 +104,7 @@ class PluginSpec:
     field_types: set             # 插件合法类型（typed 规范化用）
     type_alias: dict             # 类型别名 -> 合法类型
     mongo_schema: bool = False   # reader 采样 schema（Python 类型映射）分支
+    py_type_map: dict = field(default_factory=dict)  # Mongo 采样类型名 -> 插件类型（writer 侧）
     noise_keys: tuple = ()       # 清理 LLM 噪声键
     defaults: dict = field(default_factory=dict)  # 静态默认参数
     column_key: str = "name"     # typed 列的字段键（mongo 用 name）
@@ -120,6 +131,7 @@ _PLUGIN_SPECS: List[PluginSpec] = [
         column_style="typed",
         type_map=_PY_TYPE_TO_MONGO, field_types=_MONGO_FIELD_TYPES,
         type_alias=_MONGO_TYPE_ALIAS, mongo_schema=True,
+        py_type_map=_PY_TYPE_TO_MONGO,
         noise_keys=("host", "port", "database", "collection"),
     ),
     PluginSpec(
@@ -145,7 +157,7 @@ _PLUGIN_SPECS: List[PluginSpec] = [
         aliases=("elastic",),
         column_style="typed",
         type_map=_MYSQL_TO_ES_TYPE, field_types=_ES_FIELD_TYPES,
-        type_alias=_ES_TYPE_ALIAS,
+        type_alias=_ES_TYPE_ALIAS, py_type_map=_PY_TYPE_TO_ES,
         defaults={"type": "_doc", "cleanup": False, "batchSize": 1000},
         prefer_existing=True, fallback_type="keyword",
     ),
@@ -154,7 +166,7 @@ _PLUGIN_SPECS: List[PluginSpec] = [
         aliases=("mongo",),
         column_style="typed",
         type_map=_MYSQL_TO_MONGO_TYPE, field_types=_MONGO_FIELD_TYPES,
-        type_alias=_MONGO_TYPE_ALIAS,
+        type_alias=_MONGO_TYPE_ALIAS, py_type_map=_PY_TYPE_TO_MONGO,
         noise_keys=(
             "host", "port", "username", "password", "database",
             "collection", "upsertKey", "upsertInfo",
@@ -725,7 +737,7 @@ def _apply_schema_columns(config: Dict[str, Any], schema: Dict[str, Any]) -> Dic
     return config
 
 
-def _detect_pk_columns(schema: Dict[str, Any]) -> List[str]:
+def detect_pk_columns(schema: Dict[str, Any]) -> List[str]:
     """探测源表主键列（用于 ES 文档 _id / StarRocks 主键表）。
 
     依次：schema.primary_key -> 列标记（MySQL 的 key=PRI / StarRocks 的 key=true）
@@ -745,6 +757,10 @@ def _detect_pk_columns(schema: Dict[str, Any]) -> List[str]:
     return ["id"] if "id" in names else []
 
 
+# 向后兼容别名
+_detect_pk_columns = detect_pk_columns
+
+
 def _apply_es_primary_key(config: Dict[str, Any], schema: Dict[str, Any]) -> None:
     """ES writer：用业务主键作为文档 _id，actionType=index 按 _id upsert。
 
@@ -752,7 +768,7 @@ def _apply_es_primary_key(config: Dict[str, Any], schema: Dict[str, Any]) -> Non
     累积成多份）。配置后同一主键重复写入即覆盖，天然幂等（等价 DataWorks 的
     primaryKeyInfo）。无主键表（纯流水）保留 ES 自动 _id。
     """
-    pk_cols = _detect_pk_columns(schema)
+    pk_cols = detect_pk_columns(schema)
     for item in config.get("job", {}).get("content", []):
         writer = item.get("writer") or {}
         if writer.get("name") != "elasticsearchwriter":
@@ -807,13 +823,21 @@ def _fill_typed_columns(
             col_name = col.get("name", "")
             if not col_name or col_name == "_id":
                 continue
-            if spec.mongo_schema:
-                py_types = col.get("types") or [col.get("type", "str")]
+            py_types = col.get("types")
+            if py_types:
+                # Mongo 采样 schema：列只有 Python/BSON 类型名（Int64/str/...），
+                # reader 与 writer 都走 py_type_map；未覆盖类型兜底 fallback_type
                 first = str(py_types[0]).lower()
-                col_type = spec.type_map.get(first, spec.fallback_type)
+                type_map = spec.py_type_map or spec.type_map
+                col_type = type_map.get(first, spec.fallback_type)
             else:
-                raw_type = str(col.get("type", "")).lower().split("(")[0].split()[0]
-                col_type = spec.type_map.get(raw_type, spec.fallback_type)
+                # SQL 源：type 形如 "bigint(20) unsigned"；空串时 split() 为 []，需兜底
+                tokens = str(col.get("type", "")).lower().split("(")[0].split()
+                raw_type = tokens[0] if tokens else ""
+                col_type = (
+                    spec.type_map.get(raw_type, spec.fallback_type)
+                    if raw_type else spec.fallback_type
+                )
             mapped.append({spec.column_key: col_name, "type": col_type})
         if mapped:
             param["column"] = mapped

@@ -158,7 +158,8 @@ async function initWizard() {
   setStep(1);
   try {
     const data = await api('/datasources');
-    const srcs = (data.sources || []).filter(s => ['mysql', 'starrocks'].includes(s.db_type));
+    // 源端：MySQL/StarRocks/MongoDB 可作源；ES 仅作目标端（开源 DataX 无 elasticsearchreader）
+    const srcs = (data.sources || []).filter(s => ['mysql', 'starrocks', 'mongodb'].includes(s.db_type));
     $('wizSource').innerHTML = '<option value="">选择源数据源…</option>' +
       srcs.map(s => `<option value="${escapeHtml(s.name)}">${escapeHtml(s.name)}（${DBTYPE_LABELS[s.db_type] || s.db_type}）</option>`).join('');
   } catch (e) {

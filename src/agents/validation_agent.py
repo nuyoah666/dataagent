@@ -43,17 +43,17 @@ class ValidationAgent(BaseAgent):
                     "current_step": "validation_error",
                 }
 
-            # 优先使用源表结构中的真实主键，而不是硬编码 "id"
-            primary_key = "id"
-            source_schema = state.get("source_schema") or {}
-            if source_schema.get("success") and source_schema.get("primary_key"):
-                primary_key = source_schema["primary_key"]
+            # 目标端业务主键：与配置生成共用同一探测逻辑（ES 文档 _id / StarRocks
+            # 主键表 / 唯一性校验都以此为准）。mongo 源的 _id 不同步到目标端，
+            # 自动回退到业务键 id；无主键流水表返回 None，跳过唯一性校验
+            from ..tools.config_processor import detect_pk_columns
 
-            # mongo 源的 _id 不会同步到 MySQL 目标表，唯一性校验需回退到 id 列
-            target_db_type = str(intent.get("target_db_type", "mysql")).lower()
-            if primary_key == "_id" and target_db_type == "mysql":
-                col_names = [c.get("name") for c in (source_schema.get("columns") or [])]
-                primary_key = "id" if "id" in col_names else None
+            source_schema = state.get("source_schema") or {}
+            pk_cols = (
+                detect_pk_columns(source_schema)
+                if source_schema.get("success") else ["id"]
+            )
+            primary_key = pk_cols[0] if pk_cols else None
 
             # 执行校验
             sync_type = str(intent.get("sync_type", "")).lower()

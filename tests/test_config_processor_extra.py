@@ -572,9 +572,76 @@ class TestSchemaColumns:
         assert w["actionType"] == "index"
         assert w["primaryKeyInfo"] == {"column": ["id"], "fieldDelimiter": ",", "type": "specific"}
 
+    def test_mongo_source_typed_columns_for_all_targets(self):
+        # 回归：Mongo 采样 schema 的列只有 types（Python/BSON 类型名），没有
+        # SQL style type 字段。mongodb -> ES/StarRocks/MongoDB 走 intent 兜底
+        # 构建时，writer 侧曾取 col["type"] 为空串、split()[0] 越界（IndexError）。
+        schema = {
+            "success": True,
+            "primary_key": "_id",
+            "columns": [
+                {"name": "_id", "types": ["ObjectId"]},
+                {"name": "id", "types": ["Int64"]},
+                {"name": "name", "types": ["str"]},
+                {"name": "dt", "types": ["str"]},
+            ],
+        }
+        # mongodb -> elasticsearch：reader/writer 均为 typed 列
+        intent = _intent(source_db_type="mongodb", source_port=27017,
+                         source_username="", source_password="",
+                         source_table="user_from_mysql",
+                         target_db_type="elasticsearch",
+                         target_table="test_wiz_mongo_es")
+        result = process_config(intent, schema, llm_config=None)
+        assert result["success"] is True, result.get("errors")
+        content = result["config"]["job"]["content"][0]
+        rcols = {c["name"]: c["type"] for c in content["reader"]["parameter"]["column"]}
+        wcols = {c["name"]: c["type"] for c in content["writer"]["parameter"]["column"]}
+        assert "_id" not in rcols  # ObjectId 主键不同步
+        assert rcols == {"id": "long", "name": "string", "dt": "string"}
+        assert wcols == {"id": "long", "name": "keyword", "dt": "keyword"}
+        # ES 文档 _id 映射业务键 id（_id 被排除后回退探测到 id 列）
+        wparam = content["writer"]["parameter"]
+        assert wparam["primaryKeyInfo"]["column"] == ["id"]
+        assert wparam["actionType"] == "index"
+        # channel 强制 1（mongo 源不支持分片）
+        assert result["config"]["job"]["setting"]["speed"]["channel"] == 1
+
+        # mongodb -> starrocks（writer 为 plain 列名数组）
+        intent_sr = _intent(source_db_type="mongodb", source_port=27017,
+                            source_username="", source_password="",
+                            source_table="user_from_mysql",
+                            target_db_type="starrocks", target_port=9031,
+                            target_username="datax", target_password="pw",
+                            target_database="datax_test",
+                            target_table="ods_user_from_mysql")
+        result_sr = process_config(intent_sr, schema, llm_config=None)
+        assert result_sr["success"] is True, result_sr.get("errors")
+        sr_writer = result_sr["config"]["job"]["content"][0]["writer"]
+        assert sr_writer["name"] == "mysqlwriter"
+        assert sr_writer["parameter"]["column"] == ["id", "name", "dt"]
+
+    def test_typed_columns_tolerate_missing_type(self):
+        # 回归：列既无 type 也无 types 时不越界，统一兜底 fallback_type
+        from src.tools.config_processor import detect_pk_columns
+        schema = {
+            "success": True,
+            "primary_key": "id",
+            "columns": [
+                {"name": "id"},  # 类型信息缺失
+                {"name": "name", "type": ""},  # 空串同样不越界
+            ],
+        }
+        intent = _intent(source_db_type="mysql", target_db_type="elasticsearch",
+                         target_table="es_idx")
+        result = process_config(intent, schema, llm_config=None)
+        assert result["success"] is True, result.get("errors")
+        wcols = result["config"]["job"]["content"][0]["writer"]["parameter"]["column"]
+        assert all(c["type"] == "keyword" for c in wcols)
+
     def test_es_pk_detected_from_starrocks_key_flag(self):
         # StarRocks DESCRIBE 的 Key 列返回 'true' 而非 'PRI'，主键探测需兼容。
-        from src.tools.config_processor import _detect_pk_columns
+        from src.tools.config_processor import detect_pk_columns
         schema = {
             "primary_key": None,
             "columns": [
@@ -582,11 +649,11 @@ class TestSchemaColumns:
                 {"name": "uid", "type": "bigint", "key": "false"},
             ],
         }
-        assert _detect_pk_columns(schema) == ["id"]
+        assert detect_pk_columns(schema) == ["id"]
         # 无主键、无 id 列 -> 空（保留 ES 自动 _id）
         schema2 = {"primary_key": None, "columns": [
             {"name": "event", "type": "varchar", "key": "false"}]}
-        assert _detect_pk_columns(schema2) == []
+        assert detect_pk_columns(schema2) == []
 
     def test_preflight_rejects_empty_reader_columns(self):
         from src.tools.datax_tool import _preflight_readable

@@ -214,6 +214,18 @@ def test_fields(
         }
 
 
+
+def _mongo_uri(raw: dict) -> str:
+    """构造 MongoDB 连接 URI（无鉴权时不带账号密码）。"""
+    host, port = raw["host"], int(raw["port"])
+    user, pwd = raw.get("username", ""), raw.get("password", "")
+    if user:
+        from urllib.parse import quote_plus
+
+        return f"mongodb://{quote_plus(user)}:{quote_plus(pwd)}@{host}:{port}"
+    return f"mongodb://{host}:{port}"
+
+
 def _ping(raw: dict) -> None:
     db_type = raw["db_type"]
     host, port = raw["host"], int(raw["port"])
@@ -231,12 +243,7 @@ def _ping(raw: dict) -> None:
     elif db_type == "mongodb":
         from pymongo import MongoClient
 
-        uri = f"mongodb://{host}:{port}"
-        if user:
-            from urllib.parse import quote_plus
-
-            uri = f"mongodb://{quote_plus(user)}:{quote_plus(pwd)}@{host}:{port}"
-        client = MongoClient(uri, serverSelectionTimeoutMS=5000)
+        client = MongoClient(_mongo_uri(raw), serverSelectionTimeoutMS=5000)
         client.admin.command("ping")
         client.close()
     elif db_type == "elasticsearch":
@@ -251,16 +258,27 @@ def _ping(raw: dict) -> None:
 
 
 def discover_source(source_id: int, database: str = None) -> dict:
-    """发现数据源的库（database 为空）或指定库的表（database 非空）。"""
+    """发现数据源的库（database 为空）或指定库的表/集合（database 非空）。
+
+    MySQL/StarRocks 走 information_schema；MongoDB 列库/集合；
+    Elasticsearch 不支持（开源 DataX 无 elasticsearchreader，ES 仅作目标端）。
+    """
     raw = _get_raw(source_id)
     if not raw:
         return {"success": False, "error": "数据源不存在"}
-    if raw["db_type"] not in ("mysql", "starrocks"):
-        return {
-            "success": False,
-            "error": f"{raw['db_type']} 暂不支持元数据发现",
-            "databases": [],
-        }
+    if raw["db_type"] in ("mysql", "starrocks"):
+        return _discover_jdbc(raw, database)
+    if raw["db_type"] == "mongodb":
+        return _discover_mongodb(raw, database)
+    return {
+        "success": False,
+        "error": "Elasticsearch 仅支持作为目标端，无源端元数据发现",
+        "databases": [],
+        "tables": [],
+    }
+
+
+def _discover_jdbc(raw: dict, database: str = None) -> dict:
     try:
         import pymysql
 
@@ -301,6 +319,35 @@ def discover_source(source_id: int, database: str = None) -> dict:
             conn.close()
     except Exception as e:
         logger.warning("数据源发现失败: %s", e)
+        return {"success": False, "error": str(e), "databases": [], "tables": []}
+
+
+_MONGO_SYSTEM_DBS = ("admin", "config", "local")
+
+
+def _discover_mongodb(raw: dict, database: str = None) -> dict:
+    """MongoDB 元数据发现：列业务库 / 列集合（集合无 comment，返回空串）。"""
+    from pymongo import MongoClient
+
+    try:
+        client = MongoClient(_mongo_uri(raw), serverSelectionTimeoutMS=5000)
+        try:
+            if not database:
+                dbs = [
+                    d for d in client.list_database_names()
+                    if d not in _MONGO_SYSTEM_DBS
+                ]
+                return {"success": True, "databases": sorted(dbs), "tables": []}
+            colls = client[database].list_collection_names()
+            return {
+                "success": True,
+                "databases": [],
+                "tables": [{"name": c, "comment": ""} for c in sorted(colls)],
+            }
+        finally:
+            client.close()
+    except Exception as e:
+        logger.warning("MongoDB 数据源发现失败: %s", e)
         return {"success": False, "error": str(e), "databases": [], "tables": []}
 
 
