@@ -14,7 +14,9 @@ from ..tools import (
     search_datax_docs, get_table_schema, DatabaseConfig, discover_tables,
     process_config, normalize_intent,
 )
-from ..tools.config_processor import apply_ods_target_naming, get_template
+from ..tools.config_processor import (
+    apply_ods_target_naming, endpoint_capability_error, get_template,
+)
 from ..utils import llm_circuit_breaker, rag_circuit_breaker
 from ..utils.llm import get_agent_llm, llm_json, LLMJsonError
 from ..config import config
@@ -82,6 +84,16 @@ class ConfigAgent(BaseAgent):
             }
         # 3. 标准化（别名、ES 索引名归位、sync_type 等），保证下游一致
         intent = normalize_intent(intent)
+        # 3.0 端能力确定性拦截：不支持的组合（如 ES 作源端——开源 DataX 无
+        # elasticsearchreader）在此直接给出可读错误与替代方案，不进
+        # 表发现/schema/RAG/LLM，也不触发配置失败后的 RAG 重试
+        cap_err = endpoint_capability_error(intent)
+        if cap_err:
+            logger.warning("端类型不支持，拦截于配置生成前: %s", cap_err[:60])
+            return {
+                **state, "parsed_intent": intent, "error": cap_err,
+                "current_step": "config_error",
+            }
         # 3.1 多表批量：显式指定源表时覆盖 LLM 解析结果
         if state.get("table_override"):
             intent["source_table"] = state["table_override"]

@@ -25,8 +25,10 @@ logger = logging.getLogger(__name__)
 # DataX reader/writer 插件名映射
 _READER_MAP = {
     "mysql": "mysqlreader",
+    "starrocks": "mysqlreader",  # StarRocks FE 兼容 MySQL 协议，走 mysqlreader
     "mongodb": "mongodbreader",
-    "elasticsearch": None,  # ES 无官方 reader
+    # 注意：开源 DataX 没有 elasticsearchreader（ES 仅能作为目标端写入，
+    # 阿里云 DataWorks 商业版才提供 ES Reader），见 _READER_CAPABLE 拦截
 }
 _WRITER_MAP = {
     "mysql": "mysqlwriter",
@@ -34,6 +36,30 @@ _WRITER_MAP = {
     "elasticsearch": "elasticsearchwriter",
     "starrocks": "mysqlwriter",  # StarRocks FE 兼容 MySQL 协议，走 mysqlwriter
 }
+
+# 端能力矩阵（开源 DataX 插件事实）：配置生成前确定性拦截不支持的组合，
+# 避免生成跑不通的配置让 DataX 报模糊错误（如 ES 作源端）
+_READER_CAPABLE = ("mysql", "starrocks", "mongodb")
+_WRITER_CAPABLE = ("mysql", "starrocks", "mongodb", "elasticsearch")
+_READER_CAPABLE_LABEL = "MySQL / StarRocks / MongoDB"
+_WRITER_CAPABLE_LABEL = "MySQL / StarRocks / MongoDB / Elasticsearch"
+
+
+def endpoint_capability_error(intent: Dict[str, Any]) -> Optional[str]:
+    """端类型能力校验：不支持返回可读错误（含替代方案），支持返回 None。"""
+    src = normalize_db_type(str(intent.get("source_db_type") or "mysql"))
+    tgt = normalize_db_type(str(intent.get("target_db_type") or ""))
+    if src == "elasticsearch":
+        return (
+            "DataX 开源版没有 elasticsearchreader 插件：Elasticsearch 仅支持作为目标端写入"
+            "（阿里云 DataWorks 商业版才提供 ES Reader）。从 ES 导出数据请改用 "
+            "Logstash / ES scroll(search_after) API / Flink，或先落到 MySQL、MongoDB 再同步。"
+        )
+    if src not in _READER_CAPABLE:
+        return f"暂不支持的源端类型「{src}」：DataX 源端目前支持 {_READER_CAPABLE_LABEL}"
+    if tgt and tgt not in _WRITER_CAPABLE:
+        return f"暂不支持的目标端类型「{tgt}」：DataX 目标端目前支持 {_WRITER_CAPABLE_LABEL}"
+    return None
 
 # MySQL → ES 字段类型映射
 _MYSQL_TO_ES_TYPE = {
@@ -657,16 +683,20 @@ def _build_content_from_intent(intent: Dict[str, Any]) -> List[Dict[str, Any]]:
     src_type = intent.get("source_db_type", "mysql")
     tgt_type = intent.get("target_db_type", "elasticsearch")
 
-    reader_name = _READER_MAP.get(src_type, "mysqlreader")
-    writer_name = _WRITER_MAP.get(tgt_type, "elasticsearchwriter")
-
-    if not reader_name:
-        reader_name = "mysqlreader"
+    reader_name = _READER_MAP.get(src_type)
+    writer_name = _WRITER_MAP.get(tgt_type)
+    # 能力矩阵已在 process() 入口拦截；走到这里说明漏网，显式报错而非静默
+    # 替成 mysqlreader/elasticsearchwriter（历史坑：ES 源端生成空参 mysqlreader）
+    if not reader_name or not writer_name:
+        raise ValueError(
+            endpoint_capability_error(intent)
+            or f"不支持的 DataX 插件组合: {src_type} -> {tgt_type}"
+        )
 
     reader = {"name": reader_name, "parameter": {}}
     writer = {"name": writer_name, "parameter": {}}
 
-    if src_type == "mysql":
+    if src_type in ("mysql", "starrocks"):
         reader["parameter"] = {
             "username": intent.get("source_username", "root"),
             "password": intent.get("source_password", ""),
@@ -1088,6 +1118,13 @@ class ConfigProcessor:
         intent = normalize_intent(intent)
         src_type = intent.get("source_db_type", "mysql")
         tgt_type = intent.get("target_db_type", "elasticsearch")
+
+        # Step 1.5: 端能力确定性拦截（如 ES 作源端——开源 DataX 无 reader 插件），
+        # 直接返回可读错误与替代方案，不浪费 LLM/RAG/模板尝试
+        cap_err = endpoint_capability_error(intent)
+        if cap_err:
+            logger.warning("端类型不支持: %s", cap_err[:60])
+            return {"success": False, "config": None, "errors": [cap_err], "source": "unsupported"}
 
         # Step 2: 尝试使用 LLM 配置
         if llm_config:

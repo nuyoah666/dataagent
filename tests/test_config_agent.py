@@ -89,3 +89,26 @@ def test_es_defaults_filled():
     out = agent._apply_config_defaults(_intent())
     assert out["target_host"] == config.ES_CONFIG["host"]
     assert out["target_port"] == config.ES_CONFIG["port"]
+
+
+def test_es_source_blocked_before_llm_and_schema(monkeypatch):
+    """ES 作源端：ConfigAgent 在表发现/schema/RAG/LLM 之前确定性拦截。"""
+    agent = ConfigAgent()
+    monkeypatch.setattr(agent, "_ensure_llm", lambda: True)
+
+    def _boom(*a, **k):
+        raise AssertionError("拦截后不应触发表发现/schema 等下游步骤")
+
+    monkeypatch.setattr(agent, "_resolve_source_table", _boom)
+    monkeypatch.setattr(agent, "_get_source_schema", _boom)
+
+    out = agent.run({
+        "user_query": "把 ES 的 idx_user 同步到 StarRocks",
+        "parsed_intent": _intent(
+            source_db_type="elasticsearch", source_table="idx_user",
+            target_db_type="starrocks", target_database="datax_test",
+        ),
+    })
+    assert out["current_step"] == "config_error"
+    assert "elasticsearchreader" in out["error"]
+    assert "Logstash" in out["error"]

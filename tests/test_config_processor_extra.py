@@ -1104,3 +1104,58 @@ class TestStarRocksWriter:
         w = result["config"]["job"]["content"][0]["writer"]
         assert w["name"] == "mysqlwriter"
         assert w["parameter"]["password"] == "Datax@2026"
+
+
+class TestEndpointCapability:
+    """端能力矩阵：开源 DataX 无 elasticsearchreader，ES 作源端必须确定性拦截。"""
+
+    def test_es_source_rejected_with_alternative(self):
+        from src.tools.config_processor import endpoint_capability_error
+        msg = endpoint_capability_error(_intent(
+            source_db_type="elasticsearch", source_host="localhost", source_port=9200,
+            source_database="", source_table="idx_user",
+            target_db_type="starrocks", target_port=9030, target_database="datax_test",
+        ))
+        assert msg is not None
+        assert "elasticsearchreader" in msg
+        assert "Logstash" in msg  # 给出替代方案，不是死路
+
+    def test_es_alias_same_guard(self):
+        from src.tools.config_processor import endpoint_capability_error
+        assert endpoint_capability_error(_intent(source_db_type="es")) is not None
+
+    def test_unknown_source_and_target_rejected(self):
+        from src.tools.config_processor import endpoint_capability_error
+        assert "oracle" in endpoint_capability_error(_intent(source_db_type="oracle"))
+        assert "redis" in endpoint_capability_error(
+            _intent(target_db_type="redis"))
+
+    def test_supported_combos_pass(self):
+        from src.tools.config_processor import endpoint_capability_error
+        for src, tgt in [
+            ("mysql", "elasticsearch"), ("mysql", "starrocks"),
+            ("mysql", "mongodb"), ("mongodb", "starrocks"),
+            ("starrocks", "mysql"), ("mongodb", "elasticsearch"),
+        ]:
+            assert endpoint_capability_error(
+                _intent(source_db_type=src, target_db_type=tgt)) is None, (src, tgt)
+
+    def test_process_config_es_source_fails_fast(self):
+        """ES 源端：process_config 直接失败，不产出跑不通的配置。"""
+        result = process_config(
+            _intent(source_db_type="elasticsearch", source_table="idx_user",
+                    target_db_type="starrocks", target_database="datax_test"),
+            schema={"columns": []}, llm_config=None,
+        )
+        assert result["success"] is False
+        assert result["config"] is None
+        assert result["source"] == "unsupported"
+        assert "elasticsearchreader" in result["errors"][0]
+
+    def test_build_content_es_source_raises_not_silent_mysqlreader(self):
+        """回归历史坑：ES 源端曾被静默替成空参 mysqlreader，DataX 报模糊错误。"""
+        import pytest
+        from src.tools.config_processor import _build_content_from_intent
+        with pytest.raises(ValueError, match="elasticsearchreader"):
+            _build_content_from_intent(_intent(
+                source_db_type="elasticsearch", source_table="idx_user"))
