@@ -1,7 +1,8 @@
 """单元测试。"""
 import sqlite3
 import sys, json, pytest
-sys.path.insert(0, r"F:\dataagent")
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import os
 os.environ["LANGCHAIN_TRACING_V2"] = "false"

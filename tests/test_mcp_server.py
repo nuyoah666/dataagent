@@ -1,6 +1,7 @@
 """MCP Server 测试：工具逻辑（单元）+ STDIO 协议（集成）。"""
 import json
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -150,7 +151,7 @@ def test_stdio_protocol_list_and_call_tools():
         params = StdioServerParameters(
             command=sys.executable,
             args=["-m", "src.mcp_server"],
-            cwd=r"F:\dataagent",
+            cwd=str(Path(__file__).resolve().parent.parent),
         )
         async with stdio_client(params) as (read, write):
             async with ClientSession(read, write) as session:
