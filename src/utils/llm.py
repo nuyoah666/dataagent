@@ -185,13 +185,18 @@ def _invoke_json(system: str, human: str, llm: Any) -> Dict[str, Any]:
 
 def _extract_usage(result: Any, runnable: Any) -> Dict[str, Any]:
     """从 LangChain 响应中提取 token 用量（兼容 usage_metadata 与原始 token_usage）。"""
-    usage = {"prompt_tokens": 0, "completion_tokens": 0, "cached_tokens": 0, "model": ""}
+    usage = {"prompt_tokens": 0, "completion_tokens": 0, "cached_tokens": 0,
+             "reasoning_tokens": 0, "model": ""}
     um = getattr(result, "usage_metadata", None)
     if isinstance(um, dict):
         usage["prompt_tokens"] = int(um.get("input_tokens") or 0)
         usage["completion_tokens"] = int(um.get("output_tokens") or 0)
         details = um.get("input_token_details") or {}
         usage["cached_tokens"] = int(details.get("cache_read") or 0)
+        # 推理模型（deepseek-r 系等）隐藏思考 token：completion 含 reasoning，
+        # 单独拆出用于成本归因（可见内容 = completion - reasoning）
+        out_details = um.get("output_token_details") or {}
+        usage["reasoning_tokens"] = int(out_details.get("reasoning") or 0)
     rm = getattr(result, "response_metadata", None) or {}
     tu = rm.get("token_usage") or {}
     if not usage["prompt_tokens"] and tu:

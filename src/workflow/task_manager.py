@@ -760,7 +760,8 @@ class TaskManager:
             except (json.JSONDecodeError, TypeError):
                 agg = {}
             agg["calls"] = int(agg.get("calls", 0)) + 1
-            for k in ("prompt_tokens", "completion_tokens", "cached_tokens"):
+            for k in ("prompt_tokens", "completion_tokens", "cached_tokens",
+                      "reasoning_tokens"):
                 agg[k] = int(agg.get(k, 0)) + int(usage.get(k, 0) or 0)
             agg["latency_ms"] = round(float(agg.get("latency_ms", 0)) + float(latency_ms), 1)
             models = agg.get("models") or {}

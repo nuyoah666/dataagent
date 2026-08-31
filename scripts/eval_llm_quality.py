@@ -77,12 +77,22 @@ class UsageCollector:
         llm_mod._record_usage = self._orig
 
     def totals(self) -> Dict[str, Any]:
+        return self.since(0)
+
+    def marker(self) -> int:
+        """记录当前调用次数游标，配合 since() 统计单个用例的增量用量。"""
+        return len(self.calls)
+
+    def since(self, marker: int) -> Dict[str, Any]:
+        """统计 marker 之后的 LLM 调用（单个用例的 token/次数/耗时）。"""
+        chunk = self.calls[marker:]
         return {
-            "calls": len(self.calls),
-            "prompt_tokens": sum(int(c.get("prompt_tokens", 0)) for c in self.calls),
-            "completion_tokens": sum(int(c.get("completion_tokens", 0)) for c in self.calls),
-            "cached_tokens": sum(int(c.get("cached_tokens", 0)) for c in self.calls),
-            "latency_ms": round(sum(float(c.get("latency_ms", 0)) for c in self.calls), 0),
+            "calls": len(chunk),
+            "prompt_tokens": sum(int(c.get("prompt_tokens", 0)) for c in chunk),
+            "completion_tokens": sum(int(c.get("completion_tokens", 0)) for c in chunk),
+            "reasoning_tokens": sum(int(c.get("reasoning_tokens", 0)) for c in chunk),
+            "cached_tokens": sum(int(c.get("cached_tokens", 0)) for c in chunk),
+            "latency_ms": round(sum(float(c.get("latency_ms", 0)) for c in chunk), 0),
         }
 
 
@@ -94,6 +104,55 @@ def _reset_llm_breaker():
         llm_circuit_breaker._failure_count = 0
     except Exception:
         pass
+
+
+# 效率层预算（评测四层之一）：结构/结果断言管「对不对」，预算管「贵不贵」。
+# 三个开放点生产路径都只应触发 1 次 LLM 调用（失败走确定性兜底，不重复打 LLM）。
+# token 拆成两口径：
+#   max_content_tokens   —— 可见输出（completion - reasoning），严格卡，防 prompt
+#                           诱导废话/啰嗦 JSON；这是我们真正消费的部分。
+#   max_reasoning_tokens —— 推理模型隐藏思考 token，默认不设门禁只度量报告（成本大头
+#                           往往在这里）；当某开放点切换到非推理模型后，可在该用例
+#                           case["budget"] 里设此值，防止模型悄悄退回推理型。
+# 覆盖：case["budget"] = {"max_calls": 1, "max_content_tokens": 300, "max_reasoning_tokens": 200}
+DEFAULT_BUDGETS: Dict[str, Dict[str, int]] = {
+    "intent": {"max_calls": 1, "max_content_tokens": 300},
+    "analysis": {"max_calls": 1, "max_content_tokens": 1200},
+    "ops": {"max_calls": 1, "max_content_tokens": 1500},
+}
+
+
+def assert_efficiency(category: str, case: Dict[str, Any], eff: Dict[str, Any]) -> List[str]:
+    """效率层断言：LLM 调用次数、可见内容 token、推理 token（可选）不超预算。
+
+    部分网关不回传 token 用量（completion_tokens=0），此时只断言调用次数，
+    避免在无用量环境误报。
+    """
+    errs: List[str] = []
+    budget = dict(DEFAULT_BUDGETS.get(category, {}))
+    budget.update(case.get("budget") or {})
+    calls = int(eff.get("calls", 0))
+    if "max_calls" in budget and calls > int(budget["max_calls"]):
+        errs.append(
+            f"效率层：LLM 调用 {calls} 次超预算 {budget['max_calls']} 次"
+            f"（检查是否重复调用/重试失控，确定性兜底不应再打 LLM）"
+        )
+    comp = int(eff.get("completion_tokens", 0))
+    reasoning = int(eff.get("reasoning_tokens", 0))
+    content = max(0, comp - reasoning)
+    ccap = budget.get("max_content_tokens")
+    if ccap and content > int(ccap):
+        errs.append(
+            f"效率层：可见输出 {content} tokens 超预算 {ccap}"
+            f"（输出变冗长；检查 prompt 是否诱导废话/多余字段）"
+        )
+    rcap = budget.get("max_reasoning_tokens")
+    if rcap and reasoning > int(rcap):
+        errs.append(
+            f"效率层：推理 token {reasoning} 超预算 {rcap}"
+            f"（确定性抽取不应使用重推理模型，考虑按 Agent 换轻量模型）"
+        )
+    return errs
 
 
 def _contains_any(text: str, keywords: List[str]) -> Optional[str]:
@@ -303,7 +362,7 @@ def llm_judge(category: str, case: Dict[str, Any], out: Dict[str, Any]) -> Optio
 # ---------------------------------------------------------------------- #
 
 
-def run_category(category: str, use_judge: bool) -> Dict[str, Any]:
+def run_category(category: str, use_judge: bool, collector: "Optional[UsageCollector]" = None) -> Dict[str, Any]:
     cases = _load_cases(category)
     pending_review = len(_load_cases(category, only_active=False)) - len(cases)
     runner, asserter = RUNNERS[category]
@@ -314,25 +373,37 @@ def run_category(category: str, use_judge: bool) -> Dict[str, Any]:
         _reset_llm_breaker()
         cid = case.get("id", "?")
         t0 = time.time()
+        mark0 = collector.marker() if collector else 0
         try:
             out, _ = runner(case)
             errs = asserter(case, out)
+            # 效率层：单用例 LLM 调用次数 / 输出 token 预算
+            eff = collector.since(mark0) if collector else {"calls": 0, "completion_tokens": 0, "reasoning_tokens": 0}
+            errs.extend(assert_efficiency(category, case, eff))
             judge = llm_judge(category, case, out) if use_judge else None
             ok = not errs
             # judge 分数 <3 也记为软失败（单列，不影响结构化通过率主指标）
             judge_ok = (judge is None) or (judge.get("score", 5) >= 3)
         except Exception as e:
             ok, errs, judge, judge_ok, out = False, [f"运行异常: {type(e).__name__}: {e}"], None, False, {}
+            eff = collector.since(mark0) if collector else {"calls": 0, "completion_tokens": 0, "reasoning_tokens": 0}
 
         if ok:
             passed += 1
+        content_tok = max(0, int(eff.get("completion_tokens", 0))
+                          - int(eff.get("reasoning_tokens", 0)))
         results.append({
             "id": cid, "ok": ok, "errors": errs,
             "judge": judge, "judge_ok": judge_ok,
             "ms": round((time.time() - t0) * 1000),
+            "llm_calls": eff.get("calls", 0),
+            "completion_tokens": eff.get("completion_tokens", 0),
+            "content_tokens": content_tok,
+            "reasoning_tokens": eff.get("reasoning_tokens", 0),
         })
         mark = "PASS" if ok else "FAIL"
-        print(f"  [{mark}] {cid}  ({results[-1]['ms']}ms)")
+        print(f"  [{mark}] {cid}  ({results[-1]['ms']}ms, {eff.get('calls', 0)} 次 LLM, "
+              f"内容 {content_tok} + 推理 {eff.get('reasoning_tokens', 0)} tok)")
         for e in errs:
             print(f"         - {e}")
         if judge:
@@ -367,7 +438,7 @@ def main() -> int:
     with UsageCollector() as usage:
         for cat in cats:
             print(f"\n=== {cat} ===")
-            summary.append(run_category(cat, args.judge))
+            summary.append(run_category(cat, args.judge, collector=usage))
 
     total = sum(s["total"] for s in summary)
     passed = sum(s["passed"] for s in summary)
@@ -390,6 +461,18 @@ def main() -> int:
     print(f"  token: 调用 {u['calls']} 次, 输入 {u['prompt_tokens']}, "
           f"输出 {u['completion_tokens']}, 缓存命中 {u['cached_tokens']}, "
           f"总耗时 {u['latency_ms']:.0f}ms")
+    # 效率层汇总：每个用例平均/峰值输出 token，便于发现成本漂移
+    all_res = [r for sm in summary for r in sm["results"]]
+    comps = [r.get("completion_tokens", 0) for r in all_res if r.get("completion_tokens")]
+    if comps:
+        total_out = sum(comps)
+        total_reason = sum(int(r.get("reasoning_tokens", 0)) for r in all_res)
+        share = 100.0 * total_reason / total_out if total_out else 0
+        worst = max(all_res, key=lambda r: r.get("completion_tokens", 0))
+        print(f"  效率层: 输出合计 {total_out} tok，其中推理 {total_reason} tok（{share:.0f}%）"
+              f"；单点峰值 {worst['completion_tokens']} tok（{worst['id']}）")
+        if share >= 50:
+            print("         提示：推理 token 占比过半——意图解析等确定性抽取可考虑换非推理轻量模型")
     if args.judge:
         print(f"  LLM-judge 低分(<3)用例: {judge_total}")
     print("=" * 50)

@@ -48,6 +48,17 @@ F:\Python\python3.11\python.exe scripts/eval_golden.py   # 应输出 27/27（或
 
 一条命令入口：`powershell -ExecutionPolicy Bypass -File scripts/check.ps1`
 
+LLM 档（改动 prompt / 开放点解析逻辑时，真实调 LLM，发版前手动跑，含效率层门禁）：
+
+```powershell
+F:\Python\python3.11\python.exe scripts/eval_llm_quality.py
+```
+
+除结构断言外，逐用例断言效率层：每用例 LLM 调用次数（默认 1 次）、可见内容 token
+（completion - reasoning）；推理 token 单独度量并在汇总报告占比。**注意当前模型是
+推理型，意图解析 90% 输出是隐藏推理 token，换轻量非推理模型可显著降本（见
+docs/dev-notes/ 评测蒸馏笔记）。**
+
 在线档（改动涉及真实同步/建表/审批链路时，需先启动服务和 MySQL/StarRocks/Mongo/ES）：
 
 ```powershell
