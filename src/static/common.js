@@ -33,6 +33,17 @@ async function api(url, opts) {
 }
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+// 页面间导航：若处于 /app 单页外壳的 iframe 中，通知外壳切 tab（保活不整页跳转）；否则直接跳转
+function gotoPage(path) {
+  try {
+    if (window.parent && window.parent !== window && typeof window.parent.shellGoto === 'function') {
+      window.parent.shellGoto(path);
+      return;
+    }
+  } catch (e) { /* 跨 frame 访问受限时退化为整页跳转 */ }
+  window.location.href = path;
+}
+
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
   const btn = $('themeToggle');
@@ -48,3 +59,7 @@ function toggleTheme() {
   applyTheme(next);
   localStorage.setItem(THEME_KEY, next);
 }
+// 其他同源页面（如 /app 外壳与其 iframe）切换主题后，本页实时跟随
+window.addEventListener('storage', e => {
+  if (e.key === THEME_KEY) applyTheme(e.newValue || 'dark');
+});

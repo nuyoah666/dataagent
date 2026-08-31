@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>数仓多 Agent 协作平台</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#129302;</text></svg>">
+<script src="/static/common.js"></script>
+<style>
+:root { --bg:#0f172a; --card:#1e293b; --border:#334155; --text:#e2e8f0; --muted:#94a3b8;
+        --ok:#22c55e; --err:#ef4444; --run:#f59e0b; --accent:#38bdf8; --warn:#eab308;
+        --hover:rgba(255,255,255,.05); --shadow:0 4px 16px rgba(0,0,0,.25); }
+:root[data-theme="light"] { --bg:#f1f5f9; --card:#ffffff; --border:#e2e8f0; --text:#0f172a;
+        --muted:#64748b; --ok:#16a34a; --err:#dc2626; --run:#d97706; --accent:#0284c7;
+        --warn:#ca8a04; --hover:rgba(15,23,42,.05); --shadow:0 2px 10px rgba(15,23,42,.08); }
+* { box-sizing:border-box; }
+html,body { height:100%; margin:0; }
+body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+       background:var(--bg); color:var(--text); display:flex; flex-direction:column; overflow:hidden; }
+.appbar { display:flex; align-items:center; gap:18px; height:54px; padding:0 18px;
+          background:var(--card); border-bottom:1px solid var(--border); flex:0 0 auto; }
+.brand { font-weight:700; font-size:15px; white-space:nowrap; display:flex; align-items:center; gap:8px; }
+.brand .dot { width:9px; height:9px; border-radius:50%; background:var(--ok); box-shadow:0 0 8px var(--ok); }
+.brand small { color:var(--muted); font-weight:400; font-size:11.5px; }
+.nav { display:flex; gap:4px; margin-left:8px; }
+.nav button { border:0; background:transparent; color:var(--muted); font-size:13.5px; font-weight:600;
+              padding:8px 14px; border-radius:8px; cursor:pointer; white-space:nowrap; font-family:inherit; }
+.nav button:hover { background:var(--hover); color:var(--text); }
+.nav button.active { background:var(--accent); color:#fff; }
+.appbar .spacer { flex:1; }
+.icon-btn { border:1px solid var(--border); background:transparent; color:var(--text); width:34px; height:34px;
+            border-radius:8px; cursor:pointer; font-size:15px; }
+.icon-btn:hover { background:var(--hover); }
+.frames { flex:1 1 auto; position:relative; background:var(--bg); }
+.frames iframe { position:absolute; inset:0; width:100%; height:100%; border:0; display:none; background:var(--bg); }
+.frames iframe.active { display:block; }
+</style>
+</head>
+<body>
+  <header class="appbar">
+    <div class="brand"><span class="dot"></span>数仓平台&nbsp;<small>多 Agent 协作</small></div>
+    <nav class="nav" id="nav"></nav>
+    <div class="spacer"></div>
+    <button class="icon-btn" id="themeToggle" onclick="toggleTheme()" title="切换主题">🌙</button>
+  </header>
+  <main class="frames" id="frames"></main>
+<script>
+const NAVS = [
+  { key:'monitor',  label:'全链路监控', url:'/ui',            hash:'#/monitor' },
+  { key:'chat',     label:'智能对话',   url:'/chat',          hash:'#/chat' },
+  { key:'wizard',   label:'同步向导',   url:'/ui/wizard',     hash:'#/wizard' },
+  { key:'semantic', label:'语义层配置', url:'/ui/semantic',   hash:'#/semantic' },
+];
+const frames = {};
+// 供 iframe 内子页调用：按路径切到对应 tab；未知路径则新标签打开
+window.shellGoto = function(path) {
+  const nav = NAVS.find(n => n.url === path);
+  if (nav) { location.hash = nav.hash; activate(nav.key); }
+  else { window.open(path, '_blank'); }
+};
+function frameFor(key) {
+  if (!frames[key]) {
+    const nav = NAVS.find(n => n.key === key);
+    const f = document.createElement('iframe');
+    f.dataset.key = key;
+    f.src = nav.url;
+    $('frames').appendChild(f);
+    frames[key] = f;
+  }
+  return frames[key];
+}
+function activate(key) {
+  const nav = NAVS.find(n => n.key === key) || NAVS[0];
+  document.querySelectorAll('#nav button').forEach(b =>
+    b.classList.toggle('active', b.dataset.key === nav.key));
+  Object.entries(frames).forEach(([k, f]) =>
+    f.classList.toggle('active', k === nav.key));
+  frameFor(nav.key).classList.add('active');
+  if (location.hash !== nav.hash) history.replaceState(null, '', nav.hash);
+}
+function currentKey() {
+  const h = location.hash;
+  const nav = NAVS.find(n => n.hash === h);
+  return nav ? nav.key : 'monitor';
+}
+$('nav').innerHTML = NAVS.map(n =>
+  `<button data-key="${n.key}" onclick="location.hash='${n.hash}'">${n.label}</button>`).join('');
+window.addEventListener('hashchange', () => activate(currentKey()));
+initTheme();
+activate(currentKey());
+</script>
+</body>
+</html>

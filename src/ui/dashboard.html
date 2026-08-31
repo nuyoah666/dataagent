@@ -112,12 +112,24 @@
   .tree-child td:first-child { padding-left:36px; position:relative; }
   .tree-child td:first-child::before { content:"└─"; position:absolute; left:14px; color:var(--muted); }
   #modal { display:none; position:fixed; inset:0; background:rgba(0,0,0,.6); z-index:10; }
-  #modal .panel { background:var(--card); border:1px solid var(--border); border-radius:12px; max-width:880px;
-                  margin:4vh auto; max-height:92vh; overflow:auto; padding:22px; box-shadow:var(--shadow); }
-  #modal h3 { margin-bottom:10px; font-size:16px; }
-  #modal .close { float:right; cursor:pointer; color:var(--muted); font-size:20px; }
-  #modal pre { font-size:12px; line-height:1.6; color:var(--muted); white-space:pre-wrap; word-break:break-all; }
-  .section-title { font-size:13px; color:var(--muted); margin:16px 0 8px; font-weight:600; }
+  #modal .panel { background:var(--card); border:1px solid var(--border); border-radius:14px; max-width:1040px;
+                  margin:3vh auto; max-height:94vh; padding:0; box-shadow:var(--shadow);
+                  display:flex; flex-direction:column; overflow:hidden; }
+  #modal .dhead { display:flex; align-items:center; justify-content:space-between; gap:12px;
+                  padding:16px 24px; border-bottom:1px solid var(--border); flex:0 0 auto; }
+  #modal .dhead h3 { margin:0; font-size:16px; }
+  #modal .dhead .close { cursor:pointer; color:var(--muted); font-size:18px; line-height:1;
+                         padding:4px 8px; border-radius:8px; }
+  #modal .dhead .close:hover { background:var(--hover); color:var(--text); }
+  #modal .dbody { padding:20px 24px; overflow-y:auto; }
+  #detailBody { font-size:13px; line-height:1.7; color:var(--text); }
+  #detailBody .audit-detail, #detailBody pre { font-size:12.5px; line-height:1.65; }
+  #detailBody table { font-size:13px; }
+  .dcard { background:var(--bg); border:1px solid var(--border); border-radius:12px;
+           padding:14px 18px; margin-bottom:14px; }
+  .dcard-title { font-size:13.5px; font-weight:700; color:var(--text); margin:0 0 12px;
+                 display:flex; align-items:center; justify-content:space-between; gap:10px; }
+  #modal pre { font-size:12.5px; line-height:1.65; color:var(--muted); white-space:pre-wrap; word-break:break-all; }
   .timeline { border-left:2px solid var(--border); padding-left:16px; }
   .tl-item { position:relative; padding:6px 0; font-size:12.5px; }
   .tl-item::before { content:""; position:absolute; left:-21px; top:12px; width:8px; height:8px; border-radius:50%;
@@ -132,7 +144,6 @@
   .health-item.ok .st { color:var(--ok); } .health-item.bad .st { color:var(--err); }
   .audit-detail { color:var(--muted); font-size:11.5px; word-break:break-all; }
   .refresh-note { color:var(--muted); font-size:12px; }
-  .detail-meta { display:flex; gap:16px; flex-wrap:wrap; color:var(--muted); font-size:12.5px; margin-top:6px; }
   .route-card { display:flex; align-items:stretch; gap:0; background:var(--bg); border:1px solid var(--border);
                 border-radius:10px; padding:12px 14px; margin-top:6px; }
   .route-side { flex:1; min-width:0; }
@@ -141,9 +152,22 @@
   .route-side .route-detail { font-size:12px; color:var(--muted); margin-top:3px; word-break:break-all; }
   .route-arrow { display:flex; align-items:center; padding:0 16px; color:var(--accent); font-size:18px; }
   .query-cell .route-mini { display:block; color:var(--muted); font-size:11.5px; margin-top:3px; }
-  .detail-overview { background:var(--bg); border:1px solid var(--border); border-radius:10px;
-                     padding:14px 16px; margin-bottom:14px; }
-  .detail-query { font-size:14px; font-weight:600; margin-bottom:10px; }
+  .detail-query { font-size:14px; font-weight:600; margin-bottom:8px; }
+  .ov-meta { display:flex; gap:6px 20px; flex-wrap:wrap; color:var(--muted); font-size:12.5px; margin:0; }
+  .ov-meta b { color:var(--text); font-weight:600; }
+  .ov-tags { display:flex; gap:8px; align-items:center; }
+  .dcard .route-card { margin-top:12px; margin-bottom:0; }
+  .dcard ol { margin:6px 0; padding-left:20px; }
+  .dcard ol li { margin:3px 0; }
+  .check-table { width:100%; font-size:13px; border-collapse:collapse; }
+  .check-table td { padding:5px 0; vertical-align:top; }
+  .check-table td.k { white-space:nowrap; padding-right:14px; }
+  .check-table td.dim { color:var(--muted); }
+  .result-table { width:100%; font-size:12.5px; border-collapse:collapse; margin-top:6px; }
+  .result-table th { text-align:left; border-bottom:1px solid var(--border); padding:6px 8px;
+                     color:var(--muted); font-weight:600; }
+  .result-table td { padding:4px 8px; border-bottom:1px solid var(--border); }
+  .verdict { font-weight:600; margin-top:8px; }
   .cfg-tabs { display:flex; gap:6px; margin:14px 0 10px; flex-wrap:wrap; }
   .cfg-tabs button { background:var(--bg); border:1px solid var(--border); color:var(--muted);
                      border-radius:8px; padding:6px 14px; cursor:pointer; font-size:12.5px; }
@@ -198,7 +222,7 @@
       <div class="controls">
         <span class="refresh-note" id="refreshed">加载中…</span>
         <button class="btn btn-ghost" onclick="loadAll()">刷新</button>
-        <button class="btn-wizard" onclick="location.href='/ui/wizard'">⚡ 同步向导</button>
+        <button class="btn-wizard" onclick="gotoPage('/ui/wizard')">⚡ 同步向导</button>
         <button class="btn btn-ghost" id="themeToggle" onclick="toggleTheme()">☀️</button>
         <span style="display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px">
           操作人 <input class="input" id="operatorName" value="local-user" style="width:110px">
@@ -292,10 +316,14 @@
 
   <div id="modal">
     <div class="panel">
-      <span class="close" onclick="closeModal()">✕</span>
-      <h3 id="detailTitle">任务详情</h3>
-      <div id="detailBody"></div>
-      <div class="actions-bar" id="detailActions"></div>
+      <div class="dhead">
+        <h3 id="detailTitle">任务详情</h3>
+        <span class="close" onclick="closeModal()">✕</span>
+      </div>
+      <div class="dbody">
+        <div id="detailBody"></div>
+        <div class="actions-bar" id="detailActions"></div>
+      </div>
     </div>
   </div>
 
@@ -339,7 +367,7 @@
 // URL 参数 ?wizard=1 时跳转到独立同步向导页（供 chat 页入口跳转）
 window.addEventListener('DOMContentLoaded', () => {
   if (new URLSearchParams(location.search).get('wizard') === '1') {
-    location.href = '/ui/wizard';
+    gotoPage('/ui/wizard');
   }
 });
 
@@ -688,6 +716,12 @@ async function deleteDs(id) {
   } catch (e) { alert(e.message); }
 }
 
+// 详情弹窗统一卡片容器：标题 + 右侧操作区 + 内容体
+function card(title, body, right) {
+  if (body === '' || body == null) return '';
+  return `<div class="dcard"><div class="dcard-title"><span>${title}</span>${right ? `<span>${right}</span>` : ''}</div>${body}</div>`;
+}
+
 function buildTimeline(logs, task) {
   const markers = [
     ['ConfigAgent 开始', '配置生成'], ['ConfigAgent 完成', '配置完成'],
@@ -701,7 +735,7 @@ function buildTimeline(logs, task) {
       if ((l.message || '').includes(kw)) { stages.push({label, time: l.created_at, msg: l.message.slice(0, 60)}); break; }
     }
   }
-  if (!stages.length) return '<div class="empty">（无阶段日志）</div>';
+  if (!stages.length) return '<div class="muted-flag">（无阶段日志）</div>';
   return '<div class="timeline">' + stages.map((s, i) => {
     const dur = i + 1 < stages.length ? durationSec(s.time, stages[i + 1].time) : durationSec(s.time, task.completed_at);
     return `<div class="tl-item"><span class="t">${fmtTime(s.time)}</span>${escapeHtml(s.label)}
@@ -739,7 +773,6 @@ function syncSection(task) {
     dstHost, [pi.target_database, pi.target_table].filter(Boolean).join('.'),
   ].filter(Boolean).join(' · ');
   return `
-    <div class="section-title">同步链路</div>
     <div class="route-card">
       <div class="route-side">
         <div class="route-label">源端</div>
@@ -769,38 +802,35 @@ function validationSection(task) {
   const ds = _dataxRunStats(task);
   if (!v && !ds) return '';
   const canRevalidate = !!(task.datax_config && task.parsed_intent);
-  return `
-    <div class="section-title" style="display:flex;justify-content:space-between;align-items:center;gap:8px">
-      <span>数据校验</span>
-      ${canRevalidate ? `<button class="btn btn-action" onclick="revalidate('${task.task_id}')">重新校验</button>` : ''}
-    </div>
-    <div class="detail-overview" style="padding:10px 14px">
-      ${ds ? `<div>DataX 自报：共处理 <b>${ds.total ?? '—'}</b> 条，失败 <b>${ds.errors ?? '—'}</b> 条，
-        退出码 <b>${ds.rc ?? '—'}</b>${ds.seconds ? `，耗时 ${ds.seconds}s` : ''}</div>` : ''}
-      ${v ? `
-        <div style="margin-top:8px;color:var(--muted);font-size:12.5px">平台独立复查（不依赖 DataX，重新连源库/目标库实查）：</div>
-        <table style="width:100%;font-size:13px;border-collapse:collapse;margin-top:4px">
-          <tr><td style="padding:4px 0">源端记录数</td><td><b>${v.source_count ?? '—'}</b></td>
-              <td style="padding:4px 0;color:var(--muted)">目标端记录数</td><td><b>${v.target_count ?? '—'}</b></td></tr>
-        </table>
-        ${(v.checks && v.checks.length) ? `
-        <table style="width:100%;font-size:13px;border-collapse:collapse;margin-top:6px">
-          ${v.checks.map(c => `<tr>
-            <td style="padding:4px 0;white-space:nowrap">${c.passed ? (c.level === 'info' ? 'ℹ️' : '✅') : (c.supported ? '❌' : '⏭️')}
-              <b>${escapeHtml(c.label || c.rule)}</b></td>
-            <td style="padding:4px 0;color:var(--muted)">${escapeHtml(c.detail || '')}</td>
-          </tr>`).join('')}
-        </table>` : `
-        <table style="width:100%;font-size:13px;border-collapse:collapse;margin-top:4px">
-          <tr><td style="padding:4px 0">行数一致</td><td>${v.count_match ? '✅ 一致' : '❌ 不一致'}</td></tr>
-          ${v.unique_check ? `<tr><td style="padding:4px 0">主键唯一性</td>
-            <td>${v.unique_check.is_unique ? '✅' : '❌'} ${escapeHtml(v.unique_check.message || '')}</td></tr>` : ''}
-        </table>`}
-        <pre class="audit-detail" style="white-space:pre-wrap;margin-top:6px">${escapeHtml(v.summary || '')}</pre>
-        <div style="font-weight:600;color:${v.success ? 'var(--ok, #16a34a)' : 'var(--danger, #dc2626)'}">
-          ${v.success ? '✅ 校验通过' : '❌ 校验未通过（见上方明细）'}</div>`
-        : '<div class="empty" style="margin-top:6px">（任务执行后此处显示独立复查结果；也可点「重新校验」实时复验）</div>'}
-    </div>`;
+  const body = `
+    ${ds ? `<div>DataX 自报：共处理 <b>${ds.total ?? '—'}</b> 条，失败 <b>${ds.errors ?? '—'}</b> 条，
+      退出码 <b>${ds.rc ?? '—'}</b>${ds.seconds ? `，耗时 ${ds.seconds}s` : ''}</div>` : ''}
+    ${v ? `
+      <div class="muted-flag" style="margin:8px 0 2px">平台独立复查（不依赖 DataX，重新连源库/目标库实查）：</div>
+      <table class="check-table">
+        <tr><td class="k">源端记录数</td><td><b>${v.source_count ?? '—'}</b></td>
+            <td class="k dim">目标端记录数</td><td><b>${v.target_count ?? '—'}</b></td></tr>
+      </table>
+      ${(v.checks && v.checks.length) ? `
+      <table class="check-table">
+        ${v.checks.map(c => `<tr>
+          <td class="k">${c.passed ? (c.level === 'info' ? 'ℹ️' : '✅') : (c.supported ? '❌' : '⏭️')}
+            <b>${escapeHtml(c.label || c.rule)}</b></td>
+          <td class="dim">${escapeHtml(c.detail || '')}</td>
+        </tr>`).join('')}
+      </table>` : `
+      <table class="check-table">
+        <tr><td class="k">行数一致</td><td>${v.count_match ? '✅ 一致' : '❌ 不一致'}</td></tr>
+        ${v.unique_check ? `<tr><td class="k">主键唯一性</td>
+          <td>${v.unique_check.is_unique ? '✅' : '❌'} ${escapeHtml(v.unique_check.message || '')}</td></tr>` : ''}
+      </table>`}
+      <pre class="audit-detail" style="white-space:pre-wrap;margin-top:6px">${escapeHtml(v.summary || '')}</pre>
+      <div class="verdict" style="color:${v.success ? 'var(--ok)' : 'var(--err)'}">
+        ${v.success ? '✅ 校验通过' : '❌ 校验未通过（见上方明细）'}</div>`
+      : '<div class="muted-flag" style="margin-top:6px">（任务执行后此处显示独立复查结果；也可点「重新校验」实时复验）</div>'}`;
+  const right = canRevalidate
+    ? `<button class="btn btn-action" onclick="revalidate('${task.task_id}')">重新校验</button>` : '';
+  return card('数据校验', body, right);
 }
 
 async function revalidate(taskId) {
@@ -928,19 +958,16 @@ function renderConfigSection(cfg) {
         : `<pre class="audit-detail" style="white-space:pre-wrap">${escapeHtml(cfg.etl_sql || '')}</pre>`}
     </div>`);
   }
-  const targetCheck = view.target_table_exists === false ? `
-    <div class="section-title">目标端检测</div>
-    <div class="muted-flag" style="margin-bottom:6px">⚠ 目标表 <b>${escapeHtml((view.target || {}).table || '')}</b> 不存在（${escapeHtml((view.target || {}).db_type || '')}），执行前需先建表，DDL 预览：</div>
+  const targetCard = view.target_table_exists === false ? card('目标端检测', `
+    <div class="muted-flag" style="margin-bottom:8px">⚠ 目标表 <b>${escapeHtml((view.target || {}).table || '')}</b> 不存在（${escapeHtml((view.target || {}).db_type || '')}），执行前需先建表，DDL 预览：</div>
     <pre class="audit-detail" style="white-space:pre-wrap">${escapeHtml(view.target_ddl || '（无法生成 DDL，请检查字段映射）')}</pre>
-    ${view.target_ddl && cfg.editable ? `<div class="cfg-actions"><button class="btn btn-action" onclick="doCreateTargetTable('${_detailTaskId}')">一键建表</button></div>` : ''}`
-    : view.target_table_exists === true ? `
-    <div class="section-title">目标端检测</div>
-    <div class="muted-flag" style="margin-bottom:6px">✅ 目标表已存在</div>` : '';
-  return `
-    ${targetCheck}
-    <div class="section-title">同步配置${cfg.editable ? ' <span class="tag" style="background:rgba(234,179,8,.15);color:var(--warn)">可编辑</span>' : ''}</div>
-    <div class="cfg-tabs">${tabBtns}</div>
-    ${panes.join('')}`;
+    ${view.target_ddl && cfg.editable ? `<div class="cfg-actions"><button class="btn btn-action" onclick="doCreateTargetTable('${_detailTaskId}')">一键建表</button></div>` : ''}`)
+    : view.target_table_exists === true ? card('目标端检测', '<div>✅ 目标表已存在</div>') : '';
+  const configCard = tabs.length
+    ? card('任务配置', `<div class="cfg-tabs">${tabBtns}</div>${panes.join('')}`,
+           cfg.editable ? '<span class="tag" style="background:rgba(234,179,8,.15);color:var(--warn)">可编辑</span>' : '')
+    : '';
+  return targetCard + configCard;
 }
 
 function switchCfgTab(btn) {
@@ -978,14 +1005,10 @@ function llmUsage(t) {
   if (!u || !u.calls) return '';
   const models = Object.entries(u.models || {}).map(([m, n]) => `${escapeHtml(m)}×${n}`).join('，') || '—';
   const cached = u.prompt_tokens ? Math.round((u.cached_tokens || 0) / u.prompt_tokens * 100) : 0;
-  return `<div class="section-title">LLM 用量（成本观测）</div>
-    <div style="font-size:12.5px;line-height:1.8">
-      调用 <b>${u.calls}</b> 次 ·
-      输入 <b>${u.prompt_tokens}</b> tokens（缓存命中 <b>${u.cached_tokens || 0}</b>，${cached}%）·
-      输出 <b>${u.completion_tokens}</b> tokens ·
-      LLM 总耗时 <b>${(u.latency_ms / 1000).toFixed(1)}s</b><br>
-      <span class="d">模型：${models}</span>
-    </div>`;
+  return card('LLM 用量（成本观测）', `
+    <div>调用 <b>${u.calls}</b> 次 · 输入 <b>${u.prompt_tokens}</b> tokens（缓存命中 <b>${u.cached_tokens || 0}</b>，${cached}%）·
+      输出 <b>${u.completion_tokens}</b> tokens · LLM 总耗时 <b>${(u.latency_ms / 1000).toFixed(1)}s</b></div>
+    <div class="muted-flag" style="margin-top:4px">模型：${models}</div>`);
 }
 
 async function showDetail(taskId) {
@@ -1005,60 +1028,57 @@ async function showDetail(taskId) {
       ? `<div style="margin-bottom:6px">诊断对象：<a href="#" onclick="showDetail('${escapeHtml(task.ops_diagnosis.task_id)}');return false;" style="font-family:monospace">${escapeHtml(task.ops_diagnosis.task_id)}</a> <span style="color:var(--muted)">（点击查看原任务）</span></div>` : '';
     const diagOps = task.ops_diagnosis && task.ops_diagnosis.ops_task_id
       ? `<div style="margin-bottom:6px">诊断任务：<a href="#" onclick="showDetail('${escapeHtml(task.ops_diagnosis.ops_task_id)}');return false;" style="font-family:monospace">${escapeHtml(task.ops_diagnosis.ops_task_id)}</a> <span style="color:var(--muted)">（运维 Agent）</span></div>` : '';
-    const diag = task.ops_diagnosis ? `
-      <div class="section-title">运维诊断</div>
+    const diag = task.ops_diagnosis ? card('运维诊断', `
       ${diagSrc}${diagOps}
       <div>根因：<b>${escapeHtml(task.ops_diagnosis.root_cause || '')}</b></div>
       <div style="margin-top:4px">影响：${escapeHtml(task.ops_diagnosis.impact || '')}</div>
       <div>置信度：${task.ops_diagnosis.confidence ?? ''}（来源：${escapeHtml(task.ops_diagnosis.source || '')}）</div>
-      <div style="margin-top:4px">处置步骤：<ol>${(task.ops_diagnosis.solution_steps || []).map(s => `<li>${escapeHtml(s)}</li>`).join('')}</ol></div>
+      <div style="margin-top:4px">处置步骤：<ol>${(task.ops_diagnosis.solution_steps || []).map(st => `<li>${escapeHtml(st)}</li>`).join('')}</ol></div>
       ${(task.ops_diagnosis.related_links || []).length ? `<div>参考链接：${task.ops_diagnosis.related_links.map(l =>
-        `<a href="${escapeHtml(l.url)}" target="_blank" rel="noopener">${escapeHtml(l.title || l.url)}</a>`).join(' · ')}</div>` : ''}` : '';
-    const opsAct = task.ops_actions ? `
-      <div class="section-title">处置动作</div>
+        `<a href="${escapeHtml(l.url)}" target="_blank" rel="noopener">${escapeHtml(l.title || l.url)}</a>`).join(' · ')}</div>` : ''}`) : '';
+    const opsAct = task.ops_actions ? card('处置动作', `
       ${task.ops_actions.health ? `<div>组件健康：${task.ops_actions.health.healthy ? '✅' : '❌'} ${
         Object.entries(task.ops_actions.health.results || {}).map(([k, v]) => `${k}:${v.ok ? '✅' : '❌'}`).join(' ')}</div>` : ''}
       ${(task.ops_actions.actions || []).map(a =>
-        `<div>· ${escapeHtml(a.action)}：${escapeHtml(JSON.stringify(a.result || {}).slice(0, 300))}</div>`).join('')}
-    ` : '';
-    const opsRec = task.ops_record_result ? `
-      <div class="section-title">事故沉淀</div><div>${escapeHtml(task.ops_record_result.summary || '')}</div>` : '';
-    const anal = (task.analysis_result || task.analysis_sql) ? `
-      <div class="section-title">分析结果</div>
+        `<div style="margin-top:4px">· ${escapeHtml(a.action)}：${escapeHtml(JSON.stringify(a.result || {}).slice(0, 300))}</div>`).join('')}`) : '';
+    const opsRec = task.ops_record_result ? card('事故沉淀',
+      `<div>${escapeHtml(task.ops_record_result.summary || '')}</div>`) : '';
+    const anal = (task.analysis_result || task.analysis_sql) ? card('分析结果', `
       ${task.analysis_summary ? `<div style="margin-bottom:6px">${escapeHtml(task.analysis_summary)}</div>` : ''}
-      ${task.analysis_result ? `<table style="width:100%;font-size:12.5px;border-collapse:collapse"><thead><tr>
-        ${(task.analysis_result.columns || []).map(c => `<th style="text-align:left;border-bottom:1px solid var(--border);padding:4px">${escapeHtml(c)}</th>`).join('')}
+      ${task.analysis_result ? `<table class="result-table"><thead><tr>
+        ${(task.analysis_result.columns || []).map(c => `<th>${escapeHtml(c)}</th>`).join('')}
       </tr></thead><tbody>
         ${(task.analysis_result.rows || []).slice(0, 50).map(r =>
           `<tr>${(task.analysis_result.columns || []).map(c =>
-            `<td style="padding:3px 6px;border-bottom:1px solid var(--border)">${escapeHtml(r[c])}</td>`).join('')}</tr>`).join('')}
-      </tbody></table><div style="font-size:11px;color:var(--muted);margin-top:4px">共 ${task.analysis_result.row_count || (task.analysis_result.rows || []).length} 行</div>` : '<div style="color:var(--muted);font-size:12px">查询执行中…</div>'}
-      ${task.analysis_sql ? `<div class="audit-detail" style="margin-top:6px">${escapeHtml(task.analysis_sql)}</div>` : ''}` : '';
-    const etl = task.etl_sql ? `
-      <div class="section-title">ETL 透传</div>
+            `<td>${escapeHtml(r[c])}</td>`).join('')}</tr>`).join('')}
+      </tbody></table><div class="muted-flag" style="margin-top:4px">共 ${task.analysis_result.row_count || (task.analysis_result.rows || []).length} 行</div>` : '<div class="muted-flag">查询执行中…</div>'}
+      ${task.analysis_sql ? `<div class="audit-detail" style="margin-top:6px">${escapeHtml(task.analysis_sql)}</div>` : ''}`) : '';
+    const etl = task.etl_sql ? card('ETL 透传', `
       <div>源：${escapeHtml(task.etl_source_table || '')} → 目标：${escapeHtml(task.etl_target_table || '')}
-           <span class="d">（${escapeHtml(task.etl_partition_date || '')}）</span></div>
-      <pre class="audit-detail" style="white-space:pre-wrap">${escapeHtml(task.etl_sql)}</pre>` : '';
+           <span class="muted-flag">（${escapeHtml(task.etl_partition_date || '')}）</span></div>
+      <pre class="audit-detail" style="white-space:pre-wrap;margin-top:6px">${escapeHtml(task.etl_sql)}</pre>`) : '';
     $('detailBody').innerHTML = `
-      <div class="detail-overview">
+      <div class="dcard">
+        <div class="dcard-title"><span>任务概览</span><span class="ov-tags">
+          <span class="tag type">${type}</span>
+          <span class="tag ${task.status}">${statusText(task.status)}</span>
+        </span></div>
         <div class="detail-query">${escapeHtml(task.user_query)}</div>
+        <div class="ov-meta">
+          <span>创建：<b>${fmtTime(task.created_at)}</b></span>
+          <span>完成：<b>${fmtTime(task.completed_at) || '—'}</b></span>
+          <span>耗时：<b>${durationSec(task.created_at, task.completed_at)}</b></span>
+        </div>
         ${syncSection(task)}
-      </div>
-      <div class="detail-meta">
-        <span>类型：<span class="tag type">${type}</span></span>
-        <span>状态：<span class="tag ${task.status}">${statusText(task.status)}</span></span>
-        <span>创建：${fmtTime(task.created_at)}</span>
-        <span>完成：${fmtTime(task.completed_at) || '—'}</span>
-        <span>耗时：${durationSec(task.created_at, task.completed_at)}</span>
       </div>
       ${renderConfigSection(cfg)}
       ${validationSection(task)}
-      <div class="section-title">阶段时间线</div>${tl}
+      ${card('阶段时间线', tl)}
       ${llmUsage(task)}
       ${diag}${opsAct}${opsRec}${anal}${etl}
-      <div class="section-title">审计记录</div>${audits || '<div class="empty">（无审计）</div>'}
-      <div class="section-title">错误信息</div><pre>${escapeHtml(task.error || '（无）')}</pre>
-      <div class="audit-detail">AI 链路追踪见 LangSmith 项目 dataagent（task_id=${taskId} 对应 thread_id）</div>`;
+      ${card('审计记录', audits || '<div class="muted-flag">（无审计）</div>')}
+      ${task.error ? card('错误信息', `<pre>${escapeHtml(task.error)}</pre>`) : ''}
+      <div class="audit-detail" style="text-align:center">AI 链路追踪见 LangSmith 项目 dataagent（task_id=${taskId} 对应 thread_id）</div>`;
     $('detailActions').innerHTML = taskActions(task, false);
     $('modal').style.display = 'block';
   } catch (e) { alert('加载详情失败: ' + e.message); }

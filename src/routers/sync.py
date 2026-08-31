@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from pydantic import BaseModel
 
 from src.config import config
@@ -93,7 +93,10 @@ class WizardRequest(BaseModel):
 
 
 @router.get("/")
-async def root():
+async def root(request: Request):
+    # 浏览器直接访问根路径 -> 单页外壳；程序化调用仍返回服务信息 JSON
+    if "text/html" in request.headers.get("accept", ""):
+        return RedirectResponse(url="/app")
     return {"service": "数仓多 Agent 协作平台", "version": "1.0.0", "status": "running"}
 
 @router.post("/sync", response_model=SyncResponse)

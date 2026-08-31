@@ -21,6 +21,16 @@ from ._support import (
 router = APIRouter()
 
 
+@router.get("/app", response_class=HTMLResponse, include_in_schema=False)
+async def app_shell():
+    """统一单页外壳：顶部全局导航 + iframe 承载监控/对话/向导/语义层，切换不整页跳转。"""
+    html_path = Path(__file__).parent.parent / "ui" / "app.html"
+    return HTMLResponse(
+        html_path.read_text(encoding="utf-8"),
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
+    )
+
+
 @router.get("/ui", response_class=HTMLResponse, include_in_schema=False)
 async def dashboard():
     """轻量监控页面。"""

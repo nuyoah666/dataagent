@@ -132,7 +132,7 @@
       </div>
 
       <div class="actions">
-        <button class="btn" onclick="location.href='/ui'">取消</button>
+        <button class="btn" onclick="gotoPage('/ui')">取消</button>
         <button class="btn btn-primary" id="submitBtn" onclick="submitWizard()">提交任务</button>
       </div>
     </div>
@@ -145,7 +145,7 @@
         <div class="task-id" id="resultTaskId"></div>
         <div class="note">⏳ 系统正在生成 DataX 配置，完成后需<b>人工审批</b>才会执行</div>
         <div style="margin-top:16px">
-          <a href="/ui" id="resultLink">去全链路监控查看任务状态 →</a>
+          <a href="/ui" id="resultLink" onclick="gotoPage('/ui');return false">去全链路监控查看任务状态 →</a>
         </div>
       </div>
     </div>

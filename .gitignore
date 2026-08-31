@@ -46,3 +46,5 @@ tmp/
 
 # 研发知识蒸馏笔记（本地私有，同 INTERVIEW.md 不入库）
 docs/dev-notes/
+.playwright-cli/
+logs/*.log
