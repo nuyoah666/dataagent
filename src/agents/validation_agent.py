@@ -57,6 +57,8 @@ class ValidationAgent(BaseAgent):
 
             # 执行校验
             sync_type = str(intent.get("sync_type", "")).lower()
+            # 校验规则可配置：intent.validation_rules 指定启用的规则子集；
+            # 缺省跑 DEFAULT_RULES（行数一致 / 主键唯一 / 主键非空）
             result = validate_data_quality(
                 source_config=source_cfg,
                 target_config=target_cfg,
@@ -65,6 +67,7 @@ class ValidationAgent(BaseAgent):
                 primary_key=primary_key,
                 # 增量任务无新数据（0 条）是合法结果，不因整表行数不匹配判失败
                 allow_count_mismatch=(sync_type == "incremental"),
+                rules=intent.get("validation_rules"),
             )
 
             logger.info(f"校验结果: success={result.get('success')}")

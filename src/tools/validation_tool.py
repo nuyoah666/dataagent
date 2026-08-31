@@ -11,6 +11,18 @@ from ..utils.tracing import trace_step
 
 logger = logging.getLogger(__name__)
 
+# 声明式校验规则集：新增规则 = 实现一个 _check_* 并在此登记，UI 自动渲染。
+# 默认全跑；可按任务传 rules=["count_match", ...] 关闭某条（可配置、可扩展）。
+#   count_match    行数一致（全量强比，整表必须相等；增量不强比，仅展示）
+#   pk_uniqueness  主键唯一（目标端无重复主键；无主键流水表自动跳过）
+#   pk_not_null    主键非空（目标端主键不允许 NULL/缺失）
+DEFAULT_RULES = ("count_match", "pk_uniqueness", "pk_not_null")
+RULE_LABELS = {
+    "count_match": "行数一致",
+    "pk_uniqueness": "主键唯一",
+    "pk_not_null": "主键非空",
+}
+
 
 class ValidationTool:
     """数据校验工具。"""
@@ -41,19 +53,22 @@ class ValidationTool:
         target_table: str,
         primary_key: str = None,
         allow_count_mismatch: bool = False,
+        rules: Optional[list] = None,
     ) -> Dict[str, Any]:
         """
         校验数据质量。
-        
+
         Args:
             source_config: 源端数据库配置
             target_config: 目标端数据库配置
             source_table: 源表名
             target_table: 目标表名
             primary_key: 主键列名（可选）
-            
+            allow_count_mismatch: 增量任务为 True（整表行数不强比）
+            rules: 启用的规则 id 列表；None = DEFAULT_RULES 全跑
+
         Returns:
-            校验结果字典
+            校验结果字典（含结构化 checks，每条规则单独给结论；顶层字段保留向后兼容）
         """
         try:
             # ES 是近实时（NRT）引擎：写入/删除后未 refresh 前，count/聚合看到的是
@@ -78,35 +93,70 @@ class ValidationTool:
                     "error": "无法获取目标表记录数"
                 }
             
-            # 记录数匹配检查
+            active = list(rules) if rules else list(DEFAULT_RULES)
+            checks = []
+
+            # 规则 1：行数一致
             count_match = source_count == target_count
-            
-            # 唯一性校验（如果提供了主键）
+            if "count_match" in active:
+                diff = abs(source_count - target_count)
+                if allow_count_mismatch:
+                    detail = f"源 {source_count} / 目标 {target_count}（增量模式不强比整表行数）"
+                    checks.append({"rule": "count_match", "label": RULE_LABELS["count_match"],
+                                   "level": "info", "supported": True, "passed": True, "detail": detail})
+                else:
+                    detail = (f"源 {source_count} / 目标 {target_count}，一致"
+                              if count_match else
+                              f"源 {source_count} / 目标 {target_count}，差异 {diff} 条")
+                    checks.append({"rule": "count_match", "label": RULE_LABELS["count_match"],
+                                   "level": "error", "supported": True,
+                                   "passed": count_match, "detail": detail})
+
+            # 规则 2：主键唯一（目标端）
             unique_check = None
-            if primary_key:
+            if "pk_uniqueness" in active and primary_key:
                 unique_check = self._check_uniqueness(target_config, target_table, primary_key)
-            
-            # 生成校验总结
-            summary = self._generate_summary(
-                source_count, target_count, count_match, unique_check,
-                incremental=allow_count_mismatch,
+                supported = bool(unique_check.get("supported", True))
+                checks.append({
+                    "rule": "pk_uniqueness", "label": RULE_LABELS["pk_uniqueness"],
+                    "level": "error", "supported": supported,
+                    "passed": (not supported) or bool(unique_check.get("is_unique", True)),
+                    "detail": unique_check.get("message")
+                              or (f"主键 {primary_key} 无重复" if unique_check.get("is_unique", True)
+                                  else f"主键 {primary_key} 存在重复"),
+                })
+
+            # 规则 3：主键非空（目标端）
+            not_null_check = None
+            if "pk_not_null" in active and primary_key:
+                not_null_check = self._check_not_null(target_config, target_table, primary_key)
+                supported = bool(not_null_check.get("supported", True))
+                null_n = int(not_null_check.get("null_records", 0) or 0)
+                checks.append({
+                    "rule": "pk_not_null", "label": RULE_LABELS["pk_not_null"],
+                    "level": "error", "supported": supported,
+                    "passed": (not supported) or null_n == 0,
+                    "detail": not_null_check.get("message")
+                              or (f"主键 {primary_key} 无空值" if null_n == 0
+                                  else f"主键 {primary_key} 有 {null_n} 条空值/缺失"),
+                })
+
+            summary = self._generate_summary(checks, incremental=allow_count_mismatch)
+
+            # 仅 error 级且 supported 的规则参与成败；info 级（增量行数）只展示不判失败
+            success = all(
+                c["passed"] for c in checks
+                if c.get("level") == "error" and c.get("supported", True)
             )
-            
-            # 全量必须行数匹配；增量允许 0 条（无新数据合法，count_match 仍返回供展示）。
-            # 唯一性失败（重复数据）无论哪种同步类型都判失败，绝不掩盖。
-            unique_ok = (
-                unique_check is None
-                or not unique_check.get("supported", True)
-                or unique_check.get("is_unique", True)
-            )
-            success = (count_match or allow_count_mismatch) and unique_ok
             return {
                 "success": success,
                 "source_count": source_count,
                 "target_count": target_count,
                 "count_match": count_match,
                 "unique_check": unique_check,
-                "summary": summary
+                "not_null_check": not_null_check,
+                "checks": checks,
+                "summary": summary,
             }
             
         except Exception as e:
@@ -325,39 +375,91 @@ class ValidationTool:
             logger.warning(f"ES 唯一性校验跳过: {e}")
             return {"supported": False, "message": f"ES 唯一性校验不可用: {e}"}
     
-    def _generate_summary(
-        self,
-        source_count: int,
-        target_count: int,
-        count_match: bool,
-        unique_check: Optional[Dict[str, Any]],
-        incremental: bool = False,
-    ) -> str:
-        """生成校验总结。"""
-        summary_parts = []
+    def _check_not_null(self, config: DatabaseConfig, table_name: str, primary_key: str) -> Dict[str, Any]:
+        """检查目标端主键是否存在 NULL/缺失值（按数据库类型分派）。"""
+        try:
+            db_type = config.db_type.lower()
+            if db_type in ("mysql", "starrocks"):
+                return self._check_mysql_not_null(config, table_name, primary_key)
+            if db_type == "mongodb":
+                return self._check_mongodb_not_null(config, table_name, primary_key)
+            if db_type == "elasticsearch":
+                return self._check_es_not_null(config, table_name, primary_key)
+            return {"supported": False, "message": f"不支持的数据库类型: {db_type}"}
+        except Exception as e:
+            # 字段不存在/类型不支持等：标记不支持并跳过，而非误判
+            logger.warning(f"非空校验跳过: {e}")
+            return {"supported": False, "message": f"非空校验不可用: {e}"}
 
-        # 记录数校验
-        if count_match:
-            summary_parts.append(f"✅ 记录数匹配：源表 {source_count} 条，目标表 {target_count} 条")
-        elif incremental:
-            # 增量任务只同步窗口内数据，整表行数不做强制比对
-            summary_parts.append(
-                f"ℹ️ 增量模式不做整表行数比对：源表 {source_count} 条，"
-                f"目标表 {target_count} 条（首次为全量 bootstrap，之后按水位追加）"
+    def _check_mysql_not_null(self, config: DatabaseConfig, table_name: str, primary_key: str) -> Dict[str, Any]:
+        from .db import mysql_conn
+
+        validate_identifier(table_name, allow_qualified=True, field="表名")
+        validate_identifier(primary_key, allow_qualified=False, field="主键列名")
+        with mysql_conn(
+            config.db_type,
+            host=config.host, port=config.port,
+            username=config.username, password=config.password,
+            database=config.database,
+        ) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    f"SELECT COUNT(*) FROM {table_name} WHERE {primary_key} IS NULL"
+                )
+                null_records = cursor.fetchone()[0]
+        return {"supported": True, "null_records": int(null_records),
+                "message": (f"主键 {primary_key} 无空值" if null_records == 0
+                            else f"主键 {primary_key} 有 {null_records} 条空值")}
+
+    def _check_mongodb_not_null(self, config: DatabaseConfig, table_name: str, primary_key: str) -> Dict[str, Any]:
+        from .db import mongo_client
+
+        validate_identifier(table_name, allow_qualified=False, field="集合名")
+        validate_identifier(primary_key, allow_qualified=False, field="主键列名")
+        with mongo_client(
+            host=config.host, port=config.port,
+            username=config.username, password=config.password,
+            database=config.database,
+        ) as client:
+            # Mongo 中 {pk: None} 同时匹配值为 null 与字段缺失
+            null_records = client[config.database][table_name].count_documents(
+                {primary_key: None}
             )
-        else:
-            diff = abs(source_count - target_count)
-            summary_parts.append(f"❌ 记录数不匹配：源表 {source_count} 条，目标表 {target_count} 条，差异 {diff} 条")
-        
-        # 唯一性校验
-        if unique_check and unique_check.get("supported"):
-            if unique_check.get("is_unique"):
-                summary_parts.append("✅ 主键唯一性校验通过")
+        return {"supported": True, "null_records": int(null_records),
+                "message": (f"主键 {primary_key} 无空值/缺失" if null_records == 0
+                            else f"主键 {primary_key} 有 {null_records} 条空值/缺失")}
+
+    def _check_es_not_null(self, config: DatabaseConfig, table_name: str, primary_key: str) -> Dict[str, Any]:
+        from .db import es_client
+
+        validate_identifier(table_name, allow_qualified=False, field="索引名")
+        validate_identifier(primary_key, allow_qualified=False, field="主键列名")
+        with es_client(
+            host=config.host, port=config.port,
+            username=config.username, password=config.password,
+        ) as es:
+            res = es.count(
+                index=table_name,
+                body={"query": {"bool": {"must_not": {"exists": {"field": primary_key}}}}},
+            )
+            null_records = int(res["count"])
+        return {"supported": True, "null_records": null_records,
+                "message": (f"主键 {primary_key} 无缺失" if null_records == 0
+                            else f"主键 {primary_key} 有 {null_records} 条缺失")}
+
+    def _generate_summary(self, checks: list, incremental: bool = False) -> str:
+        """由结构化规则结果生成人类可读总结（✅ 通过 / ❌ 失败 / ⏭️ 跳过）。"""
+        parts = []
+        for c in checks:
+            if not c.get("supported", True):
+                parts.append(f"⏭️ {c['label']}：跳过（{c.get('detail', '')}）")
+            elif c.get("passed"):
+                icon = "ℹ️" if c.get("level") == "info" else "✅"
+                parts.append(f"{icon} {c['label']}：{c['detail']}")
             else:
-                duplicate_count = unique_check.get("duplicate_count", unique_check.get("duplicate_groups", 0))
-                summary_parts.append(f"❌ 主键唯一性校验失败：发现 {duplicate_count} 条重复记录")
-        
-        return "\n".join(summary_parts)
+                parts.append(f"❌ {c['label']}：{c['detail']}")
+        return "\n".join(parts)
+
 
 
 # 全局校验工具实例
@@ -379,10 +481,11 @@ def validate_data_quality(
     target_table: str,
     primary_key: str = None,
     allow_count_mismatch: bool = False,
+    rules: Optional[list] = None,
 ) -> Dict[str, Any]:
-    """校验数据质量的包装函数，供 Agent 工具使用。"""
+    """校验数据质量的包装函数，供 Agent 工具使用。rules=None 跑默认规则集。"""
     validation_tool = get_validation_tool()
     return validation_tool.validate_data_quality(
         source_config, target_config, source_table, target_table, primary_key,
-        allow_count_mismatch=allow_count_mismatch,
+        allow_count_mismatch=allow_count_mismatch, rules=rules,
     )

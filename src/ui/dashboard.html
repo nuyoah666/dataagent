@@ -778,16 +778,24 @@ function validationSection(task) {
       ${ds ? `<div>DataX 自报：共处理 <b>${ds.total ?? '—'}</b> 条，失败 <b>${ds.errors ?? '—'}</b> 条，
         退出码 <b>${ds.rc ?? '—'}</b>${ds.seconds ? `，耗时 ${ds.seconds}s` : ''}</div>` : ''}
       ${v ? `
-        <div style="margin-top:8px;color:var(--muted);font-size:12.5px">平台独立复查（不依赖 DataX，重新连源库/目标库各 count 一遍）：</div>
+        <div style="margin-top:8px;color:var(--muted);font-size:12.5px">平台独立复查（不依赖 DataX，重新连源库/目标库实查）：</div>
         <table style="width:100%;font-size:13px;border-collapse:collapse;margin-top:4px">
           <tr><td style="padding:4px 0">源端记录数</td><td><b>${v.source_count ?? '—'}</b></td>
               <td style="padding:4px 0;color:var(--muted)">目标端记录数</td><td><b>${v.target_count ?? '—'}</b></td></tr>
-          <tr><td style="padding:4px 0">行数一致</td>
-              <td colspan="3">${v.count_match ? '✅ 一致' : '❌ 不一致'}</td></tr>
-          ${v.unique_check ? `<tr><td style="padding:4px 0">主键唯一性</td>
-              <td colspan="3">${v.unique_check.is_unique ? '✅' : '❌'} ${escapeHtml(v.unique_check.message || '')}
-                ${v.unique_check.duplicate_groups ? `（重复组 ${v.unique_check.duplicate_groups}）` : ''}</td></tr>` : ''}
         </table>
+        ${(v.checks && v.checks.length) ? `
+        <table style="width:100%;font-size:13px;border-collapse:collapse;margin-top:6px">
+          ${v.checks.map(c => `<tr>
+            <td style="padding:4px 0;white-space:nowrap">${c.passed ? (c.level === 'info' ? 'ℹ️' : '✅') : (c.supported ? '❌' : '⏭️')}
+              <b>${escapeHtml(c.label || c.rule)}</b></td>
+            <td style="padding:4px 0;color:var(--muted)">${escapeHtml(c.detail || '')}</td>
+          </tr>`).join('')}
+        </table>` : `
+        <table style="width:100%;font-size:13px;border-collapse:collapse;margin-top:4px">
+          <tr><td style="padding:4px 0">行数一致</td><td>${v.count_match ? '✅ 一致' : '❌ 不一致'}</td></tr>
+          ${v.unique_check ? `<tr><td style="padding:4px 0">主键唯一性</td>
+            <td>${v.unique_check.is_unique ? '✅' : '❌'} ${escapeHtml(v.unique_check.message || '')}</td></tr>` : ''}
+        </table>`}
         <pre class="audit-detail" style="white-space:pre-wrap;margin-top:6px">${escapeHtml(v.summary || '')}</pre>
         <div style="font-weight:600;color:${v.success ? 'var(--ok, #16a34a)' : 'var(--danger, #dc2626)'}">
           ${v.success ? '✅ 校验通过' : '❌ 校验未通过（见上方明细）'}</div>`
