@@ -88,6 +88,8 @@ class WizardRequest(BaseModel):
     target_database: str = ""
     target_table: str = ""
     sync_type: str = "full"
+    # 同步前操作：none | truncate（审批后、执行前清空目标，仅全量）
+    pre_action: str = "none"
     # 校验规则子集（可勾选）；None 或空 = 默认全跑
     validation_rules: list | None = None
 
@@ -238,6 +240,7 @@ async def submit_wizard(req: WizardRequest):
         "target_database": req.target_database,
         "target_table": req.target_table,
         "sync_type": req.sync_type,
+        "pre_action": req.pre_action,
         "validation_rules": req.validation_rules or None,
     }
     target_desc = req.target_table or req.target_db_type

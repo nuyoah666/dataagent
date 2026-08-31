@@ -85,6 +85,20 @@ def detect_sync_mode(text: str) -> str:
     return "stream" if any(kw in t for kw in _STREAM_KEYWORDS) else "batch"
 
 
+# 同步前清空关键词（全量覆盖/重建语义；与增量互斥由 pre_sync 执行侧守卫拦截）
+_PRE_ACTION_KEYWORDS = (
+    "清空目标", "清空再写", "清空后", "先清空", "清掉目标", "清掉再",
+    "重建目标", "重建索引", "重建表", "覆盖写", "全量覆盖", "覆盖同步",
+    "先删后写", "truncate",
+)
+
+
+def detect_pre_action(text: str) -> str:
+    """从指令判定同步前操作：命中清空/覆盖/重建词 -> truncate，否则 none。"""
+    t = (text or "").lower()
+    return "truncate" if any(kw in t for kw in _PRE_ACTION_KEYWORDS) else "none"
+
+
 def strip_leading_verbs(text: str) -> str:
     """去掉引导动词，避免"把用户表"被误抓成表名"把用户"。"""
     return _LEADING_VERBS.sub("", text or "")

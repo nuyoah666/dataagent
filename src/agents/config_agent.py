@@ -23,7 +23,7 @@ from ..config import config
 from ..tools.credentials import apply_intent_defaults
 from ..tools.intent_rules import (
     DB_TYPE_KEYWORDS, DB_TYPE_RE, db_defaults,
-    detect_target_db_type, detect_sync_mode, extract_source_table,
+    detect_target_db_type, detect_sync_mode, detect_pre_action, extract_source_table,
     strip_leading_verbs,
 )
 from ..tools.engines import engine_for_intent
@@ -101,6 +101,11 @@ class ConfigAgent(BaseAgent):
         if intent.get("sync_mode") != "stream" and detect_sync_mode(user_query) == "stream":
             intent["sync_mode"] = "stream"
             logger.info("规则命中实时关键词: sync_mode=stream")
+        # 同步前操作：规则关键词优先（清空目标/全量覆盖/重建），LLM 显式给出以其为准
+        if intent.get("pre_action") != "truncate" and detect_pre_action(user_query) == "truncate":
+            intent["pre_action"] = "truncate"
+            intent["_pre_action_source"] = "rule"
+            logger.info("规则命中同步前清空关键词: pre_action=truncate")
         # 3.0c 引擎可用性守卫：引擎未就绪（如实时引擎为预留位）在配置生成前
         # 明确告知，不进 schema/RAG/LLM——编排层与引擎解耦，新增引擎零改动
         engine = engine_for_intent(intent)

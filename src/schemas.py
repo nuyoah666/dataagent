@@ -29,6 +29,7 @@ class SyncIntent(BaseModel):
     sync_type: str = Field(default="full", description="full | incremental（离线内的全量/增量）")
     update_cycle: str = Field(default="day", description="更新周期: day | hour")
     sync_mode: str = Field(default="batch", description="batch 离线(DataX) | stream 实时(Flink CDC)")
+    pre_action: str = Field(default="none", description="同步前操作: none | truncate（清空目标，仅全量）")
 
     @field_validator("sync_type")
     @classmethod
@@ -47,6 +48,15 @@ class SyncIntent(BaseModel):
     def _normalize_sync_mode(cls, v: str) -> str:
         v = (v or "").strip().lower()
         return "stream" if v in ("stream", "realtime", "实时", "流式", "cdc") else "batch"
+
+    @field_validator("pre_action")
+    @classmethod
+    def _normalize_pre_action(cls, v: str) -> str:
+        v = (v or "").strip().lower()
+        return "truncate" if v in (
+            "truncate", "清空", "清空目标", "清掉", "重建", "重建目标",
+            "覆盖", "覆盖写", "全量覆盖",
+        ) else "none"
 
     @field_validator("source_port", "target_port", mode="before")
     @classmethod

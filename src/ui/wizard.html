@@ -100,7 +100,7 @@
           <select class="select" id="wizTable"><option>先选数据库</option></select>
         </label>
         <label>同步类型
-          <select class="select" id="wizSync">
+          <select class="select" id="wizSync" onchange="wizSyncChanged()">
             <option value="full">全量同步</option>
             <option value="incremental">增量同步</option>
           </select>
@@ -119,6 +119,10 @@
         <label class="full">目标表 / 索引 <span class="req">*</span>
           <input class="input" id="wizTargetTable" placeholder="如：src_user_index">
           <span class="hint">ES 填索引名；MySQL/StarRocks 填表名</span>
+        </label>
+        <label class="full" style="font-size:13px;display:flex;align-items:flex-start;gap:8px;cursor:pointer;line-height:1.5">
+          <input type="checkbox" id="wizPreTruncate" style="width:auto;margin:3px 0 0">
+          <span>同步前清空目标（全量覆盖/重建：审批通过后先清空目标表/索引再写入，防止历史残留导致数据重复；仅全量同步可用）</span>
         </label>
         <div class="full">
           <span class="hint">数据校验规则（同步完成后自动独立复查）：</span>
@@ -212,6 +216,14 @@ async function wizDbChanged() {
   }
 }
 
+function wizSyncChanged() {
+  // 增量与清空目标语义矛盾：选增量时禁用并取消勾选
+  const inc = $('wizSync').value === 'incremental';
+  const cb = $('wizPreTruncate');
+  cb.disabled = inc;
+  if (inc) cb.checked = false;
+}
+
 function wizTargetChanged() {
   $('wizTargetDbWrap').style.display = ['mysql', 'starrocks'].includes($('wizTargetType').value) ? '' : 'none';
   setStep(2);
@@ -226,6 +238,7 @@ async function submitWizard() {
     target_database: $('wizTargetDb').value.trim(),
     target_table: $('wizTargetTable').value.trim(),
     sync_type: $('wizSync').value,
+    pre_action: $('wizPreTruncate').checked ? 'truncate' : 'none',
     validation_rules: Array.from(document.querySelectorAll('#wizRules input:checked')).map(c => c.value),
   };
   if (!body.source_name || !body.database || !body.table || !body.target_table) {

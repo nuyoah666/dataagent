@@ -196,6 +196,16 @@ class AgentWorkflow:
 
     def _run_execution(self, state: DataIntegrationState) -> DataIntegrationState:
         task_id = state.get("_task_id", "")
+        intent = state.get("parsed_intent") or {}
+        if (str(intent.get("pre_action") or "none").lower() == "truncate"
+                and not state.get("_pre_sync_done")):
+            # 无审批门禁的直达路径（APPROVAL_GATE=false）：破坏性操作不自动执行，
+            # 只告警跳过——清空目标必须有人工审批背书
+            self.task_mgr.log(
+                task_id, "WARN",
+                "任务声明了同步前清空目标，但当前未开启审批门禁，已跳过清空"
+                "（破坏性操作需经人工审批后执行）",
+            )
         if not self.task_mgr.transition_status(
             task_id, TaskStatus.EXECUTING,
             [TaskStatus.CONFIG_DONE, TaskStatus.PENDING_APPROVAL, TaskStatus.EXECUTING],
@@ -568,6 +578,11 @@ class AgentWorkflow:
             task_id, "task_approve", operator=operator,
             detail=f"config_digest={self._config_digest(task)}",
         )
+        # 同步前操作（对标 DataWorks preSql）：审批放行后才执行破坏性清空，
+        # 清空失败则拦截，绝不让 DataX 在半破状态下继续写入
+        ok, state = self._run_pre_sync(state)
+        if not ok:
+            return state
         state = self._run_execution(state)
         if state.get("error") or state.get("remediated"):
             return state
@@ -576,6 +591,51 @@ class AgentWorkflow:
             # 审批执行成功的增量任务同样更新水位（原逻辑只在 run() 全流程里，审批路径漏掉）
             self._persist_incremental_watermark(final, task_id)
         return final
+
+    def _run_pre_sync(self, state: DataIntegrationState):
+        """审批通过后、DataX 执行前的同步前操作（对标 DataWorks preSql）。
+
+        目前支持 pre_action=truncate（清空目标表/集合/索引）：全量覆盖/重建
+        场景下 upsert 清不掉历史残留，需先清空保证"源即真相"。
+        这是破坏性操作的最后一道闸——向导/LLM 只声明意图，此处审批已放行
+        才真正执行；清空失败直接拦截，不进 DataX。
+
+        Returns:
+            (True, state) 可继续执行；(False, state) 已拦截，任务置失败。
+        """
+        task_id = state.get("_task_id", "")
+        intent = state.get("parsed_intent") or {}
+        if str(intent.get("pre_action") or "none").lower() != "truncate":
+            return True, state
+        if state.get("etl_sql"):
+            return True, state  # ETL 任务无同步前操作
+        from ..tools.pre_sync import truncate_target
+        try:
+            info = truncate_target(intent)
+        except Exception as e:  # noqa: BLE001 拦截：不清空就不执行写入
+            err = f"同步前清空目标失败，已拦截执行: {e}"
+            logger.warning("pre_sync 失败 task=%s: %s", task_id, e)
+            self.task_mgr.log(task_id, "ERROR", err)
+            self.task_mgr.complete_task(task_id, TaskStatus.FAILED, error=err)
+            return False, {**state, "error": err, "current_step": "pre_sync_failed"}
+        basis = "rule" if intent.get("_pre_action_source") == "rule" else "explicit"
+        self.task_mgr.record_decision(
+            task_id, "pre_sync",
+            decision=f"同步前清空目标 {info['target']}",
+            basis=basis,
+            evidence={"db_type": info["db_type"], "target": info["target"],
+                      "deleted": info["deleted"]},
+        )
+        self.task_mgr.audit(
+            task_id, "pre_sync_truncate",
+            detail=f"{info['db_type']}:{info['target']} deleted={info['deleted']}",
+        )
+        self.task_mgr.log(
+            task_id, "INFO",
+            f"同步前操作：已清空目标 {info['db_type']} {info['target']}"
+            f"（{info['deleted']} 条），开始同步写入",
+        )
+        return True, {**state, "_pre_sync_done": True}
 
     @staticmethod
     def _config_digest(task: dict) -> str:

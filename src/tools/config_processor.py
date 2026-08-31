@@ -406,6 +406,13 @@ def normalize_intent(intent: Dict[str, Any]) -> Dict[str, Any]:
     mode = str(result.get("sync_mode") or "").strip().lower()
     result["sync_mode"] = "stream" if mode in ("stream", "realtime", "cdc") else "batch"
 
+    # pre_action 标准化（none | truncate；清空/重建/覆盖等同义说法归并）
+    pa = str(result.get("pre_action") or "none").strip().lower()
+    result["pre_action"] = "truncate" if pa in (
+        "truncate", "清空", "清空目标", "清掉", "重建", "重建目标",
+        "覆盖", "覆盖写", "全量覆盖",
+    ) else "none"
+
     # ES 没有 database 概念：LLM 常把索引名填进 database 字段，转回 table
     for side in ("source", "target"):
         if result.get(f"{side}_db_type") == "elasticsearch":
