@@ -140,6 +140,39 @@ async def cancel_task(task_id: str):
     get_datax_tool().cancel_job(f"datax_task_{task_id}")
     return {"task_id": task_id, "status": "cancelled"}
 
+@router.delete("/tasks")
+async def clear_tasks(request: Request):
+    """批量清理历史任务（终态 + 待审批；执行中保留）。审计记录保留。"""
+    tm = get_task_manager()
+    result = tm.clear_tasks()
+    tm.audit(
+        None, "task_clear",
+        operator=_operator_from_request(request),
+        detail=f"批量清理历史任务 {result['deleted']} 条（终态 + 待审批）",
+    )
+    return result
+
+@router.delete("/tasks/{task_id}")
+async def delete_task(task_id: str, request: Request):
+    """删除单个任务及其执行日志/决策记录；审计记录保留以便追溯。"""
+    tm = get_task_manager()
+    result = tm.delete_task(task_id)
+    if result["status"] == "missing":
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if result["status"] == "blocked":
+        raise HTTPException(
+            status_code=409,
+            detail=f"任务处于 {result['task_status']} 状态，执行中不可删除",
+        )
+    task = result["task"]
+    tm.audit(
+        task_id, "task_delete",
+        operator=_operator_from_request(request),
+        detail=f"删除任务：{(task.get('user_query') or '')[:80]}",
+        task_type=task.get("task_type"),
+    )
+    return {"task_id": task_id, "deleted": True}
+
 @router.post("/tasks/{task_id}/retry")
 async def retry_task(task_id: str, request: Request):
     tm = get_task_manager()

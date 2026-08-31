@@ -48,6 +48,8 @@ _TERMINAL_STATUSES = (
 _NON_TERMINAL_STATUSES = tuple(
     s.value for s in TaskStatus if s.value not in _TERMINAL_STATUSES
 )
+# 可删除：已结束（成功/失败/取消）或停在待审批的任务；运行中各阶段禁止删除
+_DELETABLE_STATUSES = _TERMINAL_STATUSES + (TaskStatus.PENDING_APPROVAL.value,)
 
 
 def _get_conn() -> sqlite3.Connection:
@@ -515,6 +517,45 @@ class TaskManager:
         """任务是否已取消。"""
         task = self.get_task(task_id)
         return bool(task and task["status"] == TaskStatus.CANCELLED.value)
+
+    def delete_task(self, task_id: str) -> Dict[str, Any]:
+        """删除任务及其执行日志/决策记录（审计记录保留，保证可追溯）。
+
+        返回 {"status": "deleted", "task": {...}}；
+        任务不存在 -> {"status": "missing"}；执行中 -> {"status": "blocked", ...}。
+        """
+        conn = _get_conn()
+        with _db_lock:
+            row = conn.execute(
+                "SELECT * FROM tasks WHERE task_id = ?", (task_id,)
+            ).fetchone()
+            if not row:
+                return {"status": "missing"}
+            task = dict(row)
+            if task["status"] not in _DELETABLE_STATUSES:
+                return {"status": "blocked", "task_status": task["status"]}
+            conn.execute("DELETE FROM task_logs WHERE task_id = ?", (task_id,))
+            conn.execute("DELETE FROM decision_logs WHERE task_id = ?", (task_id,))
+            conn.execute("DELETE FROM tasks WHERE task_id = ?", (task_id,))
+            conn.commit()
+            return {"status": "deleted", "task": task}
+
+    def clear_tasks(self) -> Dict[str, int]:
+        """批量清理所有可删除状态的历史任务（终态 + 待审批），审计记录保留。"""
+        conn = _get_conn()
+        placeholders = ",".join("?" * len(_DELETABLE_STATUSES))
+        with _db_lock:
+            ids = [r["task_id"] for r in conn.execute(
+                f"SELECT task_id FROM tasks WHERE status IN ({placeholders})",
+                _DELETABLE_STATUSES,
+            ).fetchall()]
+            if ids:
+                ph = ",".join("?" * len(ids))
+                conn.execute(f"DELETE FROM task_logs WHERE task_id IN ({ph})", ids)
+                conn.execute(f"DELETE FROM decision_logs WHERE task_id IN ({ph})", ids)
+                conn.execute(f"DELETE FROM tasks WHERE task_id IN ({ph})", ids)
+                conn.commit()
+            return {"deleted": len(ids)}
 
     def get_task_history(self, limit: int = 20) -> List[Dict[str, Any]]:
         """获取任务历史。"""

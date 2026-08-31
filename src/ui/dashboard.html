@@ -222,6 +222,7 @@
       <div class="controls">
         <span class="refresh-note" id="refreshed">加载中…</span>
         <button class="btn btn-ghost" onclick="loadAll()">刷新</button>
+        <button class="btn btn-ghost" onclick="doClearTasks()" title="删除所有已结束/待审批的历史任务（执行中的保留）">🗑 清空历史</button>
         <button class="btn-wizard" onclick="gotoPage('/ui/wizard')">⚡ 同步向导</button>
         <button class="btn btn-ghost" id="themeToggle" onclick="toggleTheme()">☀️</button>
         <span style="display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px">
@@ -421,6 +422,9 @@ function taskActions(t, withRow = true) {
       b += `<button class="btn btn-action" onclick="event.stopPropagation();doDiagnose('${t.task_id}')">运维诊断</button>`;
     }
     b += `<button class="btn btn-action" onclick="event.stopPropagation();doReapBadcase('${t.task_id}')">沉淀 Bad Case</button>`;
+  }
+  if (['success', 'failed', 'cancelled', 'pending_approval'].includes(t.status)) {
+    b += `<button class="btn btn-ghost" onclick="event.stopPropagation();doDelete('${t.task_id}')">删除</button>`;
   }
   if (withRow) b += `<button class="btn btn-action" onclick="event.stopPropagation();showDetail('${t.task_id}')">详情</button>`;
   return b || '—';
@@ -1103,6 +1107,23 @@ async function doApprove(id) { if (!confirm('确认执行该任务？')) return;
     }
   } catch(e) { alert(e.message); }
   loadAll();
+}
+async function doDelete(id) {
+  if (!confirm('确认删除该任务及其执行日志？\n（审计记录会保留，执行中的任务不可删除）')) return;
+  try {
+    await api('/tasks/' + id, {method: 'DELETE'});
+    if (_detailTaskId === id) closeModal();
+    loadAll();
+  } catch (e) { alert('删除失败: ' + e.message); }
+}
+async function doClearTasks() {
+  if (!confirm('确认清空所有「已结束 / 待审批」的历史任务？\n执行中的任务会保留，审计记录保留。')) return;
+  try {
+    const r = await api('/tasks', {method: 'DELETE'});
+    closeModal();
+    loadAll();
+    alert('已清理 ' + (r.deleted || 0) + ' 条历史任务');
+  } catch (e) { alert('清理失败: ' + e.message); }
 }
 async function doReject(id) { if (!confirm('确认拒绝执行该任务？')) return;
   try { await api('/tasks/' + id + '/reject', {method:'POST'}); alert('已拒绝执行'); } catch(e) { alert(e.message); } loadAll(); }
