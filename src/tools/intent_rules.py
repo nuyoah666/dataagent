@@ -75,6 +75,16 @@ def normalize_db_type(value: str) -> str:
     return DB_TYPE_ALIASES.get(v, v)
 
 
+# 实时同步关键词（规则优先：明确词不交给 LLM 判断，确定性路由到 stream 引擎）
+_STREAM_KEYWORDS = ("实时同步", "实时", "流式", "cdc", "入湖", "paimon", "flink cdc")
+
+
+def detect_sync_mode(text: str) -> str:
+    """从指令文本判定同步模式：命中实时词 -> stream，否则 batch。"""
+    t = (text or "").lower()
+    return "stream" if any(kw in t for kw in _STREAM_KEYWORDS) else "batch"
+
+
 def strip_leading_verbs(text: str) -> str:
     """去掉引导动词，避免"把用户表"被误抓成表名"把用户"。"""
     return _LEADING_VERBS.sub("", text or "")

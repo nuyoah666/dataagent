@@ -23,8 +23,10 @@ from ..config import config
 from ..tools.credentials import apply_intent_defaults
 from ..tools.intent_rules import (
     DB_TYPE_KEYWORDS, DB_TYPE_RE, db_defaults,
-    detect_target_db_type, extract_source_table, strip_leading_verbs,
+    detect_target_db_type, detect_sync_mode, extract_source_table,
+    strip_leading_verbs,
 )
+from ..tools.engines import engine_for_intent
 from ..schemas import SyncIntent
 from .prompts import _INTENT_SYSTEM, _DATAX_SYSTEM
 from .base import BaseAgent, register_agent
@@ -94,6 +96,23 @@ class ConfigAgent(BaseAgent):
                 **state, "parsed_intent": intent, "error": cap_err,
                 "current_step": "config_error",
             }
+        # 3.0b 同步模式：规则关键词优先（实时/流式/CDC/入湖），确定性路由到
+        # stream 引擎；LLM 显式给出 sync_mode 时以其为准
+        if intent.get("sync_mode") != "stream" and detect_sync_mode(user_query) == "stream":
+            intent["sync_mode"] = "stream"
+            logger.info("规则命中实时关键词: sync_mode=stream")
+        # 3.0c 引擎可用性守卫：引擎未就绪（如实时引擎为预留位）在配置生成前
+        # 明确告知，不进 schema/RAG/LLM——编排层与引擎解耦，新增引擎零改动
+        engine = engine_for_intent(intent)
+        if engine is None:
+            eng_err = f"未知同步模式: {intent.get('sync_mode')}（支持 batch / stream）"
+            return {**state, "parsed_intent": intent, "error": eng_err,
+                    "current_step": "config_error"}
+        eng_ok, eng_reason = engine.is_available()
+        if not eng_ok:
+            logger.warning("引擎 %s 不可用，拦截于配置生成前", engine.name)
+            return {**state, "parsed_intent": intent, "error": eng_reason,
+                    "current_step": "config_error"}
         # 3.1 多表批量：显式指定源表时覆盖 LLM 解析结果
         if state.get("table_override"):
             intent["source_table"] = state["table_override"]

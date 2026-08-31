@@ -30,6 +30,13 @@ async def health_components():
     from src.tools.ops_tool import check_component_health
     return await asyncio.to_thread(check_component_health)
 
+
+@router.get("/engines")
+async def engines():
+    """同步执行引擎清单（编排层与引擎解耦：batch=DataX 已落地，stream=Flink CDC 预留）。"""
+    from src.tools.engines import list_engines
+    return {"engines": list_engines()}
+
 @router.get("/metrics", include_in_schema=False)
 async def metrics():
     """Prometheus 文本格式业务指标。"""

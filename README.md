@@ -25,6 +25,7 @@
   并热重载；支持**从物理表一键导入草稿**（读 information_schema 自动分类指标/维度，人工补口径）；
   同页只读查看各 Agent 的 system prompt（集中在 `src/agents/prompts.py`）
 - **多 Agent 协作**：集成失败自动交运维 Agent 诊断，事故自动沉淀为知识
+- **执行引擎可插拔**：编排层与执行引擎解耦（SyncEngine 抽象）——离线 DataX 已落地；实时引擎位（Flink CDC → Paimon 湖仓一体）已预留接口，新增引擎 = 实现接口 + 一套模板，路由/审批/审计/运维零改动（`GET /engines` 查看引擎可用性）
 
 ## 系统架构
 
@@ -539,6 +540,8 @@ Agent 配置阶段会检索 DataX 官方文档 + 本项目踩坑经验，用于�
 - [x] RAG 知识库（DataX 官方文档 / 运维事故，collection 隔离）
 - [x] 问数 Agent（语义层驱动 NL2SQL：LLM 只出语义查询，SQL 代码确定性拼装 + 结果自检）
 - [x] 内置轻量定时调度（不引入 DolphinScheduler）
+- [x] 执行引擎抽象（SyncEngine：batch=DataX 落地，stream=Flink CDC→Paimon 预留）
+- [ ] 实时入湖：Flink CDC → Paimon 主键表（湖仓一体，StarRocks external catalog 直查）
 
 ## 项目结构
 
@@ -570,9 +573,10 @@ src/
 
 | 数据库 | 支持状态 | 说明 |
 |--------|----------|------|
-| MySQL | ✅ 支持 | 作为源端和目标端 |
-| MongoDB | ✅ 支持 | 作为源端和目标端 |
-| Elasticsearch | ✅ 支持 | 作为源端和目标端 |
+| MySQL | ✅ 支持 | 作为源端和目标端（mysqlreader/writer） |
+| StarRocks | ✅ 支持 | 作为源端和目标端（FE MySQL 协议，走 mysqlreader/writer） |
+| MongoDB | ✅ 支持 | 作为源端和目标端（mongodbreader/writer） |
+| Elasticsearch | ✅ 仅目标端 | 开源 DataX 只有 elasticsearchwriter，**无 reader**（ES 作源端会在配置阶段确定性拦截，建议 Logstash/Flink/scroll API） |
 
 ## 使用示例
 

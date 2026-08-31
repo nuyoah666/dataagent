@@ -26,8 +26,9 @@ class SyncIntent(BaseModel):
     target_password: str = Field(default="")
     target_database: str = Field(default="")
     target_table: str = Field(default="")
-    sync_type: str = Field(default="full", description="full | incremental")
+    sync_type: str = Field(default="full", description="full | incremental（离线内的全量/增量）")
     update_cycle: str = Field(default="day", description="更新周期: day | hour")
+    sync_mode: str = Field(default="batch", description="batch 离线(DataX) | stream 实时(Flink CDC)")
 
     @field_validator("sync_type")
     @classmethod
@@ -40,6 +41,12 @@ class SyncIntent(BaseModel):
     def _normalize_update_cycle(cls, v: str) -> str:
         v = (v or "").strip().lower()
         return v if v in ("day", "hour") else "day"
+
+    @field_validator("sync_mode")
+    @classmethod
+    def _normalize_sync_mode(cls, v: str) -> str:
+        v = (v or "").strip().lower()
+        return "stream" if v in ("stream", "realtime", "实时", "流式", "cdc") else "batch"
 
     @field_validator("source_port", "target_port", mode="before")
     @classmethod

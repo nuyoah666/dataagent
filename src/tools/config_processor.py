@@ -402,6 +402,10 @@ def normalize_intent(intent: Dict[str, Any]) -> Dict[str, Any]:
     cycle = str(result.get("update_cycle") or "day").strip().lower()
     result["update_cycle"] = cycle if cycle in ("day", "hour") else "day"
 
+    # sync_mode 标准化（batch 离线 DataX | stream 实时 Flink CDC）
+    mode = str(result.get("sync_mode") or "").strip().lower()
+    result["sync_mode"] = "stream" if mode in ("stream", "realtime", "cdc") else "batch"
+
     # ES 没有 database 概念：LLM 常把索引名填进 database 字段，转回 table
     for side in ("source", "target"):
         if result.get(f"{side}_db_type") == "elasticsearch":
