@@ -16,12 +16,15 @@ logger = logging.getLogger(__name__)
 #   count_match    行数一致（全量强比，整表必须相等；增量不强比，仅展示）
 #   pk_uniqueness  主键唯一（目标端无重复主键；无主键流水表自动跳过）
 #   pk_not_null    主键非空（目标端主键不允许 NULL/缺失）
-DEFAULT_RULES = ("count_match", "pk_uniqueness", "pk_not_null")
+DEFAULT_RULES = ("count_match", "pk_uniqueness", "pk_not_null", "sample_content")
 RULE_LABELS = {
     "count_match": "行数一致",
     "pk_uniqueness": "主键唯一",
     "pk_not_null": "主键非空",
+    "sample_content": "抽样内容一致",
 }
+# 内容比对抽样条数（按主键抽 N 条逐字段核对；数量小、跨引擎代价可忽略）
+SAMPLE_CONTENT_SIZE = 20
 
 
 class ValidationTool:
@@ -141,6 +144,25 @@ class ValidationTool:
                                   else f"主键 {primary_key} 有 {null_n} 条空值/缺失"),
                 })
 
+            # 规则 4：抽样内容一致（按主键抽 N 条，源/目标逐字段核对）
+            content_check = None
+            if "sample_content" in active and primary_key:
+                content_check = self._check_sample_content(
+                    source_config, target_config, source_table, target_table,
+                    primary_key, limit=SAMPLE_CONTENT_SIZE,
+                )
+                supported = bool(content_check.get("supported", True))
+                ok_content = (
+                    not content_check.get("mismatch_cells", 0)
+                    and not content_check.get("missing_rows", 0)
+                )
+                checks.append({
+                    "rule": "sample_content", "label": RULE_LABELS["sample_content"],
+                    "level": "error", "supported": supported,
+                    "passed": (not supported) or ok_content,
+                    "detail": content_check.get("message") or "抽样比对完成",
+                })
+
             summary = self._generate_summary(checks, incremental=allow_count_mismatch)
 
             # 仅 error 级且 supported 的规则参与成败；info 级（增量行数）只展示不判失败
@@ -155,6 +177,7 @@ class ValidationTool:
                 "count_match": count_match,
                 "unique_check": unique_check,
                 "not_null_check": not_null_check,
+                "content_check": content_check,
                 "checks": checks,
                 "summary": summary,
             }
@@ -446,6 +469,170 @@ class ValidationTool:
         return {"supported": True, "null_records": null_records,
                 "message": (f"主键 {primary_key} 无缺失" if null_records == 0
                             else f"主键 {primary_key} 有 {null_records} 条缺失")}
+
+    # ---- 抽样内容比对（跨引擎）----
+
+    @staticmethod
+    def _norm_cell(v):
+        """值归一化：数值按浮点、其余去空白字符串；None/空串统一为空。"""
+        if v is None:
+            return None
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, (int, float)):
+            return round(float(v), 6)
+        if hasattr(v, "isoformat"):  # datetime/date
+            return str(v)
+        txt = str(v).strip()
+        return txt or None
+
+    @staticmethod
+    def _pk_key(v):
+        """主键键化：整数保持 "1"（不转 1.0），数值 1.0->"1"，字符串去空白；跨引擎对齐。"""
+        if v is None:
+            return None
+        if isinstance(v, bool):
+            return str(v)
+        if isinstance(v, int):
+            return str(v)
+        if isinstance(v, float):
+            return str(int(v)) if v.is_integer() else str(v)
+        return str(v).strip()
+
+    @classmethod
+    def _cell_equal(cls, a, b) -> bool:
+        na, nb = cls._norm_cell(a), cls._norm_cell(b)
+        if na is None or nb is None:
+            return na is None and nb is None
+        if isinstance(na, float) or isinstance(nb, float) or isinstance(na, bool) or isinstance(nb, bool):
+            try:
+                return abs(float(na) - float(nb)) < 1e-6
+            except (TypeError, ValueError):
+                pass
+        return str(na) == str(nb)
+
+    def _sample_source_rows(self, config, table, pk, limit):
+        """从源端抽 limit 条记录（dict 列表）。"""
+        db_type = config.db_type.lower()
+        if db_type in ("mysql", "starrocks"):
+            from .db import mysql_conn
+            validate_identifier(table, allow_qualified=True, field="表名")
+            with mysql_conn(config.db_type, host=config.host, port=config.port,
+                            username=config.username, password=config.password,
+                            database=config.database) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(f"SELECT * FROM {table} LIMIT %s", (limit,))
+                    cols = [d[0] for d in cur.description]
+                    return [dict(zip(cols, row)) for row in cur.fetchall()]
+        if db_type == "mongodb":
+            from .db import mongo_client
+            validate_identifier(table, allow_qualified=False, field="集合名")
+            with mongo_client(host=config.host, port=config.port,
+                              username=config.username, password=config.password,
+                              database=config.database) as client:
+                proj = {"_id": 0}
+                try:
+                    docs = list(client[config.database][table].find({}, proj).sort(pk, 1).limit(limit))
+                except Exception:
+                    docs = list(client[config.database][table].find({}, proj).limit(limit))
+                return [{k: v for k, v in d.items()} for d in docs]
+        raise ValueError(f"源端不支持抽样: {db_type}")
+
+    def _fetch_target_by_keys(self, config, table, pk, keys):
+        """按主键集合从目标端取回记录（dict 列表，键为主键值）。"""
+        db_type = config.db_type.lower()
+        if db_type in ("mysql", "starrocks"):
+            from .db import mysql_conn
+            validate_identifier(table, allow_qualified=True, field="表名")
+            validate_identifier(pk, allow_qualified=False, field="主键列名")
+            if not keys:
+                return {}
+            placeholders = ",".join(["%s"] * len(keys))
+            with mysql_conn(config.db_type, host=config.host, port=config.port,
+                            username=config.username, password=config.password,
+                            database=config.database) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"SELECT * FROM {table} WHERE {pk} IN ({placeholders})",
+                        list(keys),
+                    )
+                    cols = [d[0] for d in cur.description]
+                    rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+        elif db_type == "mongodb":
+            from .db import mongo_client
+            validate_identifier(table, allow_qualified=False, field="集合名")
+            validate_identifier(pk, allow_qualified=False, field="主键列名")
+            with mongo_client(host=config.host, port=config.port,
+                              username=config.username, password=config.password,
+                              database=config.database) as client:
+                docs = client[config.database][table].find(
+                    {pk: {"$in": list(keys)}}, {"_id": 0})
+                rows = [{k: v for k, v in d.items()} for d in docs]
+        elif db_type == "elasticsearch":
+            from .db import es_client
+            validate_identifier(table, allow_qualified=False, field="索引名")
+            validate_identifier(pk, allow_qualified=False, field="主键列名")
+            with es_client(host=config.host, port=config.port,
+                           username=config.username, password=config.password) as es:
+                res = es.search(index=table, size=max(len(keys), 1),
+                                body={"query": {"terms": {pk: list(keys)}}})
+                rows = [h.get("_source", {}) for h in res["hits"]["hits"]]
+        else:
+            raise ValueError(f"目标端不支持抽样: {db_type}")
+
+        keyed = {}
+        for r in rows:
+            if pk in r and r[pk] is not None:
+                keyed[self._pk_key(r[pk])] = r
+        return keyed
+
+    def _check_sample_content(self, source_config, target_config, source_table,
+                              target_table, primary_key, limit=SAMPLE_CONTENT_SIZE):
+        """按主键抽样 N 条，逐字段比对源与目标的值（跨引擎、宽松归一化）。"""
+        try:
+            src_rows = self._sample_source_rows(source_config, source_table,
+                                                primary_key, limit)
+            if not src_rows:
+                return {"supported": True, "sampled": 0, "compared_cells": 0,
+                        "mismatch_cells": 0, "missing_rows": 0, "examples": [],
+                        "message": "源端无数据可抽样"}
+            keys = [r.get(primary_key) for r in src_rows if r.get(primary_key) is not None]
+            tgt_map = self._fetch_target_by_keys(target_config, target_table,
+                                                 primary_key, keys)
+            mismatch_cells = 0
+            missing_rows = 0
+            examples = []
+            compared_cells = 0
+            for srow in src_rows:
+                pk_val = srow.get(primary_key)
+                trow = tgt_map.get(self._pk_key(pk_val))
+                if trow is None:
+                    missing_rows += 1
+                    if len(examples) < 5:
+                        examples.append({"pk": pk_val, "issue": "目标端缺失该行"})
+                    continue
+                fields = [k for k in srow.keys() if k != "_id" and k in trow]
+                for f in fields:
+                    compared_cells += 1
+                    if not self._cell_equal(srow.get(f), trow.get(f)):
+                        mismatch_cells += 1
+                        if len(examples) < 5:
+                            examples.append({"pk": pk_val, "field": f,
+                                             "source": str(srow.get(f))[:60],
+                                             "target": str(trow.get(f))[:60]})
+            if missing_rows or mismatch_cells:
+                msg = (f"抽样 {len(src_rows)} 条、{compared_cells} 个字段："
+                       f"{missing_rows} 条目标缺失，{mismatch_cells} 个字段不一致")
+            else:
+                msg = f"抽样 {len(src_rows)} 条逐字段比对全部一致（{compared_cells} 个字段）"
+            return {"supported": True, "sampled": len(src_rows),
+                    "compared_cells": compared_cells,
+                    "mismatch_cells": mismatch_cells,
+                    "missing_rows": missing_rows,
+                    "examples": examples, "message": msg}
+        except Exception as e:
+            logger.warning(f"抽样内容比对跳过: {e}")
+            return {"supported": False, "message": f"抽样内容比对不可用: {e}"}
 
     def _generate_summary(self, checks: list, incremental: bool = False) -> str:
         """由结构化规则结果生成人类可读总结（✅ 通过 / ❌ 失败 / ⏭️ 跳过）。"""

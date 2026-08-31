@@ -120,6 +120,15 @@
           <input class="input" id="wizTargetTable" placeholder="如：src_user_index">
           <span class="hint">ES 填索引名；MySQL/StarRocks 填表名</span>
         </label>
+        <div class="full">
+          <span class="hint">数据校验规则（同步完成后自动独立复查）：</span>
+          <div id="wizRules" style="display:flex;gap:14px;flex-wrap:wrap;margin-top:4px;font-size:13px">
+            <label><input type="checkbox" value="count_match" checked> 行数一致</label>
+            <label><input type="checkbox" value="pk_uniqueness" checked> 主键唯一</label>
+            <label><input type="checkbox" value="pk_not_null" checked> 主键非空</label>
+            <label><input type="checkbox" value="sample_content" checked> 抽样内容一致（按主键抽 20 条逐字段核对）</label>
+          </div>
+        </div>
       </div>
 
       <div class="actions">
@@ -218,6 +227,7 @@ async function submitWizard() {
     target_database: $('wizTargetDb').value.trim(),
     target_table: $('wizTargetTable').value.trim(),
     sync_type: $('wizSync').value,
+    validation_rules: Array.from(document.querySelectorAll('#wizRules input:checked')).map(c => c.value),
   };
   if (!body.source_name || !body.database || !body.table || !body.target_table) {
     alert('请完整选择：源数据源 / 数据库 / 表 / 目标表'); return;

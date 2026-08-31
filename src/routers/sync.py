@@ -88,6 +88,8 @@ class WizardRequest(BaseModel):
     target_database: str = ""
     target_table: str = ""
     sync_type: str = "full"
+    # 校验规则子集（可勾选）；None 或空 = 默认全跑
+    validation_rules: list | None = None
 
 
 @router.get("/")
@@ -233,6 +235,7 @@ async def submit_wizard(req: WizardRequest):
         "target_database": req.target_database,
         "target_table": req.target_table,
         "sync_type": req.sync_type,
+        "validation_rules": req.validation_rules or None,
     }
     target_desc = req.target_table or req.target_db_type
     summary = f"[向导] 同步 {intent['source_database']}.{table} 到 {target_desc}"

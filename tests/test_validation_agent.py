@@ -222,3 +222,55 @@ def test_unsupported_not_null_skipped(monkeypatch):
     nn = [c for c in r["checks"] if c["rule"] == "pk_not_null"][0]
     assert nn["supported"] is False and "⏭" in r["summary"]
 
+def test_sample_content_match_passes(monkeypatch):
+    """抽样内容一致时通过。"""
+    from src.tools.db_tool import DatabaseConfig
+    from src.tools.validation_tool import ValidationTool
+
+    tool = ValidationTool()
+    src_rows = [{"id": 1, "name": "alice", "dt": "2026-07-28"},
+                {"id": 2, "name": "bob", "dt": "2026-07-28"}]
+    monkeypatch.setattr(tool, "_sample_source_rows", lambda *a, **k: src_rows)
+    monkeypatch.setattr(tool, "_fetch_target_by_keys",
+        lambda *a, **k: {"1": {"id": 1, "name": "alice", "dt": "2026-07-28"},
+                         "2": {"id": 2, "name": "bob", "dt": "2026-07-28"}})
+    cfg = DatabaseConfig(db_type="mysql", host="h", port=3306, username="u", password="p", database="d")
+    r = tool._check_sample_content(cfg, cfg, "s", "t", "id")
+    assert r["supported"] is True
+    assert r["mismatch_cells"] == 0 and r["missing_rows"] == 0
+    assert r["sampled"] == 2
+
+
+def test_sample_content_mismatch_and_missing(monkeypatch):
+    """字段值不一致 + 目标缺行，都要被抓出。"""
+    from src.tools.db_tool import DatabaseConfig
+    from src.tools.validation_tool import ValidationTool
+
+    tool = ValidationTool()
+    src_rows = [{"id": 1, "name": "alice"}, {"id": 2, "name": "bob"}]
+    monkeypatch.setattr(tool, "_sample_source_rows", lambda *a, **k: src_rows)
+    # id=1 name 被改；id=2 缺失
+    monkeypatch.setattr(tool, "_fetch_target_by_keys",
+        lambda *a, **k: {"1": {"id": 1, "name": "TAMPERED"}})
+    cfg = DatabaseConfig(db_type="mysql", host="h", port=3306, username="u", password="p", database="d")
+    r = tool._check_sample_content(cfg, cfg, "s", "t", "id")
+    assert r["mismatch_cells"] == 1
+    assert r["missing_rows"] == 1
+    issues = {(e.get("field"), e.get("issue")) for e in r["examples"]}
+    assert ("name", None) in issues or any(e.get("field") == "name" for e in r["examples"])
+
+
+def test_sample_content_numeric_and_null_loose(monkeypatch):
+    """数值 1 vs 1.0 视为一致；None/缺失/空串视为一致。"""
+    from src.tools.validation_tool import ValidationTool
+    t = ValidationTool()
+    assert t._cell_equal(1, 1.0) is True
+    assert t._cell_equal(None, "") is True
+    assert t._cell_equal("x", "x ") is True
+    assert t._cell_equal("a", "b") is False
+
+
+def test_default_rules_include_sample_content():
+    from src.tools.validation_tool import DEFAULT_RULES
+    assert "sample_content" in DEFAULT_RULES
+
