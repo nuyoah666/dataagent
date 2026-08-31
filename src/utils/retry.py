@@ -50,6 +50,14 @@ class CircuitBreaker:
         self._probe_used = False
         self._lock = threading.RLock()
 
+    def reset(self) -> None:
+        """复位到 CLOSED（测试隔离/人工熔断复位用）。"""
+        with self._lock:
+            self._state = self.CLOSED
+            self._failure_count = 0
+            self._last_failure_time = 0.0
+            self._probe_used = False
+
     @property
     def state(self) -> str:
         with self._lock:

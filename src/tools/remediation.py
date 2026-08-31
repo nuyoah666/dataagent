@@ -142,7 +142,13 @@ def auto_remediate_integration(task: dict) -> Dict[str, Any]:
     new_issues = _detect_issues(new_cfg)
     resolved = [i for i in old_issues if i not in new_issues]
 
-    changed = (not old_cfg) or (_digest(old_cfg or {}) != _digest(new_cfg))
+    # 任务库里的配置经 redact_secrets 脱敏（密码为 "***"），重建配置带真实
+    # 凭据：对比前必须先脱敏，否则密码字段让 digest 永远不同、每次失败都误判
+    # "配置变了"造成修复弹跳
+    from ..utils.security import redact_secrets
+    changed = (not old_cfg) or (
+        _digest(redact_secrets(old_cfg) or {}) != _digest(redact_secrets(new_cfg) or {})
+    )
     # 只有"确有问题被解决"或"配置发生实质变化"才算修好了
     if not changed and not resolved:
         return {"fixed": False, "config": None, "changes": [],

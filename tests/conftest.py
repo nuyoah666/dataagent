@@ -45,6 +45,9 @@ def isolate_state(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "LOG_FILE", str(tmp_path / "logs" / "app.log"))
     monkeypatch.setattr(config, "LLM_API_KEY", "test-key")
     monkeypatch.setattr(config, "LLM_BASE_URL", "http://localhost:9/v1")
+    # 事故账本也隔离到 tmp（失败任务自动运维诊断会自动沉淀事故）
+    monkeypatch.setenv("OPS_INCIDENT_STORE",
+                       str(tmp_path / "ops_incidents" / "incidents.jsonl"))
 
     monkeypatch.setattr(task_manager, "_task_db_conn", None)
     monkeypatch.setattr(task_manager, "_task_manager", None)
@@ -58,3 +61,12 @@ def isolate_state(tmp_path, monkeypatch):
     task_manager._task_manager = None
     datax_tool._datax_tool = None
     llm_mod.get_llm.cache_clear()
+    # 熔断器为模块级单例：失败计数/OPEN 状态不随用例隔离会污染后续测试
+    # （如运维自动诊断的 LLM 失败打满熔断，导致后续意图解析被拒）
+    from src.utils import (
+        llm_circuit_breaker, datax_circuit_breaker,
+        rag_circuit_breaker, web_circuit_breaker,
+    )
+    for b in (llm_circuit_breaker, datax_circuit_breaker,
+              rag_circuit_breaker, web_circuit_breaker):
+        b.reset()

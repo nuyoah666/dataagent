@@ -93,3 +93,29 @@ def test_no_change_means_not_fixed():
     second = auto_remediate_integration(task2)
     # 已无缺陷，重建结果一致 -> 不再重复修复（避免无限重审批循环）
     assert second["fixed"] is False
+
+
+def test_redacted_passwords_in_store_not_mistaken_for_change():
+    """任务库持久化脱敏密码为 ***（重建配置带真实密码）：不应误判为'修复了'。
+
+    回归：digest 直接对比导致每次失败都认为配置变了，造成'修复->再失败->再修复'
+    弹跳，运维自动修复无法收敛。
+    """
+    import copy
+    from src.utils.security import redact_secrets
+
+    task = {
+        "task_type": "data_integration",
+        "parsed_intent": _intent(),
+        "source_schema": _schema(),
+        "datax_config": _broken_config(),
+    }
+    first = auto_remediate_integration(task)
+    assert first["fixed"]
+    # 模拟任务库：修复后的配置经脱敏持久化（密码 -> "***"）
+    stored_cfg = redact_secrets(copy.deepcopy(first["config"]))
+    assert stored_cfg["job"]["content"][0]["reader"]["parameter"]["password"] in ("***", None)
+    task2 = dict(task)
+    task2["datax_config"] = stored_cfg
+    second = auto_remediate_integration(task2)
+    assert second["fixed"] is False

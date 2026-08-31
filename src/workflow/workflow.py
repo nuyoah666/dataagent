@@ -221,24 +221,12 @@ class AgentWorkflow:
             err = result.get("error") or "执行失败"
             self.task_mgr.log(task_id, "ERROR", f"ExecutionAgent 失败: {err}")
             self.task_mgr.complete_task(task_id, TaskStatus.FAILED, error=err)
-            # 运维闭环：集成任务失败后尝试确定性自动修复，成功则转回待审批
-            # （人工重新确认后重跑）；失败则保持 FAILED，等待人工/诊断。
-            if self.task_type == "data_integration" and self.approval_gate:
-                try:
-                    rem = self.remediate_task(task_id, operator="system",
-                                              auto=True, run_diagnosis=False)
-                    if rem and rem.get("fixed"):
-                        self.task_mgr.log(
-                            task_id, "INFO",
-                            "已自动修复配置缺陷并转人工重新审批",
-                        )
-                        return {
-                            **state, "current_step": "awaiting_reapproval",
-                            "remediated": True, "error": None,
-                            "execution_status": result.get("execution_status"),
-                        }
-                except Exception as e:  # noqa: BLE001
-                    logger.warning("自动修复异常: %s", e)
+            # 运维 Agent 自动介入：确定性配置修复 -> 转待审批放行重跑；
+            # 修不了则自动诊断（RAG/web）回写根因，无需人工点击
+            reapproval = self._auto_ops_intervention(
+                task_id, state, failure=result.get("execution_status") or {})
+            if reapproval is not None:
+                return {**reapproval, "execution_status": result.get("execution_status")}
 
         return result
 
@@ -285,6 +273,10 @@ class AgentWorkflow:
                 err = "问数结果自检未通过：分组汇总与总计不一致（详见结果自检）"
             self.task_mgr.complete_task(task_id, TaskStatus.FAILED,
                                          error=err or "校验失败")
+            # 集成/ETL 校验失败：运维自动介入（问数自检失败不转运维）
+            reapproval = self._auto_ops_intervention(task_id, state)
+            if reapproval is not None:
+                return reapproval
 
         return result
 
@@ -417,12 +409,15 @@ class AgentWorkflow:
         return self.run(task["user_query"])
 
     def remediate_task(self, task_id: str, operator: str = "system",
-                       auto: bool = False, run_diagnosis: bool = True) -> Optional[Dict[str, Any]]:
-        """运维闭环：失败任务自动修复。
+                       auto: bool = False, run_diagnosis: bool = True,
+                       allow_fix: bool = True) -> Optional[Dict[str, Any]]:
+        """运维闭环：失败任务自动修复 + 诊断。
 
         确定性修复（集成任务：用最新配置处理器重建配置）成功 -> 配置写回并
-        转回待审批（人工确认后重跑）；无法确定性修复 -> 触发 LLM 运维诊断
-        （RAG+web），根因回写原任务，供人工决策。
+        转回待审批（人工确认后重跑）；无法确定性修复 -> 触发运维诊断
+        （规则优先、LLM+RAG+web 兜底），根因回写原任务，供人工决策。
+
+        allow_fix=False：跳过确定性修复（无审批门禁、无人放行会挂起时仅诊断）。
         """
         task = self.task_mgr.get_task(task_id)
         if not task:
@@ -433,7 +428,7 @@ class AgentWorkflow:
         # ---- 1. 确定性自动修复（数据集成）----
         fixed_cfg = None
         changes = []
-        if task.get("task_type") == "data_integration":
+        if allow_fix and task.get("task_type") == "data_integration":
             from ..tools.remediation import auto_remediate_integration
             r = auto_remediate_integration(task)
             if r.get("fixed"):
@@ -468,9 +463,7 @@ class AgentWorkflow:
                 return {"fixed": True, "changes": changes,
                         "status": TaskStatus.PENDING_APPROVAL.value}
 
-        # ---- 2. 确定性修不了：LLM 运维诊断（根因 + 知识库），回写原任务 ----
-        # 自动触发路径（执行节点内）不做同步 LLM 诊断以免长耗时阻塞；
-        # 人工点击"一键修复"时才带诊断。
+        # ---- 2. 确定性修不了：运维诊断（规则优先 + RAG/web/LLM 兜底），回写原任务 ----
         if not run_diagnosis:
             return {"fixed": False, "reason": "无法确定性自动修复，待人工触发运维诊断"}
         try:
@@ -490,6 +483,65 @@ class AgentWorkflow:
         except Exception as e:  # noqa: BLE001
             logger.warning("运维诊断失败: %s", e)
             return {"fixed": False, "reason": f"自动修复与诊断均未成功: {e}"}
+
+    def _auto_ops_intervention(self, task_id: str, state: DataIntegrationState,
+                               failure: dict = None):
+        """失败后运维 Agent 自动介入（有界，无需人工点击）。
+
+        1. 集成任务先做确定性配置修复（无 LLM）：成功 -> 配置写回、转待审批，
+           人工放行后重跑（写操作绝不自动执行）；
+        2. 修不了 / ETL 任务 -> 自动运维诊断（事故知识库 + web + 事故沉淀），
+           根因与处置建议回写任务详情，打开即可见。
+
+        防循环/防浪费：
+        - 熔断器打开导致的失败是瞬时保护，不是配置缺陷，不触发修复/诊断；
+        - 每任务最多自动修复一次（ops_auto_fix 决策已存在则只诊断，不二次弹跳）；
+        - 确定性修复本身幂等（脱敏后同配置重建不算"修了"）；
+        - 诊断每任务最多自动一次（ops_diagnosis 已存在则跳过）；
+        - 问数/运维任务不介入；无审批门禁时只诊断。
+
+        Returns:
+            "转待审批"时返回 state 覆盖；仅诊断/跳过时返回 None。
+        """
+        task = self.task_mgr.get_task(task_id)
+        if not task or task.get("status") != TaskStatus.FAILED.value:
+            return None
+        if task.get("task_type") not in ("data_integration", "etl_development"):
+            return None  # 问数自检失败/运维任务自身失败，不自动转运维
+        if failure and failure.get("breaker_open"):
+            logger.info("熔断保护导致的失败，不触发自动修复/诊断（稍后重试即可）")
+            return None
+        if task.get("ops_diagnosis"):
+            return None  # 已自动诊断过，不重复消耗 LLM/不重复沉淀
+        # 自动修复每任务最多一次：已做过确定性修复（转待审批后又失败）-> 只诊断
+        already_fixed = any(
+            d.get("node") == "ops_auto_fix"
+            for d in self.task_mgr.get_task_decisions(task_id)
+        )
+        allow_fix = self.approval_gate and not already_fixed
+        try:
+            rem = self.remediate_task(
+                task_id, operator="system", auto=True, run_diagnosis=True,
+                allow_fix=allow_fix,
+            )
+        except Exception as e:  # noqa: BLE001 自动介入失败不影响失败结论
+            logger.warning("运维自动介入异常: %s", e)
+            return None
+        if not rem:
+            return None
+        if rem.get("fixed"):
+            self.task_mgr.log(
+                task_id, "INFO",
+                "运维 Agent 自动修复配置缺陷，已转人工重新审批，放行后重跑",
+            )
+            return {**state, "current_step": "awaiting_reapproval",
+                    "remediated": True, "error": None}
+        if rem.get("diagnosis"):
+            self.task_mgr.log(
+                task_id, "INFO",
+                "运维 Agent 已自动完成诊断：根因与处置建议见详情，事故已沉淀知识库",
+            )
+        return None
 
     def approve_task(self, task_id: str, operator: str = "system") -> Optional[Dict[str, Any]]:
         """人工审批通过：恢复执行（execution -> validation），返回最终状态。"""

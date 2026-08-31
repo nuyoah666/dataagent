@@ -171,6 +171,12 @@ def test_failed_integration_then_ops_diagnose_and_record(
     task = get_task_manager().get_task(failed_id)
     assert task["status"] == TaskStatus.FAILED.value
     assert error_kw in (task.get("error") or "")
+    # 运维自动介入：执行/校验阶段失败自动诊断回写；配置阶段失败（输入问题）不触发
+    if fail_step in ("execution", "validation"):
+        assert task.get("ops_diagnosis"), f"{fail_step} 阶段失败应自动转运维诊断"
+        assert task["ops_diagnosis"]["root_cause"]
+    else:
+        assert not task.get("ops_diagnosis")
 
     # 2) 运维 Agent 接手诊断
     ops = AgentWorkflow(task_type="data_ops")
@@ -269,21 +275,65 @@ def test_ops_unknown_task_id_graceful(monkeypatch, ops_mocks):
 
 
 def test_ops_repeated_diagnosis_dedups_incident(monkeypatch, ops_mocks):
-    """同一任务诊断两次 -> 只有一次事故沉淀（去重）。"""
+    """失败自动介入完成首次诊断+沉淀；后续人工重复诊断 -> 去重跳过。"""
     _patch_integration(monkeypatch, exec_=_FailExec)
     wf = AgentWorkflow(task_type="data_integration")
     failed_id = wf.run("把 MySQL 的 t1 表同步到 ES")["_task_id"]
 
+    # 失败后运维 Agent 自动介入：诊断回写 + 事故首次沉淀，无需人工点击
+    failed = get_task_manager().get_task(failed_id)
+    assert failed["ops_diagnosis"] and failed["ops_diagnosis"]["root_cause"]
+    assert ops_mocks["record"]["symptom"].startswith(f"任务 {failed_id} 失败")
+
     ops = AgentWorkflow(task_type="data_ops")
     r1 = ops.run(f"诊断任务 {failed_id}", diagnose_task_id=failed_id)
-    assert r1["ops_record_result"]["incident_id"]
-    first_id = r1["ops_record_result"]["incident_id"]
-
-    # 第一次沉淀的记录已存在于存储 -> 第二次应去重跳过
+    assert r1["current_step"] == "validation_complete"
+    # 首次沉淀已由自动介入完成，人工再诊断去重跳过
+    assert r1["ops_record_result"]["incident_id"] is None
     r2 = ops.run(f"诊断任务 {failed_id} 再查一次", diagnose_task_id=failed_id)
-    assert r2["current_step"] == "validation_complete"
     assert r2["ops_record_result"]["incident_id"] is None
-    assert "incident_id" not in ops_mocks["record"]  # 版本化签名由知识库工具生成
+
+
+def test_execution_failure_autofix_bounces_to_reapproval(monkeypatch):
+    """配置类缺陷导致的执行失败：确定性自动修复成功 -> 转待审批，人工放行后重跑。"""
+    monkeypatch.setattr(
+        "src.tools.remediation.auto_remediate_integration",
+        lambda task: {"fixed": True, "config": {"job": {"rebuilt": True}},
+                      "changes": ["reader 连接配置修正"], "source": "template"},
+    )
+    tm = get_task_manager()
+    wf = AgentWorkflow(task_type="data_integration")
+    monkeypatch.setattr(wf, "approval_gate", True)  # 生产默认：集成任务有审批门禁
+
+    tid = tm.create_task("把 t1 表同步到 ES", task_type="data_integration")
+    tm.update_task(tid, parsed_intent={"source_db_type": "mysql", "source_table": "t1",
+                                       "target_db_type": "elasticsearch", "target_table": "t1"},
+                   datax_config={"job": {}})
+    tm.complete_task(tid, TaskStatus.FAILED, error="DataX 退出码 255")
+
+    out = wf._auto_ops_intervention(tid, {"_task_id": tid})
+    task = tm.get_task(tid)
+    assert task["status"] == TaskStatus.PENDING_APPROVAL.value
+    assert task["datax_config"] == {"job": {"rebuilt": True}}
+    assert task.get("error") is None
+    assert out["remediated"] is True
+
+
+def test_auto_ops_intervention_gates():
+    """自动介入边界：问数/运维任务不转运维；已诊断过不重复消耗 LLM。"""
+    tm = get_task_manager()
+    wf = AgentWorkflow(task_type="data_integration")
+
+    tid = tm.create_task("分析用户数", task_type="data_analysis")
+    tm.complete_task(tid, TaskStatus.FAILED, error="自检不一致")
+    assert wf._auto_ops_intervention(tid, {}) is None
+    assert not tm.get_task(tid).get("ops_diagnosis")
+
+    tid2 = tm.create_task("同步 t1", task_type="data_integration")
+    tm.update_task(tid2, parsed_intent={"source_db_type": "mysql", "source_table": "t1"},
+                   ops_diagnosis={"root_cause": "已诊断"})
+    tm.complete_task(tid2, TaskStatus.FAILED, error="DataX 退出码 1")
+    assert wf._auto_ops_intervention(tid2, {}) is None
 
 
 # ---- 3. API 层协作 ----
@@ -461,3 +511,46 @@ def test_etl_workflow_success(monkeypatch):
     assert result["current_step"] == "validation_complete"
     assert result["execution_status"]["success"] is True
     assert result["validation_result"]["success"] is True
+
+
+def test_auto_intervention_skips_breaker_open(monkeypatch, ops_mocks):
+    """DataX 熔断打开是瞬时保护（非配置缺陷）：不触发自动修复/诊断。"""
+    def _no_fix(task):
+        raise AssertionError("熔断失败不应触发确定性修复")
+    monkeypatch.setattr("src.tools.remediation.auto_remediate_integration", _no_fix)
+
+    tm = get_task_manager()
+    wf = AgentWorkflow(task_type="data_integration")
+    tid = tm.create_task("同步 t1", task_type="data_integration")
+    tm.update_task(tid, parsed_intent={"source_db_type": "mysql", "source_table": "t1"})
+    tm.complete_task(tid, TaskStatus.FAILED, error="DataX 熔断，请稍后重试")
+
+    out = wf._auto_ops_intervention(
+        tid, {"_task_id": tid}, failure={"breaker_open": True})
+    assert out is None
+    assert not tm.get_task(tid).get("ops_diagnosis")
+
+
+def test_auto_intervention_diagnoses_when_already_fixed_once(monkeypatch, ops_mocks):
+    """已自动修复过一次（转重审批后又失败）：不再二次弹跳配置，直接自动诊断。"""
+    def _no_second_fix(task):
+        raise AssertionError("已修复过一次，不应再次确定性修复")
+    monkeypatch.setattr("src.tools.remediation.auto_remediate_integration", _no_second_fix)
+
+    tm = get_task_manager()
+    wf = AgentWorkflow(task_type="data_integration")
+    monkeypatch.setattr(wf, "approval_gate", True)
+
+    tid = tm.create_task("把 t1 表同步到 ES", task_type="data_integration")
+    tm.update_task(tid, parsed_intent={"source_db_type": "mysql", "source_table": "t1",
+                                       "target_db_type": "elasticsearch", "target_table": "t1"},
+                   datax_config={"job": {}})
+    # 记录一次"已自动修复"决策（首次弹跳时写入）
+    tm.record_decision(tid, "ops_auto_fix", decision="配置已按最新规则重建", basis="rule")
+    tm.complete_task(tid, TaskStatus.FAILED, error="DataX 退出码 1")
+
+    out = wf._auto_ops_intervention(tid, {"_task_id": tid}, failure={})
+    assert out is None  # 没弹跳
+    task = tm.get_task(tid)
+    assert task["status"] == TaskStatus.FAILED.value
+    assert task["ops_diagnosis"] and task["ops_diagnosis"]["root_cause"]

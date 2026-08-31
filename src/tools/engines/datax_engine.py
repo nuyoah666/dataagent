@@ -43,11 +43,11 @@ class DataXEngine(SyncEngine):
 
         try:
             if not datax_circuit_breaker.allow_request():
-                return self.fail(error="DataX 熔断，请稍后重试")
+                return self.fail(error="DataX 熔断，请稍后重试", breaker_open=True)
             result = tool.write_and_execute_datax(config, job_name=job_name)
         except CircuitBreakerOpenError:
             logger.error("DataX 熔断，无法执行")
-            return self.fail(error="DataX 熔断，请稍后重试")
+            return self.fail(error="DataX 熔断，请稍后重试", breaker_open=True)
         except Exception as e:  # noqa: BLE001 引擎层兜底，异常转统一失败结构
             datax_circuit_breaker.record_failure()
             logger.error("DataX 执行异常: %s", e, exc_info=True)
