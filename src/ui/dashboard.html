@@ -831,12 +831,20 @@ function _dataxRunStats(task) {
   const log = ex.log_tail || '';
   const total = (log.match(/Total\s+(\d+)\s+records/) || [])[1];
   const errors = (log.match(/Error\s+(\d+)\s+records/) || [])[1];
+  // 仅 DataX 执行有 return_code / records 日志；问数任务的 execution_status 是查询结果，不算 DataX 统计
+  if (ex.return_code == null && !total && !errors) return null;
   return {total, errors, rc: ex.return_code, seconds: ex.execution_time};
 }
 
 function validationSection(task) {
-  const v = task.validation_result || null;
+  const v0 = task.validation_result || null;
   const ds = _dataxRunStats(task);
+  // 数据集成/ETL 的 validation_result 是源端↔目标对账（含 checks/源目标行数/count_match）；
+  // 问数任务的 validation_result 只是 {row_count,column_count} 结果自检，行数已在「分析结果」体现，不渲染对账卡片
+  const isReconcile = !!v0 && (
+    (v0.checks && v0.checks.length) ||
+    v0.source_count != null || v0.target_count != null || v0.count_match != null);
+  const v = isReconcile ? v0 : null;
   if (!v && !ds) return '';
   const canRevalidate = !!(task.datax_config && task.parsed_intent);
   const body = `
