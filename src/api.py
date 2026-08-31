@@ -25,7 +25,7 @@ from src.utils import setup_logging
 
 from src.routers._support import _workflows, get_workflow  # noqa: F401  (测试/外部兼容)
 from src.routers.tasks import _enrich_mapping_with_schemas  # noqa: F401
-from src.routers import pages, sync as sync_router, tasks, datasources, ops, observability, semantic
+from src.routers import pages, sync as sync_router, tasks, datasources, ops, observability, semantic, schedules
 
 # 免鉴权路径：健康检查/页面/静态资源/文档
 _AUTH_EXEMPT = {"/", "/health", "/app", "/ui", "/ui/wizard", "/ui/semantic", "/chat", "/docs", "/openapi.json"}
@@ -43,6 +43,12 @@ async def lifespan(app):
         get_task_manager().mark_interrupted_tasks()
     except Exception:
         logging.getLogger(__name__).exception("启动清理中断任务失败")
+    # 数据源密码加密：历史明文一次性迁移为 Fernet 密文
+    try:
+        from src.tools.data_source import encrypt_plaintext_passwords
+        encrypt_plaintext_passwords()
+    except Exception:
+        logging.getLogger(__name__).exception("数据源密码加密迁移失败")
     await asyncio.to_thread(get_workflow, "data_integration")  # 预热工作流
     yield
     try:
@@ -88,3 +94,4 @@ app.include_router(datasources.router)
 app.include_router(ops.router)
 app.include_router(observability.router)
 app.include_router(semantic.router)
+app.include_router(schedules.router)

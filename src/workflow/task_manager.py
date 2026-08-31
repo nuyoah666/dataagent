@@ -169,6 +169,23 @@ def _init_tables(conn: sqlite3.Connection):
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_decision_basis ON decision_logs(basis)"
     )
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS scheduled_jobs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            task_type TEXT NOT NULL DEFAULT 'data_integration',
+            query TEXT NOT NULL,
+            schedule_type TEXT NOT NULL DEFAULT 'daily',
+            run_hour INTEGER DEFAULT 2,
+            interval_minutes INTEGER DEFAULT 60,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            last_run_at TEXT,
+            last_task_id TEXT,
+            last_status TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
     conn.commit()
 
 

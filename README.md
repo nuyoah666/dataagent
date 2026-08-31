@@ -117,9 +117,23 @@ python -m src.api
 完整 API 文档见 [docs/API.md](docs/API.md)（含请求/响应示例与状态码约定），
 交互式文档可直接访问 `http://localhost:8000/docs`（Swagger UI，自动同步代码）。
 
-Web 界面：
-- `GET /chat`：自然语言对话（支持集成/ETL/运维/分析四种任务，右上角直达同步向导）
-- `GET /ui`：全链路监控（任务/管道/审计/健康/数据源 + 同步向导 + 亮暗主题）
+Web 界面（推荐从单页外壳进入，浏览器访问根路径 `/` 自动跳转）：
+- `GET /app`：**单页工作台**——顶部全局导航 + iframe 保活，在
+  全链路监控 / 智能对话 / 同步向导 / 语义层配置之间切换不整页跳转，主题全局联动。
+- `GET /chat`：自然语言对话（集成 / ETL / 运维 / 分析四类任务，左侧历史）。
+- `GET /ui`：全链路监控（任务 / 管道 / 审计 / 健康 / 数据源 / **⏰定时调度** + 亮暗主题）。
+
+### Docker 一键起服务
+
+```bash
+# 数据库（MySQL/StarRocks/Mongo/ES）跑在宿主机上，容器通过 host.docker.internal 访问
+docker compose up --build
+# 打开 http://localhost:8000/app
+```
+
+镜像默认不含 DataX（DataX 装在宿主机）。平台 UI / API / 语义层 / 运维诊断开箱可用；
+若要在容器内执行真实数据同步，把宿主机 DataX 目录挂载进容器并设置 `DATAX_HOME`
+（见 `docker-compose.yml` 注释）。
 
 ### 5. 运行测试
 
@@ -386,8 +400,27 @@ SQL 型 MVP：指令中带"加工/清洗/聚合"（或 `/etl`）即路由到 `et
 - `GET /ui` 监控页有"待审批"卡片和通过/拒绝按钮
 - 运维诊断（data_ops）无副作用，不经过门禁；`APPROVAL_GATE=false` 可全局关闭
 
+## 定时调度（ODS 无人值守）
+
+数仓的本质是每天定时把 ODS 增量/快照跑起来。平台内置轻量调度，补齐
+"chat 触发跑完即走" 之外的**批处理脊柱**：
+
+- **登记即授权**：用户在「⏰ 调度」页登记同步指令与频率（每日定点 / 间隔分钟），
+  到点由守护线程自动触发，复用与 chat 完全相同的确定性链路；写操作类任务
+  **自动通过审批门禁**（`operator=scheduler` 并写审计），无需人工卡点。
+- **零依赖守护线程 + 纯函数到点判定**：不引入 APScheduler——单进程、每日批处理
+  场景下 cron/作业持久化/misfire 属过度设计；`is_due(job, now)` 可注入时钟单测。
+  需要多进程 / 复杂 cron 时，平滑替换为 APScheduler `BackgroundScheduler` 即可。
+- **API**：`GET/POST /schedules`、`POST /schedules/{id}/toggle|run`、`DELETE /schedules/{id}`；
+  成功的对话式集成任务可一键「⏰ 加入调度」。
+- 环境开关：`SCHEDULER_ENABLED`、`SCHEDULER_TICK_SECONDS`。
+
 ## 企业级控制
 
+- **数据源凭据加密落库**：数据源密码用 Fernet（AES-128 + HMAC）对称加密存储，
+  密文带 `enc:v1:` 前缀；接口只回 `has_password`，永不回显。主密钥取
+  `DATASOURCE_SECRET_KEY`，未配置则在 `state/.secret_key` 自动生成（不入库、不进 git）；
+  历史明文启动时一次性迁移，旧值向后兼容。
 - **审计日志**：`GET /audit` 查询谁在什么时候批准/拒绝/取消/重试了什么任务；
   审批记录包含配置指纹（DataX 配置/ETL SQL 的 sha256 前 16 位），
   可验证"批准的内容"未被篡改；API 可用 `X-Operator` 头标记操作人

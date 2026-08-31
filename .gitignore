@@ -48,3 +48,6 @@ tmp/
 docs/dev-notes/
 .playwright-cli/
 logs/*.log
+# 数据源加密主密钥（自动生成，切勿提交）
+.secret_key
+state/.secret_key

@@ -212,6 +212,7 @@
       <button data-tab="audit"><span class="ico">◷</span>审计</button>
       <button data-tab="health"><span class="ico">❤</span>组件健康</button>
       <button data-tab="datasources"><span class="ico">🗄</span>数据源</button>
+      <button data-tab="schedules"><span class="ico">⏰</span>调度</button>
     </nav>
     <div class="side-foot"><span style="width:8px;height:8px;border-radius:50%;background:var(--ok);box-shadow:0 0 6px var(--ok)"></span> 服务运行中</div>
   </aside>
@@ -311,6 +312,35 @@
         <thead><tr><th>名称</th><th>类型</th><th>主机:端口</th><th>库</th>
           <th>备注</th><th>密码</th><th>操作</th></tr></thead>
         <tbody id="dsRows"><tr><td colspan="7" class="empty">加载中…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div id="tab-schedules" style="display:none">
+    <div class="toolbar">
+      <button class="btn btn-action" onclick="openScheduleForm()">+ 登记定时作业</button>
+      <span class="refresh-note">ODS 每日增量/快照无人值守；登记即授权，到点自动通过审批（operator=scheduler，写审计）</span>
+    </div>
+    <div id="scheduleForm" class="panel" style="display:none;margin-bottom:14px">
+      <div class="form-grid">
+        <label>名称 *<input class="input" id="schName" placeholder="如：ODS用户表每日增量"></label>
+        <label>频率 *<select class="select" id="schType" onchange="onSchTypeChange()">
+          <option value="daily">每日（定点）</option>
+          <option value="interval_minutes">间隔分钟（演示）</option>
+        </select></label>
+        <label>执行点(小时 0-23)<input class="input" id="schHour" type="number" value="2" min="0" max="23"></label>
+        <label>间隔分钟<input class="input" id="schInterval" type="number" value="60" min="1" style="display:none"></label>
+        <label style="grid-column:1/-1">同步指令 *（与对话相同的自然语言）<textarea class="input" id="schQuery" rows="2" placeholder="把 datax_test.user 增量同步到 starrocks"></textarea></label>
+      </div>
+      <div class="actions-bar">
+        <button class="btn btn-action" onclick="saveSchedule()">保存</button>
+        <button class="btn btn-ghost" onclick="$('scheduleForm').style.display='none'">取消</button>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>名称</th><th>频率</th><th>同步指令</th><th>上次运行</th><th>结果</th><th>操作</th></tr></thead>
+        <tbody id="schRows"><tr><td colspan="6" class="empty">加载中…</td></tr></tbody>
       </table>
     </div>
   </div>
@@ -422,6 +452,9 @@ function taskActions(t, withRow = true) {
       b += `<button class="btn btn-action" onclick="event.stopPropagation();doDiagnose('${t.task_id}')">运维诊断</button>`;
     }
     b += `<button class="btn btn-action" onclick="event.stopPropagation();doReapBadcase('${t.task_id}')">沉淀 Bad Case</button>`;
+  }
+  if (t.status === 'success' && t.task_type === 'data_integration' && !(t.user_query || '').startsWith('[向导]')) {
+    b += `<button class="btn btn-ghost" onclick="event.stopPropagation();addToSchedule('${t.task_id}')">⏰ 加入调度</button>`;
   }
   if (['success', 'failed', 'cancelled', 'pending_approval'].includes(t.status)) {
     b += `<button class="btn btn-ghost" onclick="event.stopPropagation();doDelete('${t.task_id}')">删除</button>`;
@@ -1125,6 +1158,79 @@ async function doClearTasks() {
     alert('已清理 ' + (r.deleted || 0) + ' 条历史任务');
   } catch (e) { alert('清理失败: ' + e.message); }
 }
+function cadenceText(j) {
+  return j.schedule_type === 'daily'
+    ? `每日 ${String(j.run_hour ?? 2).padStart(2, '0')}:00`
+    : `每 ${j.interval_minutes || 60} 分钟`;
+}
+function schStatusTag(s) {
+  if (s === 'success') return '<span class="tag success">✅ 成功</span>';
+  if (s === 'running') return '<span class="tag running">⏳ 运行中</span>';
+  if (s && s.startsWith('error')) return '<span class="tag failed">❌ 失败</span>';
+  if (s === 'failed') return '<span class="tag failed">❌ 失败</span>';
+  return '<span class="tag">未运行</span>';
+}
+async function loadSchedules() {
+  try {
+    const r = await api('/schedules');
+    const rows = r.schedules || [];
+    $('schRows').innerHTML = rows.map(j => `<tr>
+      <td>${escapeHtml(j.name)}${j.enabled ? '' : ' <span class="muted-flag">（已停用）</span>'}</td>
+      <td style="white-space:nowrap">${cadenceText(j)}</td>
+      <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(j.query)}">${escapeHtml(j.query)}</td>
+      <td style="white-space:nowrap">${j.last_run_at ? fmtTime(j.last_run_at) : '—'}${j.last_task_id ? `<div class="muted-flag">${escapeHtml(j.last_task_id)}</div>` : ''}</td>
+      <td>${schStatusTag(j.last_status)}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-action" onclick="runScheduleNow(${j.id})">立即运行</button>
+        <button class="btn btn-ghost" onclick="toggleSchedule(${j.id})">${j.enabled ? '停用' : '启用'}</button>
+        <button class="btn btn-ghost" onclick="deleteSchedule(${j.id})">删除</button>
+      </td></tr>`).join('') || '<tr><td colspan="6" class="empty">暂无定时作业，点「登记定时作业」创建</td></tr>';
+  } catch (e) {
+    $('schRows').innerHTML = `<tr><td colspan="6" class="empty">加载失败: ${escapeHtml(e.message)}</td></tr>`;
+  }
+}
+function openScheduleForm() { $('scheduleForm').style.display = ''; $('schName').focus(); }
+function onSchTypeChange() {
+  const daily = $('schType').value === 'daily';
+  $('schHour').style.display = daily ? '' : 'none';
+  $('schInterval').style.display = daily ? 'none' : '';
+}
+async function saveSchedule() {
+  const body = {
+    name: $('schName').value.trim(), query: $('schQuery').value.trim(),
+    schedule_type: $('schType').value, run_hour: Number($('schHour').value || 2),
+    interval_minutes: Number($('schInterval').value || 60),
+  };
+  if (!body.name || !body.query) { alert('名称和同步指令必填'); return; }
+  try {
+    await api('/schedules', {method: 'POST', headers: Object.assign({'Content-Type': 'application/json'}, headers()), body: JSON.stringify(body)});
+    $('scheduleForm').style.display = 'none'; $('schName').value = ''; $('schQuery').value = '';
+    loadSchedules();
+  } catch (e) { alert(e.message); }
+}
+async function toggleSchedule(id) { await api('/schedules/' + id + '/toggle', {method: 'POST'}); loadSchedules(); }
+async function runScheduleNow(id) {
+  alert('已触发，后台执行中（自动通过审批），稍后刷新查看结果');
+  try { await api('/schedules/' + id + '/run', {method: 'POST'}); loadSchedules(); loadTasks(); }
+  catch (e) { alert(e.message); }
+}
+async function deleteSchedule(id) {
+  if (!confirm('确认删除该定时作业？')) return;
+  try { await api('/schedules/' + id, {method: 'DELETE'}); loadSchedules(); }
+  catch (e) { alert(e.message); }
+}
+async function addToSchedule(taskId) {
+  const t = await api('/tasks/' + taskId);
+  const q = (t.user_query || '').replace(/^\[向导\]\s*/, '');
+  if (!q) { alert('该任务无可用指令'); return; }
+  if (!confirm('将该同步指令登记为「每日 02:00」定时作业？\n登记即授权，到点自动执行，无需人工审批。')) return;
+  try {
+    await api('/schedules', {method: 'POST', headers: Object.assign({'Content-Type': 'application/json'}, headers()),
+      body: JSON.stringify({name: '每日同步: ' + q.slice(0, 20), query: q, schedule_type: 'daily', run_hour: 2})});
+    alert('已登记，可在「调度」页管理/改频率');
+  } catch (e) { alert(e.message); }
+}
+
 async function doReject(id) { if (!confirm('确认拒绝执行该任务？')) return;
   try { await api('/tasks/' + id + '/reject', {method:'POST'}); alert('已拒绝执行'); } catch(e) { alert(e.message); } loadAll(); }
 async function doRetry(id) { if (!confirm('确认重试该任务？')) return;
@@ -1190,12 +1296,13 @@ document.querySelectorAll('.sidebar nav button').forEach(b => b.onclick = () => 
   document.querySelectorAll('.sidebar nav button').forEach(x => x.classList.remove('active'));
   b.classList.add('active');
   state.tab = b.dataset.tab;
-  ['tasks','pipelines','audit','health','datasources'].forEach(t => $('tab-' + t).style.display = t === b.dataset.tab ? '' : 'none');
+  ['tasks','pipelines','audit','health','datasources','schedules'].forEach(t => $('tab-' + t).style.display = t === b.dataset.tab ? '' : 'none');
   if (b.dataset.tab === 'tasks') loadTasks();
   if (b.dataset.tab === 'pipelines') loadPipelines();
   if (b.dataset.tab === 'audit') loadAudit();
   if (b.dataset.tab === 'health') loadHealth();
   if (b.dataset.tab === 'datasources') loadSources();
+  if (b.dataset.tab === 'schedules') loadSchedules();
 });
 
 function loadAll() {
@@ -1204,6 +1311,7 @@ function loadAll() {
   if (state.tab === 'audit') loadAudit();
   if (state.tab === 'health') loadHealth();
   if (state.tab === 'datasources') loadSources();
+  if (state.tab === 'schedules') loadSchedules();
 }
 
 $('apiToken').value = localStorage.getItem(TOKEN_KEY) || '';

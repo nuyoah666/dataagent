@@ -1,0 +1,27 @@
+services:
+  dataagent:
+    build: .
+    image: dataagent:latest
+    container_name: dataagent
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      # 容器访问宿主机上的数据库（Docker Desktop 自带 host.docker.internal；Linux 用下方 extra_hosts）
+      MYSQL_HOST: host.docker.internal
+      MONGODB_HOST: host.docker.internal
+      ES_HOST: host.docker.internal
+      STARROCKS_HOST: host.docker.internal
+      SCHEDULER_ENABLED: "true"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./state:/app/state
+      - ./logs:/app/logs
+      - ./jobs:/app/jobs
+      # 在容器内执行真实 DataX 同步时，挂载宿主机 DataX 目录并在 environment 里设置 DATAX_HOME：
+      # - G:/databases/datax:/opt/datax
+    # environment:
+    #   DATAX_HOME: /opt/datax
+    restart: unless-stopped

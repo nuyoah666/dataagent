@@ -14,6 +14,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from ..workflow.task_manager import _get_conn, _db_lock
+from ..utils.crypto import encrypt_password, decrypt_password, is_encrypted
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,7 @@ def _now() -> str:
 
 
 def _row_to_dict(row) -> dict:
+    # 读边界解密：内部一律使用明文密码；对外视图经 _mask 隐藏
     return {
         "id": row["id"],
         "name": row["name"],
@@ -33,7 +35,7 @@ def _row_to_dict(row) -> dict:
         "host": row["host"],
         "port": row["port"],
         "username": row["username"],
-        "password": row["password"],
+        "password": decrypt_password(row["password"]),
         "database": row["database"],
         "remark": row["remark"],
         "created_at": row["created_at"],
@@ -97,7 +99,7 @@ def create_source(
                     created_at, updated_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (name.strip(), db_type, host, int(port), username or "",
-                 password or "", database or "", remark or "", _now(), _now()),
+                 encrypt_password(password or ""), database or "", remark or "", _now(), _now()),
             )
             conn.commit()
         return {"success": True, "id": cur.lastrowid}
@@ -133,7 +135,7 @@ def update_source(source_id: int, **fields) -> dict:
                    WHERE id=?""",
                 (name.strip(), db_type, host, int(port),
                  fields.get("username", raw["username"]) or "",
-                 password, fields.get("database", raw["database"]) or "",
+                 encrypt_password(password), fields.get("database", raw["database"]) or "",
                  fields.get("remark", raw["remark"]) or "", _now(), int(source_id)),
             )
             conn.commit()
@@ -349,6 +351,26 @@ def _discover_mongodb(raw: dict, database: str = None) -> dict:
     except Exception as e:
         logger.warning("MongoDB 数据源发现失败: %s", e)
         return {"success": False, "error": str(e), "databases": [], "tables": []}
+
+
+def encrypt_plaintext_passwords() -> int:
+    """一次性迁移：把库中尚未加密（无 enc:v1: 前缀）的密码加密落库，返回迁移条数。"""
+    conn = _get_conn()
+    migrated = 0
+    with _db_lock:
+        rows = conn.execute("SELECT id, password FROM data_sources").fetchall()
+        for row in rows:
+            if row["password"] and not is_encrypted(row["password"]):
+                conn.execute(
+                    "UPDATE data_sources SET password=? WHERE id=?",
+                    (encrypt_password(row["password"]), row["id"]),
+                )
+                migrated += 1
+        if migrated:
+            conn.commit()
+    if migrated:
+        logger.info("数据源密码加密迁移完成：%d 条", migrated)
+    return migrated
 
 
 def _validate(name, db_type, host, port) -> Optional[str]:

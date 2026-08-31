@@ -1,0 +1,16 @@
+.git
+.venv/
+__pycache__/
+*.pyc
+state/
+logs/
+jobs/
+data/
+.env
+INTERVIEW*.md
+.playwright-cli/
+tmp_*
+docs/dev-notes/
+*.db
+*.db-wal
+*.db-shm
