@@ -87,6 +87,15 @@ app.mount(
     StaticFiles(directory=str(Path(__file__).parent / "static")),
     name="static",
 )
+
+
+@app.middleware("http")
+async def no_cache_static(request: Request, call_next):
+    """本地开发/演示：静态 JS/CSS 不缓存，避免改完 common.js 被浏览器启发式缓存坑到。"""
+    response = await call_next(request)
+    if request.url.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+    return response
 app.include_router(pages.router)
 app.include_router(sync_router.router)
 app.include_router(tasks.router)

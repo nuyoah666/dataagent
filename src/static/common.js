@@ -1,5 +1,3 @@
-// 嵌入 /app 工作台 iframe 时：子页隐藏自带品牌头部（外壳顶栏已有品牌），避免重复
-if (window.self !== window.top) document.documentElement.classList.add('embedded');
 // 三页共享：DOM 简写、鉴权头、API 封装、HTML 转义、主题切换
 // localStorage 键位统一：dataagent_api_token / dataagent_operator / dataagent_theme
 const $ = id => document.getElementById(id);
