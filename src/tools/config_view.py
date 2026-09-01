@@ -59,6 +59,37 @@ _STARROCKS_TYPE_MAP = {
     "mediumblob": "STRING",
     "longblob": "STRING",
 }
+# DataX 插件类型（mongo/ES 源列自带类型）-> 目标库类型
+_DATAX_TO_STARROCKS = {
+    "int": "INT", "integer": "INT", "long": "BIGINT", "double": "DOUBLE",
+    "float": "FLOAT", "number": "DECIMAL(38,6)",
+    "string": "STRING", "keyword": "STRING", "text": "STRING",
+    "bool": "BOOLEAN", "boolean": "BOOLEAN",
+    "datetime": "DATETIME", "timestamp": "DATETIME",
+    "objectid": "VARCHAR(32)", "array": "JSON", "object": "JSON",
+    "bytes": "VARBINARY(65533)", "binary": "VARBINARY(65533)",
+}
+_DATAX_TO_MYSQL = {
+    "int": "INT", "integer": "INT", "long": "BIGINT", "double": "DOUBLE",
+    "float": "FLOAT", "number": "DECIMAL(38,6)",
+    "string": "TEXT", "keyword": "VARCHAR(512)", "text": "TEXT",
+    "bool": "TINYINT(1)", "boolean": "TINYINT(1)",
+    "datetime": "DATETIME", "timestamp": "DATETIME",
+    "objectid": "VARCHAR(32)", "array": "JSON", "object": "JSON",
+    "bytes": "LONGBLOB", "binary": "LONGBLOB",
+}
+_DATAX_TO_ES = {
+    "long": "long", "int": "integer", "integer": "integer",
+    "double": "double", "float": "double", "number": "double",
+    "string": "keyword", "keyword": "keyword", "text": "text",
+    "bool": "boolean", "boolean": "boolean",
+    "datetime": "date", "timestamp": "date",
+    "objectid": "keyword", "array": "object", "object": "object",
+    "bytes": "binary", "binary": "binary",
+}
+# MySQL 原生类型白名单（这些类型跨实例原样透传；其余按 DataX 类型映射）
+_MYSQL_NATIVE = set(_STARROCKS_TYPE_MAP) | {"numeric", "boolean", "bit"}
+
 _INT_NUMERIC = {"tinyint", "smallint", "mediumint", "int", "integer", "bigint", "year"}
 _FLOAT_NUMERIC = {"decimal", "numeric", "float", "double"}
 _DATETIME_TYPES = {"date", "datetime", "timestamp", "time"}
@@ -74,20 +105,26 @@ def infer_target_type(source_type: str, target_db_type: str) -> str:
     if not st:
         return ""
     tdb = str(target_db_type or "").lower()
-    if tdb == "mysql":
-        # MySQL -> MySQL 类型体系一致，直接透传（含 unsigned/长度参数）
-        return st
     base = re.split(r"[( ]", st, maxsplit=1)[0]
+    arg = re.search(r"\(([^)]+)\)", st)
+    if tdb == "mysql":
+        # MySQL 原生类型原样透传（含 unsigned/长度参数）；
+        # DataX 插件类型（mongo/ES：string/long/objectid...）走映射表
+        if base in _MYSQL_NATIVE:
+            return st
+        return _DATAX_TO_MYSQL.get(base, "")
     if tdb == "starrocks":
-        mapped = _STARROCKS_TYPE_MAP.get(base)
+        mapped = _STARROCKS_TYPE_MAP.get(base) or _DATAX_TO_STARROCKS.get(base)
         if not mapped:
             return ""
         if base in ("char", "varchar", "decimal", "numeric"):
-            # 保留长度/精度参数：varchar(32) -> VARCHAR(32)
-            arg = re.search(r"\(([^)]+)\)", st)
-            return f"{mapped}({arg.group(1)})" if arg else mapped
+            # 保留长度/精度参数：varchar(32) -> VARCHAR(32)；无长度给安全默认
+            if arg:
+                return f"{mapped}({arg.group(1)})"
+            return "VARCHAR(65533)" if base == "varchar" else mapped
         return mapped
     if tdb == "elasticsearch":
+        # MySQL 原生类型优先（int->long 防溢出，与 DataX mysqlwriter 约定一致）
         if base in _INT_NUMERIC:
             return "long"
         if base in _FLOAT_NUMERIC:
@@ -98,7 +135,8 @@ def infer_target_type(source_type: str, target_db_type: str) -> str:
             return "boolean"
         if base in _STRING_TYPES:
             return "keyword"
-        return ""
+        # DataX 插件类型（mongo/ES 源：string/keyword/text/objectid/array/object/binary...）
+        return _DATAX_TO_ES.get(base, "")
     return ""
 
 def _first(x) -> Any:
@@ -207,6 +245,11 @@ def build_target_table_ddl(
         for m in (mapping or [])
         if str(m.get("target", "")).strip()
     ]
+    # 类型推断失败的列给安全兜底类型，保证 DDL 始终合法（映射编辑器仍标注空类型提示人工确认）
+    fallback_type = "STRING" if tdb == "starrocks" else "VARCHAR(255)"
+    for c in cols:
+        if not str(c.get("type") or "").strip():
+            c["type"] = fallback_type
     if not cols:
         return ""
 
@@ -403,6 +446,24 @@ def apply_field_mapping(
     reader_param = reader.setdefault("parameter", {})
     writer_param = writer.setdefault("parameter", {})
 
+    # 旧配置里的列类型（编辑映射时前端不传源类型，按列名继承，避免 int/date 退化成 string）
+    old_reader_types = {
+        str(c.get("name", "")).lower(): str(c.get("type", "") or "")
+        for c in normalize_columns(reader_param.get("column"))
+    }
+    old_writer_types = {
+        str(c.get("name", "")).lower(): str(c.get("type", "") or "")
+        for c in normalize_columns(writer_param.get("column"))
+    }
+
+    def _mongo_type(col_name: str, given: str) -> str:
+        g = str(given or "").strip()
+        if g:
+            return g
+        if str(col_name).lower() == "_id":
+            return "objectid"  # mongo 内置 ObjectId -> hex 字符串
+        return old_reader_types.get(str(col_name).lower(), "string")
+
     # 源列
     src_names = [
         m.get("source", "").strip()
@@ -414,32 +475,40 @@ def apply_field_mapping(
         reader_param["column"] = src_names if src_names else ["*"]
     elif rname == "mongodbreader":
         reader_param["column"] = [
-            {"name": m["source"], "type": m.get("source_type") or "string"}
+            {"name": m["source"],
+             "type": _mongo_type(m["source"], m.get("source_type"))}
             for m in mapping if m.get("source") and m["source"] != "*"
         ]
 
-    # 目标列
+    # 目标列（ES 字段名不允许下划线开头：_id 行确定性剔除）
     wname = str(writer.get("name", "")).lower()
+    es_safe = [m for m in mapping
+               if not (wname == "elasticsearchwriter"
+                       and str(m.get("target", "")).strip().lower() == "_id")]
     if wname == "elasticsearchwriter":
         writer_param["column"] = [
             {
                 "name": m.get("target", "").strip(),
-                "type": m.get("target_type") or "keyword",
+                "type": str(m.get("target_type") or "").strip()
+                or old_writer_types.get(str(m.get("target", "")).strip().lower(), "")
+                or "keyword",
             }
-            for m in mapping if m.get("target", "").strip()
+            for m in es_safe if m.get("target", "").strip()
         ]
     elif wname == "mongodbwriter":
         writer_param["column"] = [
             {
                 "name": m.get("target", "").strip(),
-                "type": m.get("target_type") or "string",
+                "type": str(m.get("target_type") or "").strip()
+                or old_writer_types.get(str(m.get("target", "")).strip().lower(), "")
+                or "string",
             }
-            for m in mapping if m.get("target", "").strip()
+            for m in es_safe if m.get("target", "").strip()
         ]
     elif wname == "mysqlwriter":
         writer_param["column"] = [
             m.get("target", "").strip()
-            for m in mapping if m.get("target", "").strip()
+            for m in es_safe if m.get("target", "").strip()
         ]
 
     return cfg

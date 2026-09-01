@@ -762,6 +762,11 @@ def _apply_schema_columns(config: Dict[str, Any], schema: Dict[str, Any]) -> Dic
     columns = (schema or {}).get("columns") or []
 
     for item in config.get("job", {}).get("content", []):
+        # ES 目标：字段名不允许下划线开头（_id 是元数据字段），必须剔除内置 _id；
+        # 其余目标（MySQL/StarRocks/MongoDB）允许 _id 列，默认保留，
+        # 用户可在字段映射里选择是否同步（删掉该行即不同步）
+        writer_name = str((item.get("writer") or {}).get("name", "")).lower()
+        drop_internal_id = writer_name == "elasticsearchwriter"
         for role in ("reader", "writer"):
             plugin = item.get(role, {})
             spec = _get_plugin_spec(plugin.get("name", ""), role)
@@ -771,9 +776,9 @@ def _apply_schema_columns(config: Dict[str, Any], schema: Dict[str, Any]) -> Dic
                 # reader（mysqlreader 读源表）与 writer（ODS 镜像同构）都按源表
                 # 结构回填列名；此前只回填 writer，导致 starrocks->ES 等路径 reader
                 # 列为空、DataX 运行期才报 DBUtilErrorCode-03
-                _fill_plain_columns(plugin, columns, role)
+                _fill_plain_columns(plugin, columns, role, drop_internal_id=drop_internal_id)
             else:
-                _fill_typed_columns(plugin, columns, spec)
+                _fill_typed_columns(plugin, columns, spec, drop_internal_id=drop_internal_id)
     _apply_es_primary_key(config, schema)
     return config
 
@@ -828,11 +833,15 @@ def _apply_es_primary_key(config: Dict[str, Any], schema: Dict[str, Any]) -> Non
 
 def _fill_plain_columns(
     plugin: Dict[str, Any], columns: List[Dict[str, Any]], role: str = "writer",
+    drop_internal_id: bool = False,
 ) -> None:
-    """plain 风格（mysqlreader/mysqlwriter）：按源表结构重建列名。"""
+    """plain 风格（mysqlreader/mysqlwriter）：按源表结构重建列名。
+
+    drop_internal_id=True（ES 目标）时剔除 _id：ES 字段名不允许下划线开头。
+    """
     col_names = [
         c.get("name", "") for c in columns
-        if c.get("name") and c.get("name") != "_id"
+        if c.get("name") and not (drop_internal_id and c.get("name") == "_id")
     ]
     if col_names:
         plugin["parameter"]["column"] = col_names
@@ -841,6 +850,7 @@ def _fill_plain_columns(
 
 def _fill_typed_columns(
     plugin: Dict[str, Any], columns: List[Dict[str, Any]], spec: PluginSpec,
+    drop_internal_id: bool = False,
 ) -> None:
     """typed 风格（ES/mongo）：有 schema 时按类型映射重建，否则仅规范化。
 
@@ -862,7 +872,7 @@ def _fill_typed_columns(
         mapped = []
         for col in columns:
             col_name = col.get("name", "")
-            if not col_name or col_name == "_id":
+            if not col_name or (drop_internal_id and col_name == "_id"):
                 continue
             py_types = col.get("types")
             if py_types:

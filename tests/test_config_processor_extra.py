@@ -617,9 +617,26 @@ class TestSchemaColumns:
                             target_table="ods_user_from_mysql")
         result_sr = process_config(intent_sr, schema, llm_config=None)
         assert result_sr["success"] is True, result_sr.get("errors")
-        sr_writer = result_sr["config"]["job"]["content"][0]["writer"]
+        sr_content = result_sr["config"]["job"]["content"][0]
+        sr_writer = sr_content["writer"]
         assert sr_writer["name"] == "mysqlwriter"
-        assert sr_writer["parameter"]["column"] == ["id", "name", "dt"]
+        # 非 ES 目标：内置 _id 默认同步（可在字段映射里删行取消），reader 类型为 objectid
+        assert sr_writer["parameter"]["column"] == ["_id", "id", "name", "dt"]
+        sr_reader = {c["name"]: c["type"] for c in sr_content["reader"]["parameter"]["column"]}
+        assert sr_reader["_id"] == "objectid"
+        assert sr_reader["id"] == "long"
+
+        # mongodb -> mongodb：同为非 ES 目标，_id 保留
+        intent_mg = _intent(source_db_type="mongodb", source_port=27017,
+                            source_username="", source_password="",
+                            source_table="user_from_mysql",
+                            target_db_type="mongodb", target_port=27017,
+                            target_database="datax_test",
+                            target_table="ods_user_from_mysql")
+        result_mg = process_config(intent_mg, schema, llm_config=None)
+        assert result_mg["success"] is True, result_mg.get("errors")
+        mg_cols = result_mg["config"]["job"]["content"][0]["writer"]["parameter"]["column"]
+        assert any(c.get("name") == "_id" for c in mg_cols)
 
     def test_typed_columns_tolerate_missing_type(self):
         # 回归：列既无 type 也无 types 时不越界，统一兜底 fallback_type

@@ -474,9 +474,12 @@ async def create_target_table(task_id: str, request: Request):
         )
     if view.get("target_table_exists") is True:
         raise HTTPException(status_code=409, detail="目标表已存在，无需建表")
+    from src.tools.config_processor import detect_pk_columns
+
+    pk_col = (detect_pk_columns(task.get("source_schema") or {}) or [""])[0]
     ddl = build_target_table_ddl(
         table, view.get("field_mapping") or [], target_db_type,
-        primary_key=str((task.get("source_schema") or {}).get("primary_key") or ""),
+        primary_key=pk_col,
     )
     if not ddl:
         raise HTTPException(status_code=422, detail="字段映射无有效列，无法生成建表 DDL")
@@ -640,6 +643,18 @@ def _enrich_mapping_with_schemas(view: dict, task: dict = None) -> dict:
 
     def _query_columns(side: dict) -> list:
         db_type = str(side.get("db_type", "")).lower()
+        if db_type == "mongodb":
+            # mongo 源无法走 SQL DESCRIBE：用配置阶段采样并随任务保存的 schema
+            from src.tools.config_processor import _PY_TYPE_TO_MONGO
+
+            cols = []
+            for c in ((task or {}).get("source_schema") or {}).get("columns") or []:
+                py0 = str((c.get("types") or [""])[0]).lower()
+                cols.append({
+                    "name": c.get("name", ""),
+                    "type": _PY_TYPE_TO_MONGO.get(py0, "string"),
+                })
+            return cols
         if db_type not in ("mysql", "starrocks"):
             return []
         if not side.get("table") or not side.get("database"):
@@ -720,6 +735,13 @@ def _enrich_mapping_with_schemas(view: dict, task: dict = None) -> dict:
             )
     view["target_table_exists"] = target_exists
 
+    # mongo 源：DataX 的 date 是 BSON 时间戳（含时分秒），目标应为 DATETIME 而非 DATE
+    source_db_type = str((view.get("source") or {}).get("db_type", "")).lower()
+    if source_db_type == "mongodb":
+        for m in view.get("field_mapping") or []:
+            if str(m.get("source_type", "")).lower() == "date":
+                m["source_type"] = "datetime"
+
     # 仍缺失的列（目标表不存在/非 mysql 系引擎）-> 按源端类型推断，标注来源供前端展示
     view["field_mapping"] = [
         {
@@ -737,11 +759,14 @@ def _enrich_mapping_with_schemas(view: dict, task: dict = None) -> dict:
     view["target_ddl"] = ""
     if target_exists is False and target.get("table"):
         try:
+            from src.tools.config_processor import detect_pk_columns
+
+            pk_col = (detect_pk_columns((task or {}).get("source_schema") or {}) or [""])[0]
             view["target_ddl"] = build_target_table_ddl(
                 str(target.get("table")),
                 view["field_mapping"],
                 target_db_type,
-                primary_key=str(((task or {}).get("source_schema") or {}).get("primary_key") or ""),
+                primary_key=pk_col,
             )
         except Exception as e:
             logging.getLogger(__name__).warning(f"生成目标建表 DDL 失败: {e}")
