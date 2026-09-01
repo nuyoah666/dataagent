@@ -62,6 +62,11 @@
     background:rgba(234,179,8,.12); border:1px solid rgba(234,179,8,.45); color:#92600a; }
   .pre-done { margin-top:10px; padding:8px 12px; border-radius:8px; font-size:13px; line-height:1.6;
     background:rgba(34,197,94,.1); border:1px solid rgba(34,197,94,.35); color:var(--ok); }
+  .impact { margin-top:10px; padding:8px 12px; border-radius:8px; font-size:13px; line-height:1.6; }
+  .impact-danger { background:rgba(239,68,68,.12); border:1px solid rgba(239,68,68,.5); color:var(--err); }
+  .impact-warn { background:rgba(234,179,8,.12); border:1px solid rgba(234,179,8,.45); color:#92600a; }
+  .impact-info { background:rgba(56,189,248,.1); border:1px solid rgba(56,189,248,.35); color:var(--accent); }
+  .impact .imp-target { font-family:monospace; font-weight:600; }
   .pre-mini { color:#92600a !important; border-color:rgba(234,179,8,.5) !important; }
   .btn-reject { background:rgba(239,68,68,.18); border-color:transparent; color:var(--err); }
   .btn-action { background:rgba(56,189,248,.15); border-color:transparent; color:var(--accent); }
@@ -843,6 +848,23 @@ function syncSection(task) {
     </div>`;
 }
 
+function impactBanner(task) {
+  // 审批影响面（配置阶段只读检查：目标是否存在/现有行数/写入方式/风险）
+  const im = task.approval_impact;
+  if (!im || !im.available) return '';
+  const icon = im.risk === 'danger' ? '🚨' : im.risk === 'warn' ? '⚠️' : 'ℹ️';
+  const title = im.risk === 'danger' ? '<b>审批影响面 · 高风险</b>'
+              : im.risk === 'warn' ? '<b>审批影响面 · 需注意</b>'
+              : '<b>审批影响面</b>';
+  const stateTxt = im.exists
+    ? '已存在' + (im.current_count != null ? '，现有 ' + im.current_count + ' 行' : '')
+    : '不存在';
+  return `<div class="impact impact-${im.risk}">${icon} ${title}
+    <div style="margin-top:2px">目标：<span class="imp-target">${escapeHtml(im.target || '')}</span>
+    <span style="opacity:.8">（${stateTxt}）</span></div>
+    <div style="margin-top:2px">${escapeHtml(im.action || '')}</div></div>`;
+}
+
 function preActionBanner(task) {
   const pi = task.parsed_intent || {};
   if (task.task_type !== 'data_integration' || pi.pre_action !== 'truncate') return '';
@@ -1161,7 +1183,7 @@ async function showDetail(taskId) {
           <span>耗时：<b>${durationSec(task.created_at, task.completed_at)}</b></span>
         </div>
         ${syncSection(task)}
-        ${preActionBanner(task)}
+        ${task.status === 'pending_approval' ? (impactBanner(task) || preActionBanner(task)) : preActionBanner(task)}
       </div>
       ${renderConfigSection(cfg)}
       ${validationSection(task)}

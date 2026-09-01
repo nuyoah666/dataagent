@@ -17,6 +17,7 @@ from ..agents import get_step_agents, get_task_approval
 from ..agents.prompts import PROMPT_VERSION
 from ..tools import detect_incremental_field, enhance_config_with_incremental
 from ..tools.db_tool import validate_identifier
+from ..tools.approval_impact import build_approval_impact
 from .task_manager import get_task_manager, TaskStatus, _NON_TERMINAL_STATUSES
 from ..utils.security import redact_secrets, _is_secret_key
 from ..utils.llm import bind_task_context, reset_task_context
@@ -168,6 +169,33 @@ class AgentWorkflow:
                               else "默认/指令内凭据回填"),
                     basis="explicit" if pi.get("source_name") else "default",
                 )
+
+            # 审批影响面预览（只读、确定性；检查失败不阻断审批主流程）
+            if self.task_type in ("data_integration", "etl_development"):
+                impact_intent = dict(pi)
+                if incremental_field:
+                    impact_intent["incremental_field"] = incremental_field
+                impact = build_approval_impact(
+                    impact_intent,
+                    task_type=self.task_type,
+                    etl={"target_table": result.get("etl_target_table") or ""},
+                )
+                if impact.get("available"):
+                    self.task_mgr.update_task(task_id, approval_impact=impact)
+                    self.task_mgr.log(
+                        task_id,
+                        "WARNING" if impact.get("risk") == "danger" else "INFO",
+                        f"审批影响面：{impact['action']}",
+                    )
+                    self.task_mgr.record_decision(
+                        task_id, "approval_impact",
+                        decision=impact["action"],
+                        basis="rule",
+                        evidence={"target": impact.get("target"),
+                                  "exists": impact.get("exists"),
+                                  "current_count": impact.get("current_count"),
+                                  "risk": impact.get("risk")},
+                    )
         else:
             self.task_mgr.log(task_id, "ERROR", f"ConfigAgent 失败: {result.get('error')}")
             self.task_mgr.complete_task(

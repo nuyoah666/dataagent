@@ -278,6 +278,26 @@ const NODE_LABEL = {
   task_approve:"审批", task_reject:"拒绝", config_edit:"改配置", mapping_edit:"改映射",
   target_table_create:"建表", badcase_reap:"沉淀BadCase", goodcase_reap:"沉淀GoodCase",
 };
+function impactBanner(t) {
+  // 审批影响面：配置阶段只读检查（目标是否存在/现有行数/写入方式/风险等级）
+  const im = t.approval_impact;
+  if (!im || !im.available) return '';
+  const styles = {
+    danger: 'background:rgba(239,68,68,.12);color:#ef4444;border-color:rgba(239,68,68,.5)',
+    warn:   'background:rgba(234,179,8,.15);color:#a16207;border-color:rgba(234,179,8,.5)',
+    info:   'background:rgba(56,189,248,.12);color:#38bdf8;border-color:rgba(56,189,248,.4)',
+  };
+  const icon = im.risk === 'danger' ? '🚨' : im.risk === 'warn' ? '⚠️' : 'ℹ️';
+  const title = im.risk === 'danger' ? '<b>审批影响面 · 高风险</b>'
+              : im.risk === 'warn' ? '<b>审批影响面 · 需注意</b>' : '<b>审批影响面</b>';
+  const stateTxt = im.exists ? '已存在' + (im.current_count != null ? '，现有 ' + im.current_count + ' 行' : '') : '不存在';
+  return `<div style="margin:8px 0;padding:8px 12px;border-radius:8px;font-size:13px;line-height:1.6;border:1px solid;${styles[im.risk] || styles.info}">
+    ${icon} ${title}
+    <div style="margin-top:2px">目标：<span style="font-family:monospace;font-weight:600">${escapeHtml(im.target || '')}</span>
+    <span style="opacity:.8">（${stateTxt}）</span></div>
+    <div style="margin-top:2px">${escapeHtml(im.action || '')}</div></div>`;
+}
+
 function renderDecisions(t) {
   const ds = t.decisions;
   if (!ds || !ds.length) return '';
@@ -320,6 +340,7 @@ function renderTask(t, logs) {
 
   let body = `<span class="tag ${t.status}">${STAGE_LABEL[t.status] || t.status}</span>`;
   if (t.status === 'pending_approval') {
+    body += impactBanner(t);
     body += `<div class="btns">
       <button class="btn btn-approve" onclick="act('${t.task_id}','approve')">✅ 通过并执行</button>
       <button class="btn btn-reject" onclick="act('${t.task_id}','reject')">❌ 拒绝</button>
