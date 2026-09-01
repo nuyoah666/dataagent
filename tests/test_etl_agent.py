@@ -42,6 +42,11 @@ class FakeStarrocks:
         self.executed.append(sql)
         return 0
 
+    def executemany(self, sql, seq):
+        self._sql = sql
+        self.executed.append(sql)
+        return len(seq)
+
     def fetchall(self):
         upper = self._sql.upper()
         if upper.startswith("SHOW TABLES"):
@@ -339,3 +344,127 @@ class TestEnumAutoDetect:
         assert "`code_type`" in ddl
         assert "`inserttime`" in ddl
         assert "`updatetime`" in ddl
+
+
+class _CodeMapFake(FakeStarrocks):
+    """模拟码值表：DISTINCT code_type 返回已维护类型，seed 查询返回空。"""
+
+    def __init__(self, code_types=(), **kw):
+        super().__init__(**kw)
+        self.code_types = code_types
+
+    def fetchall(self):
+        upper = self._sql.upper()
+        if "DIM_MAPPING" in upper:
+            if "DISTINCT" in upper:
+                return [(t,) for t in self.code_types]
+            return []  # seed 的 SELECT code_type, code
+        return super().fetchall()
+
+
+class TestCodeMapSeed:
+    def test_seed_additive_and_idempotent(self):
+        """seed 只插缺失行，已有中文名不被覆盖。"""
+        from src.tools.code_map import seed_code_map
+
+        class FakeConn:
+            def __init__(self):
+                self.rows = [("gender", "9")]  # 已有一条业务码值
+                self.inserted = []
+
+            def cursor(self):
+                outer = self
+
+                class Cur:
+                    def execute(self, sql):
+                        self.sql = sql
+
+                    def executemany(self, sql, seq):
+                        outer.inserted.extend(seq)
+
+                    def fetchall(self):
+                        return list(outer.rows)
+
+                    def __enter__(self):
+                        return self
+
+                    def __exit__(self, *a):
+                        return False
+
+                return Cur()
+
+            def commit(self):
+                pass
+
+        conn = FakeConn()
+        n = seed_code_map(conn)
+        # 默认种子中 (gender,9) 不存在 -> 插入；(gender,1)(gender,0)(gender,2)
+        # (sex,0/1/2) 共 6 条（gender,9 不在种子里）
+        assert n == 6
+        assert ("gender", "1", "男") in conn.inserted
+        assert ("gender", "9", "男") not in conn.inserted  # 不臆造业务码值
+        # 再补一次：无缺失 -> 0 行
+        conn.rows += conn.inserted
+        assert seed_code_map(conn) == 0
+
+
+class TestETLAutoEnum:
+    def test_auto_enum_mapping_and_alter(self, monkeypatch):
+        """源表含 gender 且码值表有 gender -> 自动 LEFT JOIN；已存在目标缺列 -> ALTER。"""
+        cols = [("id", "bigint"), ("name", "varchar(50)"),
+                ("gender", "int"), ("dt", "date")]
+        conn = _CodeMapFake(
+            code_types=("gender",),
+            tables=["ods_user", "dwd_user"], columns=cols, partitions=None,
+        )
+        _patch_conn(monkeypatch, conn)
+
+        def _boom(*a, **k):
+            raise AssertionError("纯透传+自动枚举不应调用 LLM")
+
+        monkeypatch.setattr(etl_mod, "llm_json", _boom)
+        result = ETLConfigAgent().run({"user_query": "把 ods_user 加工到 dwd 层"})
+        assert result["current_step"] == "config_complete", result.get("error")
+        sql = result["etl_sql"]
+        assert "LEFT JOIN dim_mapping cm_0" in sql
+        assert "cm_0.code_type = 'gender'" in sql
+        assert "cm_0.name AS `gender_name`" in sql
+        # 目标表已存在且缺 gender_name -> ALTER（不是 CREATE）
+        assert result["etl_ddl"].startswith("ALTER TABLE `dwd_user`")
+        assert "`gender_name` VARCHAR(128)" in result["etl_ddl"]
+        # 码值表被幂等创建 + 种子灌入
+        assert any(s.upper().startswith("CREATE TABLE IF NOT EXISTS DIM_MAPPING")
+                   for s in conn.executed)
+
+    def test_unmapped_enum_stays_passthrough(self, monkeypatch):
+        """码值表无对应 code_type -> 不映射、不报错（审批时可见未映射提示）。"""
+        cols = [("id", "bigint"), ("income", "int"), ("dt", "date")]
+        conn = _CodeMapFake(
+            code_types=(),
+            tables=["ods_user", "dwd_user"], columns=cols, partitions=None,
+        )
+        _patch_conn(monkeypatch, conn)
+        monkeypatch.setattr(etl_mod, "llm_json",
+                            lambda *a, **k: {"field_mappings": [], "enum_mappings": []})
+        result = ETLConfigAgent().run({"user_query": "把 ods_user 加工到 dwd 层"})
+        assert result["current_step"] == "config_complete", result.get("error")
+        assert "LEFT JOIN" not in result["etl_sql"]
+
+
+class TestETLExecutionAlter:
+    def test_existing_table_runs_alter(self, monkeypatch):
+        """目标表已存在、etl_ddl 携带 ALTER -> 审批后执行 ALTER 再写数。"""
+        conn = FakeStarrocks(tables=["ods_user", "dwd_user"], partitions=None)
+        _patch_conn(monkeypatch, conn)
+        state = {
+            "etl_sql": "INSERT OVERWRITE dwd_user SELECT id FROM ods_user",
+            "etl_target_table": "dwd_user",
+            "etl_partition_date": "2026-08-05",
+            "etl_target_exists": True,
+            "etl_ddl": "ALTER TABLE `dwd_user` ADD COLUMN `gender_name` VARCHAR(128)",
+            "parsed_intent": {"database": "datax_test"},
+        }
+        result = ETLEExecutionAgent().run(state)
+        assert result["execution_status"]["success"] is True, result.get("error")
+        assert any(s.upper().startswith("ALTER TABLE") for s in conn.executed)
+        assert any("INSERT OVERWRITE" in s for s in conn.executed)

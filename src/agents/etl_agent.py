@@ -135,6 +135,18 @@ class ETLConfigAgent(BaseAgent):
             self._llm = get_agent_llm("etl_development")
         return self._llm
 
+    @staticmethod
+    def _record(state, node, decision, basis, confidence=None, evidence=None):
+        try:
+            from ..workflow.task_manager import get_task_manager
+            tid = state.get("_task_id")
+            if tid:
+                get_task_manager().record_decision(
+                    tid, node, decision=decision, basis=basis,
+                    confidence=confidence, evidence=evidence)
+        except Exception:
+            logger.debug("record_decision 失败（忽略）", exc_info=True)
+
     def run(self, state: DataIntegrationState) -> DataIntegrationState:
         return self.guarded(
             state, self._run, error_msg="ETL 配置生成失败"
@@ -168,15 +180,35 @@ class ETLConfigAgent(BaseAgent):
             )
 
             # 自动枚举识别：扫描源表结构（DDL），码值表有对应 code_type 才关联
-            # （避免误关联：识别只是候选，是否生效以 dim_mapping 数据为准）
+            # （避免误关联：识别只是候选，是否生效以 dim_code_map 数据为准）
+            enum_unmapped = []
             if not intent.get("enum_mappings"):
-                from ..tools.code_map import list_code_types
+                from ..tools.code_map import (
+                    DEFAULT_CODE_ENTRIES, ensure_code_map_table,
+                    list_code_types, seed_code_map,
+                )
                 from ..tools.etl_builder import detect_enum_columns
 
                 try:
+                    # 码值表是平台维表：幂等建表 + 补齐内置通用码值（性别等），
+                    # 用户维护的业务码值不被覆盖。此前表不存在时 list 抛异常，
+                    # 导致枚举映射被静默跳过（纯透传）。
+                    # 建表/灌数走管理账号（datax 只读账号可能无 CREATE 权限），
+                    # 读取 list 走当前连接。
+                    cm_ctx = _admin_conn(database)
+                    if cm_ctx is not None:
+                        with cm_ctx as cm_conn:
+                            ensure_code_map_table(cm_conn)
+                            seed_code_map(cm_conn, DEFAULT_CODE_ENTRIES)
+                    else:
+                        ensure_code_map_table(conn)
+                        seed_code_map(conn, DEFAULT_CODE_ENTRIES)
                     auto_enums = detect_enum_columns(columns)
                     existing = set(list_code_types(conn) or [])
                     mapped = [e for e in auto_enums if e["code_type"] in existing]
+                    enum_unmapped = [
+                        e for e in auto_enums if e["code_type"] not in existing
+                    ]
                 except Exception as e:
                     logger.warning("自动枚举识别跳过: %s", e)
                     mapped = []
@@ -189,6 +221,25 @@ class ETLConfigAgent(BaseAgent):
                         intent["transform_type"] = "enum_mapping"
                     logger.info(
                         "自动枚举映射: %s", [e["code_type"] for e in mapped],
+                    )
+                    self._record(
+                        state, "enum_auto_map",
+                        decision="LEFT JOIN dim_code_map 翻译: "
+                                 + ", ".join(e["column"] for e in mapped),
+                        basis="rule",
+                        evidence={"mapped": mapped},
+                    )
+                if enum_unmapped:
+                    # 不静默跳过：审批时可见，提示维护码值表后重跑即自动生效
+                    cols = ", ".join(e["column"] for e in enum_unmapped)
+                    logger.warning(
+                        "检测到疑似枚举列但码值表无对应 code_type，本次不映射: %s", cols)
+                    self._record(
+                        state, "enum_unmapped",
+                        decision=f"疑似枚举列 {cols} 未映射：码值表缺对应 code_type",
+                        basis="rule",
+                        evidence={"unmapped": enum_unmapped,
+                                  "hint": "维护 dim_code_map 后重跑即自动关联"},
                     )
             tables = set(list_tables(conn, database))
             target_exists = target["table"] in tables
@@ -218,16 +269,38 @@ class ETLConfigAgent(BaseAgent):
             "etl_target_exists": target_exists,
             "etl_ddl": None,
         }
+        need_cols = build_target_columns(
+            columns,
+            field_mappings=intent.get("field_mappings"),
+            enum_mappings=intent.get("enum_mappings"),
+        )
         if not target_exists:
             fields["etl_ddl"] = build_create_table_sql(
-                target["table"],
-                build_target_columns(
-                    columns,
-                    field_mappings=intent.get("field_mappings"),
-                    enum_mappings=intent.get("enum_mappings"),
-                ),
+                target["table"], need_cols,
                 partitioned=target_partitioned,
             )
+        else:
+            # 目标表已存在但缺列（典型：上次纯透传建表，本次枚举映射新增
+            # *_name 可读名列）-> 生成幂等 ALTER ADD COLUMN，审批后执行
+            from ..tools.etl_builder import _quote_ident
+            try:
+                with mysql_conn("starrocks", database=database) as c2:
+                    have = {
+                        str(c.get("name", "")).lower()
+                        for c in describe_table(c2, database, target["table"])
+                    }
+                missing = [c for c in need_cols
+                           if str(c["name"]).lower() not in have]
+                if missing:
+                    fields["etl_ddl"] = "; ".join(
+                        f"ALTER TABLE {_quote_ident(target['table'])} "
+                        f"ADD COLUMN {_quote_ident(c['name'])} {c['type']}"
+                        for c in missing
+                    )
+                    logger.info("目标表缺列，生成 ALTER: %s",
+                                [c["name"] for c in missing])
+            except Exception as e:  # noqa: BLE001 探测失败不阻断，执行期报错可读
+                logger.warning("目标表缺列探测失败: %s", e)
         logger.info(
             f"ETL 配置完成: {source['table']}({source['kind']}) -> "
             f"{target['table']} [{intent['transform_type']}]"
@@ -337,22 +410,37 @@ class ETLEExecutionAgent(BaseAgent):
             tables = set(list_tables(conn, database))
             target_exists = target_table in tables
 
-            # 1. 目标表缺失 -> 管理账号建表
-            if not target_exists:
-                ddl = state.get("etl_ddl") or ""
-                if not ddl:
-                    raise ValueError("目标表缺失且缺少建表 DDL，无法执行")
+            # 1. 目标表缺失 -> 管理账号建表；已存在但缺列 -> ALTER ADD COLUMN
+            ddl = state.get("etl_ddl") or ""
+            if ddl.strip():
+                stmts = [x.strip() for x in ddl.split(";") if x.strip()]
                 admin_ctx = _admin_conn(database)
-                if admin_ctx is None:
-                    raise ValueError(
-                        "目标表不存在且未配置管理账号（STARROCKS_ADMIN_USERNAME），"
-                        "请先手动建表或配置管理账号。DDL：\n" + ddl
-                    )
-                with admin_ctx as aconn:
-                    with aconn.cursor() as cur:
-                        cur.execute(ddl)
-                    aconn.commit()
-                logger.info(f"ETL 已创建目标表 {target_table}")
+
+                def _run_ddl(c):
+                    with c.cursor() as cur:
+                        for stmt in stmts:
+                            cur.execute(stmt)
+                    c.commit()
+
+                if not target_exists:
+                    if admin_ctx is None:
+                        raise ValueError(
+                            "目标表不存在且未配置管理账号（STARROCKS_ADMIN_USERNAME），"
+                            "请先手动建表或配置管理账号。DDL：\n" + ddl
+                        )
+                    with admin_ctx as aconn:
+                        _run_ddl(aconn)
+                    logger.info(f"ETL 已创建目标表 {target_table}")
+                else:
+                    # 表已存在：ALTER ADD COLUMN（枚举可读名列等演进），
+                    # 优先用管理账号，未配置则用当前账号尝试
+                    if admin_ctx is not None:
+                        with admin_ctx as aconn:
+                            _run_ddl(aconn)
+                    else:
+                        _run_ddl(conn)
+                    logger.info(f"ETL 目标表 {target_table} 已补齐列: "
+                                f"{len(stmts)} 条 ALTER")
 
             # 2. 表达式分区表写入时自动创建分区，无需 ADD PARTITION
             # 3. 执行透传 SQL（表达式分区表为 DELETE+INSERT 两条，分号拼接后逐条执行）
