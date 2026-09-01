@@ -111,9 +111,10 @@ def _patch_llm(monkeypatch, payload):
 class _FakeAnalysisConn:
     """只读 SELECT mock：description + fetchall。"""
 
-    def __init__(self, columns=("dt", "user_count"), rows=None):
+    def __init__(self, columns=("dt", "user_count"), rows=None, explain_error=None):
         self._cols = columns
         self._rows = rows if rows is not None else [(1, 5)]
+        self._explain_error = explain_error
         self.executed = []
 
     def cursor(self):
@@ -131,6 +132,8 @@ class _FakeAnalysisConn:
 
     def execute(self, sql):
         self.executed.append(sql)
+        if self._explain_error and sql.lstrip().upper().startswith("EXPLAIN"):
+            raise self._explain_error
         return 0
 
     def fetchall(self):
@@ -196,12 +199,31 @@ class TestAnalysisExecutionAgent:
         assert result["analysis_result"]["rows"] == [{"dt": "2026-08-05", "user_count": 3}]
         assert result["analysis_summary"] is None
         assert any("SET_VAR(query_timeout=30)" in s for s in conn.executed)
+        # EXPLAIN 干跑必须在真实查询之前
+        assert conn.executed[0].lstrip().upper().startswith("EXPLAIN")
+        assert result["execution_status"]["explain_precheck"] is True
 
     def test_dangerous_sql_rejected(self, monkeypatch):
         monkeypatch.setattr(pymysql, "connect", lambda **k: _FakeAnalysisConn())
         state = {"analysis_sql": "DROP TABLE t", "analysis_database": "x"}
         result = AnalysisExecutionAgent().run(state)
         assert result["execution_status"]["success"] is False
+
+    def test_explain_failure_blocks_execution(self, monkeypatch):
+        # 语义层口径与物理表漂移（字段被删）：EXPLAIN 报错，不得执行真实查询
+        err = pymysql.err.ProgrammingError(1054, "Unknown column 'ghost' in 'field list'")
+        conn = _FakeAnalysisConn(explain_error=err)
+        monkeypatch.setattr(pymysql, "connect", lambda **k: conn)
+        monkeypatch.setattr(ana_mod.config, "ANALYSIS_SUMMARIZE", False)
+        state = {
+            "analysis_sql": "SELECT `ghost` AS `x` FROM dwd_demo LIMIT 1000",
+            "analysis_database": "datax_test",
+        }
+        result = AnalysisExecutionAgent().run(state)
+        assert result["execution_status"]["success"] is False
+        assert "EXPLAIN" in (result.get("error") or "")
+        # 只发了 EXPLAIN，真实查询（SET_VAR hint）绝不能发出
+        assert not any("SET_VAR" in q for q in conn.executed)
 
 
 class TestAnalysisValidationAgent:

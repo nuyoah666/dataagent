@@ -3,7 +3,7 @@
 设计（与用户确认的 B 方案）：
   1. LLM 只把自然语言翻译成语义查询（指标/维度/过滤/粒度），不写 SQL
   2. 语义层 YAML 决定物理表/字段/聚合口径，SQL 由代码确定性拼装
-  3. SELECT-only 白名单校验 + 30s 超时 + LIMIT 上限，只读无审批
+  3. SELECT-only 白名单校验 + 执行前 EXPLAIN 干跑预检 + 30s 超时 + LIMIT 上限，只读无审批
   4. 结果可选 LLM 中文总结（ANALYSIS_SUMMARIZE=false 关闭）
 """
 
@@ -275,6 +275,17 @@ class AnalysisExecutionAgent(BaseAgent):
 
         with mysql_conn("starrocks", database=database) as conn:
             with conn.cursor() as cur:
+                # 执行前 EXPLAIN 干跑：只解析/优化不实际执行，零副作用。
+                # 把"语义层 YAML 口径与物理表结构漂移（表/字段被删改）"拦在执行前，
+                # 报错直接指向配置漂移，而不是跑出一条半截查询。
+                try:
+                    cur.execute(f"EXPLAIN {sql}")
+                    cur.fetchall()
+                except Exception as e:
+                    raise ValueError(
+                        "SQL 预检（EXPLAIN）失败，通常是语义层口径与物理表不一致"
+                        f"（表/字段被删改），请在语义层配置中核对：{e}"
+                    ) from e
                 # StarRocks 支持 SET_VAR hint 控制查询超时
                 hint_sql = f"/*+ SET_VAR(query_timeout={timeout}) */ {sql}"
                 cur.execute(hint_sql)
@@ -295,6 +306,7 @@ class AnalysisExecutionAgent(BaseAgent):
                 "sql": sql,
                 "columns": columns,
                 "row_count": len(result_rows),
+                "explain_precheck": True,
             },
             "analysis_result": {
                 "columns": columns,

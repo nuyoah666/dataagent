@@ -20,7 +20,7 @@ ETL 开发、问数、运维诊断**四类数仓工作。设计原则是**确定
   （置信度 ≥0.85 不调 LLM），能修的一键修复（重建配置/一键建表/开清空重跑）；
   事故自动沉淀为**版本化**知识库
 - **语义层问数**：YAML 定义指标/维度口径，LLM 只出结构化语义查询、SQL 由代码拼装
-  （SELECT-only + 超时 + LIMIT）；结果带口径说明卡片与交叉复算自检；只读免审批
+  （SELECT-only + 执行前 EXPLAIN 预检 + 超时 + LIMIT）；结果带口径说明卡片与交叉复算自检；只读免审批
 - **全链路可观测**：LangSmith trace（含 DataX 执行、数据校验业务埋点）+ 结构化决策日志
   （rule/llm/explicit/human）+ 审计日志（配置指纹）+ Web 监控台
 - **执行引擎可插拔**：SyncEngine 抽象——离线 DataX 已落地，实时 Flink CDC → Paimon
