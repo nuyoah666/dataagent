@@ -27,7 +27,11 @@ function escapeHtml(s) {
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 async function api(url, opts) {
-  const r = await fetch(url, Object.assign({ headers: headers() }, opts || {}));
+  opts = opts || {};
+  // headers 深合并：调用方传 Content-Type 等不覆盖鉴权头
+  const r = await fetch(url, Object.assign({}, opts, {
+    headers: Object.assign(headers(), opts.headers || {}),
+  }));
   if (r.status === 401) { alert('未授权：请在右上角填入 API_TOKEN'); throw new Error('unauthorized'); }
   const data = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(data.detail || ('HTTP ' + r.status));

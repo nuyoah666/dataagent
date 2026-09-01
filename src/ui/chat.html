@@ -115,9 +115,9 @@
     <span class="token-box">Token <input type="password" id="apiToken" placeholder="API_TOKEN（可选）"></span>
     <span class="links">
       <button class="theme-btn" id="themeToggle" onclick="toggleTheme()">☀️</button>
-      <a href="/ui/wizard" target="_blank">同步向导 ↗</a>
-      <a href="/ui/semantic" target="_blank">语义层/提示词 ↗</a>
-      <a href="/ui" target="_blank">全链路监控 ↗</a>
+      <a href="/ui/wizard" onclick="gotoPage('/ui/wizard');return false">同步向导</a>
+      <a href="/ui/semantic" onclick="gotoPage('/ui/semantic');return false">语义层/提示词</a>
+      <a href="/ui" onclick="gotoPage('/ui');return false">全链路监控</a>
     </span>
   </header>
 
@@ -345,7 +345,7 @@ function renderTask(t, logs) {
     body += `<div class="btns">
       <button class="btn btn-approve" onclick="act('${t.task_id}','approve')">✅ 通过并执行</button>
       <button class="btn btn-reject" onclick="act('${t.task_id}','reject')">❌ 拒绝</button>
-      <a class="btn btn-action" style="text-decoration:none" href="/ui" target="_blank">查看配置</a>
+      <a class="btn btn-action" style="text-decoration:none" href="/ui" onclick="gotoPage('/ui');return false">查看配置</a>
     </div>`;
   }
   if (t.status === 'failed') {

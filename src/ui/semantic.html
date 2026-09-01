@@ -61,6 +61,7 @@
   .prompt-card h3{margin:0 0 2px;font-size:14px}
   .hide{display:none}
 </style>
+<script src="/static/common.js"></script>
 </head>
 <body>
 <header>
@@ -68,7 +69,7 @@
   <span class="sub">问数指标/口径配置 · Agent system prompt 查看</span>
   <span class="spacer"></span>
   <a href="/chat" onclick="gotoPage('/chat');return false">← 返回对话</a>
-  <button class="ghost" id="themeBtn" title="切换主题">🌙</button>
+  <button class="ghost" id="themeToggle" onclick="toggleTheme()" title="切换主题">🌙</button>
 </header>
 
 <div class="tabs">
@@ -142,7 +143,6 @@ let CAT = {default_database:"datax_test", default_engine:"starrocks", tables:[]}
 let selIdx = -1;
 
 function toast(msg, ok=true){ const t=document.getElementById("toast"); t.textContent=msg; t.className="toast "+(ok?"ok":"err"); t.style.display="block"; clearTimeout(t._h); t._h=setTimeout(()=>t.style.display="none", 3600); }
-async function api(url, opts){ const r=await fetch(url, opts); const d=await r.json().catch(()=>({})); if(!r.ok) throw new Error(d.detail||r.statusText); return d; }
 function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
 
 /* ---------- 语义层 ---------- */
@@ -293,10 +293,7 @@ document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>{
   document.getElementById("tab-prompts").classList.toggle("hide", b.dataset.tab!=="prompts");
   if(b.dataset.tab==="prompts") loadPrompts();
 });
-const themeBtn=document.getElementById("themeBtn");
-function setTheme(t){ document.documentElement.setAttribute("data-theme",t); themeBtn.textContent=t==="dark"?"☀️":"🌙"; localStorage.setItem("theme",t); }
-themeBtn.onclick=()=>setTheme(document.documentElement.getAttribute("data-theme")==="dark"?"light":"dark");
-setTheme(localStorage.getItem("theme") || (matchMedia("(prefers-color-scheme:dark)").matches?"dark":"light"));
+initTheme();
 
 loadCatalog();
 </script>
