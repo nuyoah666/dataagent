@@ -74,6 +74,7 @@ class ConfigAgent(BaseAgent):
         # 1. 解析意图（带熔断）；向导等结构化入口可直接注入 parsed_intent，跳过 LLM
         if state.get("parsed_intent"):
             intent = dict(state["parsed_intent"])
+            self._parse_basis = "explicit"  # 结构化向导注入，未走 LLM
         else:
             intent = self._parse_intent(user_query, state.get("context_hint") or "")
         # 2. 回填本地默认凭据（LLM 可能编造密码，或留空）
@@ -182,6 +183,7 @@ class ConfigAgent(BaseAgent):
             "parsed_intent": intent,
             "source_schema": schema_result,
             "datax_config": result.get("config"),
+            "intent_parse_basis": getattr(self, "_parse_basis", "llm"),
             "error": result.get("errors", [None])[0] if not result["success"] else None,
             "current_step": "config_complete" if result["success"] else "config_error",
         }
@@ -200,9 +202,11 @@ class ConfigAgent(BaseAgent):
             # Pydantic 强校验：保证字段齐全、类型正确（端口等脏数据在
             # schema 边界宽松清洗，不让一个坏字段连累整张意图）
             intent = SyncIntent.model_validate(data).model_dump()
+            self._parse_basis = "llm"
         except Exception as e:
             logger.warning(f"意图解析失败，使用 fallback: {e}")
             intent = self._fallback_intent(user_query)
+            self._parse_basis = "rule"  # LLM 失败/熔断 -> 规则兜底
         # LLM 结构有效但漏抽源表名（空串）：规则兜底补表名，
         # 其余字段（库类型/目标端）仍以 LLM 为准
         if not intent.get("source_table"):

@@ -145,17 +145,22 @@ class AgentWorkflow:
             # 决策依据：意图解析与凭据来源（集成/ETL；分析的决策在 analysis_agent 内记录）
             pi = result.get("parsed_intent") or intent or {}
             if pi.get("source_table") and (result.get("datax_config") or result.get("etl_sql")):
+                # 解析方式如实记录：向导注入=explicit / LLM=llm / 规则兜底=rule；
+                # 集成默认 LLM-first，ETL 透传默认规则（零 LLM）
+                parse_basis = result.get("intent_parse_basis") or (
+                    "llm" if self.task_type == "data_integration" else "rule")
                 self.task_mgr.record_decision(
                     task_id, "intent_parse",
                     decision=f"{pi.get('source_table','')} -> "
                              f"{pi.get('target_db_type') or pi.get('target_table','')}"
                              f"（{pi.get('sync_type') or pi.get('transform_type') or ''}）",
-                    basis="llm",
+                    basis=parse_basis,
                     evidence={"source_table": pi.get("source_table"),
                               "target_db_type": pi.get("target_db_type"),
                               "sync_type": pi.get("sync_type"),
                               "update_cycle": pi.get("update_cycle"),
-                              "named_source": pi.get("source_name") or ""},
+                              "named_source": pi.get("source_name") or "",
+                              "parse_basis": parse_basis},
                 )
                 self.task_mgr.record_decision(
                     task_id, "credential",

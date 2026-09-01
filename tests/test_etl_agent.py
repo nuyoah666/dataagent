@@ -147,6 +147,8 @@ class TestETLConfigAgent:
         assert sql.startswith("INSERT OVERWRITE dwd_user")
         assert "FROM ods_user" in sql
         assert "LEFT JOIN" not in sql
+        # 纯透传：意图解析为规则（零 LLM），basis 不得误标为 llm
+        assert result["intent_parse_basis"] == "rule"
 
     def test_partitioned_source_uses_partition(self, monkeypatch):
         """分区源表：自动带 dt 过滤与 PARTITION 子句。"""
@@ -432,6 +434,8 @@ class TestETLAutoEnum:
         # 目标表已存在且缺 gender_name -> ALTER（不是 CREATE）
         assert result["etl_ddl"].startswith("ALTER TABLE `dwd_user`")
         assert "`gender_name` VARCHAR(128)" in result["etl_ddl"]
+        # 自动枚举映射也是规则完成（非 LLM）
+        assert result["intent_parse_basis"] == "rule"
         # 码值表被幂等创建 + 种子灌入
         assert any(s.upper().startswith("CREATE TABLE IF NOT EXISTS DIM_MAPPING")
                    for s in conn.executed)

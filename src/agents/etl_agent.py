@@ -129,6 +129,7 @@ class ETLConfigAgent(BaseAgent):
 
     def __init__(self):
         self._llm = None
+        self._parse_basis = "rule"
 
     def _get_llm(self):
         if self._llm is None:
@@ -261,6 +262,7 @@ class ETLConfigAgent(BaseAgent):
 
         fields = {
             "parsed_intent": intent,
+            "intent_parse_basis": getattr(self, "_parse_basis", "rule"),
             "source_schema": {"success": True, "columns": columns},
             "etl_sql": sql,
             "etl_source_table": source["table"],
@@ -312,9 +314,11 @@ class ETLConfigAgent(BaseAgent):
     def _parse_intent(self, user_query: str) -> dict:
         intent = _rule_intent(user_query)
         if not intent["source_table"]:
+            self._parse_basis = "rule"
             return intent
         # 纯透传：零 LLM
         if intent["transform_type"] == "passthrough" and not _ENUM_HINT_RE.search(user_query or ""):
+            self._parse_basis = "rule"  # 表名/分层/透传均由规则确定
             return intent
         # 枚举/字段映射：LLM 解析映射细节
         try:
@@ -324,6 +328,7 @@ class ETLConfigAgent(BaseAgent):
                 llm=self._get_llm(),
                 breaker=llm_circuit_breaker,
             )
+            self._parse_basis = "llm"
             if isinstance(data, dict):
                 intent["field_mappings"] = [
                     ETLFieldMap.model_validate(m).model_dump()
@@ -342,6 +347,7 @@ class ETLConfigAgent(BaseAgent):
             logger.warning(f"ETL 映射解析失败（回退纯透传）: {e}")
             intent["field_mappings"], intent["enum_mappings"] = [], []
             intent["transform_type"] = "passthrough"
+            self._parse_basis = "rule"  # LLM 失败 -> 规则兜底
             return intent
 
     @staticmethod

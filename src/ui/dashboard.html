@@ -1118,9 +1118,53 @@ async function saveConfigSql() {
   } catch (e) { alert('保存失败: ' + e.message); }
 }
 
+// 决策链路：每步标注 规则/LLM/人工/默认，头部汇总 LLM 决策步数
+const DECISION_NODE_LABELS = {
+  route: '意图路由', intent_parse: '意图解析', credential: '凭据回填',
+  prompt_bundle: 'Prompt 版本', approval_impact: '审批影响面',
+  pre_sync: '同步前清空', pre_sync_ddl: '同步前建表', validation: '结果校验',
+  enum_auto_map: '枚举自动映射', enum_unmapped: '枚举未映射',
+  semantic_pick: '语义层选表', analysis_parse: '问数解析',
+  analysis_backfill: '规则补全粒度', rubric_grade: 'Rubric 阅卷',
+  ops_auto_fix: '运维自动修复', task_approve: '人工审批', task_reject: '人工拒绝',
+  task_retry: '人工重试', auto_remediate: '自动修复', config_source: '配置来源',
+};
+const BASIS_BADGE = {
+  rule: '<span class="tag" style="background:#e6f4ea;color:#137333">规则</span>',
+  llm: '<span class="tag" style="background:#f3e8fd;color:#7b1fa2">LLM</span>',
+  human: '<span class="tag" style="background:#fef7e0;color:#b06000">人工</span>',
+  explicit: '<span class="tag" style="background:#e8f0fe;color:#1a56c4">显式</span>',
+  default: '<span class="tag" style="background:#f1f3f4;color:#5f6368">默认</span>',
+};
+function decisionCard(decs) {
+  const list = (decs && decs.decisions) || [];
+  if (!list.length) return '';
+  const llmN = list.filter(d => d.basis === 'llm').length;
+  const ruleN = list.filter(d => d.basis === 'rule').length;
+  const body = list.map(d => {
+    const label = DECISION_NODE_LABELS[d.node] || d.node;
+    const badge = BASIS_BADGE[d.basis] || BASIS_BADGE.default;
+    const ev = d.evidence ? JSON.stringify(d.evidence) : '';
+    const conf = (d.confidence !== null && d.confidence !== undefined)
+      ? `<span class="muted-flag" style="margin-left:6px">置信 ${d.confidence}</span>` : '';
+    return `<div style="margin-top:6px;display:flex;gap:8px;align-items:flex-start">
+      <span style="min-width:92px;color:#5f6368">${escapeHtml(label)}</span>
+      <span style="flex:1">${badge} <span>${escapeHtml(d.decision || '')}</span>${conf}
+      ${ev ? `<div class="muted-flag" style="margin-top:2px;word-break:break-all">${escapeHtml(ev.slice(0, 240))}${ev.length > 240 ? '…' : ''}</div>` : ''}</span>
+    </div>`;
+  }).join('');
+  const right = `<span class="muted-flag">LLM ${llmN} 步 · 规则 ${ruleN} 步</span>`;
+  return card('决策链路（规则 / LLM 判定依据）', body, right);
+}
+
 function llmUsage(t) {
   const u = t.llm_usage;
-  if (!u || !u.calls) return '';
+  if (!u || !u.calls) {
+    const terminal = ['success', 'failed', 'cancelled'].includes(t.status);
+    // 终态任务零 LLM：明确告知"全链路规则确定性完成"，避免误以为漏记
+    return terminal ? card('LLM 用量（成本观测）',
+      '<div class="muted-flag">本任务未调用 LLM（0 次）——全流程由规则/模板确定性完成，详见「决策链路」各步标记。</div>') : '';
+  }
   const models = Object.entries(u.models || {}).map(([m, n]) => `${escapeHtml(m)}×${n}`).join('，') || '—';
   const cached = u.prompt_tokens ? Math.round((u.cached_tokens || 0) / u.prompt_tokens * 100) : 0;
   return card('LLM 用量（成本观测）', `
@@ -1131,9 +1175,10 @@ function llmUsage(t) {
 
 async function showDetail(taskId) {
   try {
-    const [task, logs, audit, cfg] = await Promise.all([
+    const [task, logs, audit, cfg, decs] = await Promise.all([
       api('/tasks/' + taskId), api('/tasks/' + taskId + '/logs'),
       api('/audit?task_id=' + taskId), api('/tasks/' + taskId + '/config'),
+      api('/tasks/' + taskId + '/decisions'),
     ]);
     _detailTaskId = taskId;
     $('detailTitle').textContent = '任务 ' + taskId + ' 详情';
@@ -1210,6 +1255,7 @@ async function showDetail(taskId) {
       ${renderConfigSection(cfg)}
       ${validationSection(task)}
       ${card('阶段时间线', tl)}
+      ${decisionCard(decs)}
       ${llmUsage(task)}
       ${diag}${opsAct}${opsRec}${anal}${selfChk}${rubric}${etl}
       ${card('审计记录', audits || '<div class="muted-flag">（无审计）</div>')}
