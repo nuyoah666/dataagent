@@ -19,6 +19,7 @@
   .sidebar { width:220px; flex-shrink:0; background:var(--card); border-right:1px solid var(--border);
              display:flex; flex-direction:column; position:sticky; top:0; height:100vh; }
   .sidebar .brand { padding:18px 16px 14px; border-bottom:1px solid var(--border); }
+  html.embedded .sidebar .brand { display:none; }
   .sidebar .brand .logo { font-size:16px; font-weight:700; display:flex; align-items:center; gap:8px; }
   .sidebar .brand .logo .dot { width:10px; height:10px; border-radius:50%;
                                background:linear-gradient(135deg,var(--accent),#6366f1); box-shadow:0 0 8px var(--accent); }

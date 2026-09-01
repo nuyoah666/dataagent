@@ -18,6 +18,7 @@
   .topbar { display:flex; align-items:center; gap:12px; padding:14px 24px;
             border-bottom:1px solid var(--border); background:var(--bg); position:sticky; top:0; z-index:5; }
   .topbar .logo { font-size:16px; font-weight:700; display:flex; align-items:center; gap:8px; }
+  html.embedded .topbar .logo { display:none; }
   .topbar .logo .dot { width:10px; height:10px; border-radius:50%;
                        background:linear-gradient(135deg,var(--accent),#6366f1); box-shadow:0 0 8px var(--accent); }
   .topbar .title { font-size:15px; color:var(--muted); }
