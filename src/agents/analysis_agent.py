@@ -36,6 +36,24 @@ _GRANULARITY_HINT = {
 }
 
 
+def _contains_find(catalog, kind: str, word: str):
+    """显示名包含匹配：口语子串 -> 指标/维度定义。维度优先 date 类型。"""
+    word = (word or "").strip()
+    if len(word) < 2:
+        return None
+    fallback = None
+    for t in catalog.tables:
+        items = t.metrics.values() if kind == "metric" else t.dimensions.values()
+        for it in items:
+            disp = it.get("display", "") or ""
+            if disp and (word in disp or disp in word):
+                if kind == "dim" and it.get("type") == "date":
+                    return it  # "日期/月份" 这类泛词优先落到 date 维度
+                if fallback is None:
+                    fallback = it
+    return fallback
+
+
 @register_agent(
     "data_analysis", "config",
     description="语义解析：自然语言 -> 结构化语义查询 -> 确定性 SELECT",
@@ -230,6 +248,12 @@ class AnalysisConfigAgent(BaseAgent):
                 dim = t.find_dimension(dim_word)
             if metric and dim:
                 break
+        # 中文口语常只说显示名的一部分："用户数"≈"去重用户数"、"日期"≈"生成日期"。
+        # 精确名/显示名未命中时，规则路径再退化到显示名包含匹配（确定性优先、少调 LLM）。
+        if metric is None:
+            metric = _contains_find(catalog, "metric", metric_word)
+        if dim is None:
+            dim = _contains_find(catalog, "dim", dim_word)
         if not metric or not dim:
             return None
 

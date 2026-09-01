@@ -39,7 +39,8 @@ class TestSemanticCatalog:
     def test_load_yaml(self):
         cat = load_catalog()
         assert len(cat.tables) >= 1
-        assert cat.table_by_name("dwd_user_sr") is not None
+        # 语义层表可随元数据草稿重建，断言“能按名取到表”而非写死某个演示表名
+        assert cat.table_by_name(cat.tables[0].table) is not None
 
     def test_query_sql_basic(self):
         cat = _make_catalog()
@@ -58,6 +59,50 @@ class TestSemanticCatalog:
         assert "DATE_FORMAT(dt, '%Y-%m')" in sql
         assert "WHERE gender = '男'" in sql
         assert "LIMIT 1000" in sql
+
+    def test_query_sql_count_distinct_balanced(self):
+        # 回归：count_distinct 曾拼成 COUNT(DISTINCT(uid) 少右括号，导致 EXPLAIN 报 "Unexpected AS"
+        cat = SemanticCatalog(
+            [SemanticTable({
+                "table": "dwd_demo",
+                "metrics": [
+                    {"name": "uv", "display": "去重用户", "column": "uid", "agg": "count_distinct"},
+                ],
+                "dimensions": [
+                    {"name": "dt", "display": "日期", "column": "dt", "type": "date"},
+                ],
+            })],
+            default_database="datax_test",
+            default_engine="starrocks",
+        )
+        sql = cat.query_sql(["uv"], ["dt"], granularity="day")
+        assert "COUNT(DISTINCT uid) AS `uv`" in sql
+        assert sql.count("(") == sql.count(")")  # 括号配对
+        ok, reason = validate_analysis_sql(sql)
+        assert ok, reason
+
+    def test_query_sql_relative_time_resolved(self):
+        # 回归："最近7天" 曾被当字符串字面量拼进 WHERE；需确定性翻译成日期表达式
+        cat = _make_catalog()
+        sql = cat.query_sql(
+            ["user_count"], ["dt"],
+            filters=[{"dimension": "dt", "op": ">=", "value": "最近7天"}],
+            granularity="day",
+        )
+        assert "DATE_SUB(CURDATE(), INTERVAL 7 DAY)" in sql
+        assert "最近7天" not in sql
+        assert "WHERE dt >= DATE_SUB" in sql
+        ok, reason = validate_analysis_sql(sql)
+        assert ok, reason
+
+    def test_query_sql_concrete_date_still_quoted(self):
+        # 具体日期不受相对时间翻译影响，仍按字面量比较
+        cat = _make_catalog()
+        sql = cat.query_sql(
+            ["user_count"], ["dt"],
+            filters=[{"dimension": "dt", "op": ">=", "value": "2026-08-01"}],
+        )
+        assert "dt >= '2026-08-01'" in sql
 
     def test_unknown_metric_hint(self):
         cat = _make_catalog()

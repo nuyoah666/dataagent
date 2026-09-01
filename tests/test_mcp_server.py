@@ -29,7 +29,12 @@ def test_list_catalog():
     out = _run_tool("list_catalog")
     assert out["success"] is True
     assert out["tables"]
-    assert any("user_count" in t["metrics"][0] for t in out["tables"])
+    t0 = out["tables"][0]
+    assert t0.get("table")
+    # 每张表含非空指标/维度（不写死随语义层草稿重建变化的演示指标名）
+    assert isinstance(t0.get("metrics"), list) and t0["metrics"]
+    m0 = t0["metrics"][0]
+    assert ("name" in m0) or isinstance(m0, str)
 
 
 def test_get_task_not_found():

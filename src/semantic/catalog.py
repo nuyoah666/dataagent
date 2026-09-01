@@ -28,15 +28,39 @@ _GRANULARITY_FORMATS = {
     "year": "%Y",
 }
 
-# 聚合函数白名单（防注入）
-_AGG_WHITELIST = {
+# 聚合函数白名单（防注入）。count_distinct 单独生成表达式以保证括号配对
+_AGG_FUNCS = {
     "count": "COUNT",
-    "count_distinct": "COUNT(DISTINCT",
     "sum": "SUM",
     "avg": "AVG",
     "max": "MAX",
     "min": "MIN",
 }
+_VALID_AGGS = set(_AGG_FUNCS) | {"count_distinct"}
+
+# 中文相对时间 -> StarRocks 日期表达式（确定性兜底，防 LLM 把“最近7天”当字面量）
+_REL_DAY_RE = re.compile(r"(?:最近|近|过去|前)\s*(\d+)\s*天")
+
+
+def _metric_expr(m: dict) -> str:
+    """指标聚合表达式（只读）。列名已由 _validate_ident 限定为 [A-Za-z0-9_]。"""
+    col = m["column"]
+    if m["agg"] == "count_distinct":
+        return f"COUNT(DISTINCT {col})"
+    return f"{_AGG_FUNCS[m['agg']]}({col})"
+
+
+def _relative_time_expr(value: str) -> Optional[str]:
+    """把“最近7天/今天/昨天”等中文相对时间翻译成日期表达式；无法识别返回 None。"""
+    v = (value or "").strip()
+    m = _REL_DAY_RE.search(v)
+    if m:
+        return f"DATE_SUB(CURDATE(), INTERVAL {int(m.group(1))} DAY)"
+    if "今天" in v or "今日" in v:
+        return "CURDATE()"
+    if "昨天" in v or "昨日" in v:
+        return "DATE_SUB(CURDATE(), INTERVAL 1 DAY)"
+    return None
 
 
 def _validate_ident(name: str, field: str = "名称") -> str:
@@ -56,7 +80,7 @@ class SemanticTable:
         for m in raw.get("metrics", []):
             name = _validate_ident(m.get("name", ""), "指标名")
             agg = str(m.get("agg", "count")).lower()
-            if agg not in _AGG_WHITELIST:
+            if agg not in _VALID_AGGS:
                 raise ValueError(f"指标 {name} 的聚合方式不支持: {agg}")
             self.metrics[name] = {
                 "name": name,
@@ -180,9 +204,7 @@ class SemanticCatalog:
         for d in dims:
             select_parts.append(f"{d['column']} AS `{d['name']}`")
         for m in metrics:
-            agg = _AGG_WHITELIST[m["agg"]]
-            expr = f"{agg}{m['column']})" if agg.endswith("(") else f"{agg}({m['column']})"
-            select_parts.append(f"{expr} AS `{m['name']}`")
+            select_parts.append(f"{_metric_expr(m)} AS `{m['name']}`")
 
         where_parts = []
         for f in filters or []:
@@ -195,6 +217,13 @@ class SemanticCatalog:
             if op not in ("=", "!=", ">", ">=", "<", "<=", "LIKE", "IN"):
                 raise ValueError(f"不支持的过滤操作: {op}")
             value = str(f.get("value", "")).strip()
+            # 日期维度 + 中文相对时间：确定性翻译成日期表达式，不作为字符串字面量
+            is_time = str(dim.get("type", "")).lower() in ("date", "datetime")
+            rel = _relative_time_expr(value) if is_time else None
+            if rel is not None:
+                cmp_op = op if op in (">", ">=", "=", "<=", "<") else ">="
+                where_parts.append(f"{dim['column']} {cmp_op} {rel}")
+                continue
             if not _SAFE_VALUE_RE.match(value):
                 raise ValueError(f"过滤值含非法字符: {value!r}")
             if op == "IN":
@@ -282,7 +311,7 @@ def _metric_formula(m: dict) -> str:
     """指标 -> 可读计算公式，如 COUNT(DISTINCT `name`)。"""
     if m["agg"] == "count_distinct":
         return f"COUNT(DISTINCT `{m['column']}`)"
-    return f"{_AGG_WHITELIST[m['agg']]}(`{m['column']}`)"
+    return f"{_AGG_FUNCS[m['agg']]}(`{m['column']}`)"
 
 
 
