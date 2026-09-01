@@ -52,3 +52,6 @@ logs/*.log
 # 数据源加密主密钥（自动生成，切勿提交）
 .secret_key
 /state/.secret_key
+
+# 问数大结果落盘（运行时产物）
+data/results/

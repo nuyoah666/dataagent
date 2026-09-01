@@ -782,6 +782,23 @@ function selfCheckCard(task) {
   return card('结果自检', body);
 }
 
+// 问数「Rubric 阅卷」卡片：在线持续评估（Code 确定性 + LLM 阅卷），带版本戳
+function rubricCard(task) {
+  const g = task.analysis_grade;
+  if (!g) return '';
+  const badge = {pass: '✅ 通过', borderline: '⚠️ 待观察', fail: '❌ 未通过'}[g.decision] || g.decision;
+  const dims = {caliber: '口径命中', sql_safe: 'SQL 只读', self_check: '结果自检', explanation: '解释切题'};
+  const rows = Object.keys(g.scores || {}).map(k =>
+    `<span style="display:inline-block;min-width:130px;margin:2px 8px 2px 0">${dims[k] || k}：<b>${g.scores[k]}</b></span>`).join('');
+  const reasons = Object.entries(g.reasons || {}).map(([k, v]) =>
+    v ? `<div class="muted-flag" style="margin-top:2px">· ${dims[k] || k}：${escapeHtml(v)}</div>` : '').join('');
+  return card('Rubric 阅卷', `
+    <div><b>${badge}</b>　加权总分 <b>${g.weighted_score}</b>
+      <span class="muted-flag">（${g.graded_by === 'llm' ? 'LLM 阅卷 + 规则' : '规则兜底'} 评，版本 ${escapeHtml(g.rubric_version || '')}）</span></div>
+    <div style="margin-top:4px">${rows}</div>${reasons}
+    <div class="muted-flag" style="margin-top:4px">评分标准带版本号：标准迭代后，历史分数仍可区分"Agent 变了"还是"标准变了"</div>`);
+}
+
 function buildTimeline(logs, task) {
   // 问数任务同一 state machine，但阶段语义不同：解析 -> 执行查询 -> 结果自检
   const isAsk = task.task_type === 'data_analysis';
@@ -1158,6 +1175,7 @@ async function showDetail(taskId) {
     const opsRec = task.ops_record_result ? card('事故沉淀',
       `<div>${escapeHtml(task.ops_record_result.summary || '')}</div>`) : '';
     const selfChk = selfCheckCard(task);
+    const rubric = rubricCard(task);
     const anal = (task.analysis_result || task.analysis_sql) ? card('问数结果', `
       ${task.analysis_summary ? `<div style="margin-bottom:6px">${escapeHtml(task.analysis_summary)}</div>` : ''}
       ${task.analysis_result ? `<table class="result-table"><thead><tr>
@@ -1166,7 +1184,9 @@ async function showDetail(taskId) {
         ${(task.analysis_result.rows || []).slice(0, 50).map(r =>
           `<tr>${(task.analysis_result.columns || []).map(c =>
             `<td>${escapeHtml(r[c])}</td>`).join('')}</tr>`).join('')}
-      </tbody></table><div class="muted-flag" style="margin-top:4px">共 ${task.analysis_result.row_count || (task.analysis_result.rows || []).length} 行</div>` : '<div class="muted-flag">查询执行中…</div>'}
+      </tbody></table><div class="muted-flag" style="margin-top:4px">${task.analysis_result.result_ref
+        ? `共 ${task.analysis_result.result_rows_total || task.analysis_result.row_count} 行（完整结果已落盘 ${escapeHtml(task.analysis_result.result_ref)}，详情展示前 ${task.analysis_result.preview_rows || 50} 行）`
+        : `共 ${task.analysis_result.row_count || (task.analysis_result.rows || []).length} 行`}</div>` : '<div class="muted-flag">查询执行中…</div>'}
       ${task.analysis_sql ? `<div class="audit-detail" style="margin-top:6px">${escapeHtml(task.analysis_sql)}</div>` : ''}`) : '';
     const etl = task.etl_sql ? card('ETL 透传', `
       <div>源：${escapeHtml(task.etl_source_table || '')} → 目标：${escapeHtml(task.etl_target_table || '')}
@@ -1191,7 +1211,7 @@ async function showDetail(taskId) {
       ${validationSection(task)}
       ${card('阶段时间线', tl)}
       ${llmUsage(task)}
-      ${diag}${opsAct}${opsRec}${anal}${selfChk}${etl}
+      ${diag}${opsAct}${opsRec}${anal}${selfChk}${rubric}${etl}
       ${card('审计记录', audits || '<div class="muted-flag">（无审计）</div>')}
       ${task.error ? card('错误信息', `<pre>${escapeHtml(task.error)}</pre>`) : ''}
       <div class="audit-detail" style="text-align:center">AI 链路追踪见 LangSmith 项目 dataagent（task_id=${taskId} 对应 thread_id）</div>`;

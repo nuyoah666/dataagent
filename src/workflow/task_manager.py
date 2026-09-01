@@ -220,6 +220,8 @@ def _migrate_tables(conn: sqlite3.Connection):
         ("approved_at", "TEXT"),
         ("llm_usage", "TEXT"),
         ("approval_impact", "TEXT"),
+        ("pending_ddl", "TEXT"),
+        ("analysis_grade", "TEXT"),
     ):
         if name not in cols:
             conn.execute(f"ALTER TABLE tasks ADD COLUMN {name} {ddl}")
@@ -381,7 +383,7 @@ class TaskManager:
             "validation_result", "datax_config",
             "ops_diagnosis", "ops_actions", "ops_record_result",
             "analysis_query", "analysis_caliber", "analysis_result", "llm_usage",
-            "approval_impact",
+            "approval_impact", "analysis_grade",
         ]:
             if key in out and isinstance(out[key], (dict, list)):
                 out[key] = json.dumps(redact_secrets(out[key]), ensure_ascii=False)
@@ -905,7 +907,7 @@ class TaskManager:
             "validation_result", "datax_config",
             "ops_diagnosis", "ops_actions", "ops_record_result",
             "analysis_query", "analysis_caliber", "analysis_result", "llm_usage",
-            "approval_impact",
+            "approval_impact", "analysis_grade",
         ]:
             if result.get(key):
                 try:

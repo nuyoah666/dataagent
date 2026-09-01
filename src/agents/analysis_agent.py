@@ -89,7 +89,8 @@ class AnalysisConfigAgent(BaseAgent):
             state, "analysis_parse",
             decision=f"指标 {query.metrics} / 维度 {query.dimensions}",
             basis=getattr(self, "_parse_basis", "llm"),
-            evidence={"granularity": query.granularity},
+            evidence={"granularity": query.granularity,
+                      "semantic_version": getattr(catalog, "version", 1)},
         )
         if backfilled:
             self._record(

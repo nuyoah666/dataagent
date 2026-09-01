@@ -41,7 +41,6 @@ logger = logging.getLogger(__name__)
 @register_agent(
     "data_integration", "config",
     description="解析同步意图，生成 DataX 配置",
-    approval_required=True,
 )
 class ConfigAgent(BaseAgent):
     """规划与配置 Agent。"""

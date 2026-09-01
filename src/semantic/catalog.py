@@ -96,10 +96,13 @@ class SemanticTable:
 
 
 class SemanticCatalog:
-    def __init__(self, tables: List[SemanticTable], default_database: str, default_engine: str):
+    def __init__(self, tables: List[SemanticTable], default_database: str,
+                 default_engine: str, version: int = 1):
         self.tables = tables
         self.default_database = default_database
         self.default_engine = default_engine
+        # 语义契约版本：口径变更时递增，决策日志带版本戳，可复现/可审计
+        self.version = int(version)
 
     def table_by_name(self, table_name: str) -> Optional[SemanticTable]:
         for t in self.tables:
@@ -287,7 +290,7 @@ def _metric_formula(m: dict) -> str:
 def catalog_to_raw(catalog: "SemanticCatalog") -> Dict[str, Any]:
     """把内存 catalog 导出为可写 YAML / 可编辑 JSON 的原始结构。"""
     return {
-        "version": 1,
+        "version": getattr(catalog, "version", 1),
         "default_database": catalog.default_database,
         "default_engine": catalog.default_engine,
         "tables": [{
@@ -335,6 +338,7 @@ def load_catalog(path: Optional[Path] = None) -> SemanticCatalog:
         tables,
         default_database=str(raw.get("default_database", "datax_test")),
         default_engine=str(raw.get("default_engine", "starrocks")),
+        version=int(raw.get("version", 1)),
     )
 
 

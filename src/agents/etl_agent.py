@@ -123,7 +123,6 @@ def _admin_conn(database: str):
 @register_agent(
     "etl_development", "config",
     description="解析透传意图，推断 ODS/DWD 表并生成确定性 SQL",
-    approval_required=True,
 )
 class ETLConfigAgent(BaseAgent):
     """解析透传意图，推断 ODS/DWD 表，确定性生成 SQL（映射场景 LLM 补细节）。"""

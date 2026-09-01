@@ -13,7 +13,7 @@ from typing import Dict, Any, Optional
 from langgraph.graph import StateGraph, END
 
 from ..state import DataIntegrationState
-from ..agents import get_step_agents, get_task_approval
+from ..agents import get_step_agents
 from ..agents.prompts import PROMPT_VERSION
 from ..tools import detect_incremental_field, enhance_config_with_incremental
 from ..tools.db_tool import validate_identifier
@@ -50,21 +50,15 @@ class AgentWorkflow:
 
     @staticmethod
     def _resolve_approval_gate(task_type: str) -> bool:
-        """是否对该任务类型启用人工审批。
+        """是否对该任务类型启用人工审批（三态策略表的 ASK 落地）。
 
-        优先级：环境变量显式覆盖 > Agent 注册元数据（approval_required）> 默认 False。
+        优先级：环境变量显式覆盖 > 策略表 policy.task_requires_approval。
+        策略表是单一事实来源：集成/ETL 写链路 ASK（审批），问数/运维只读 ALLOW。
         """
         if os.getenv("APPROVAL_GATE", "true").strip().lower() == "false":
             return False
-        gated = [
-            t.strip() for t in
-            os.getenv("REQUIRE_APPROVAL_TASK_TYPES",
-                      "data_integration,etl_development").split(",")
-            if t.strip()
-        ]
-        if gated:
-            return task_type in gated
-        return get_task_approval(task_type)
+        from ..tools.policy import task_requires_approval
+        return task_requires_approval(task_type)
 
     def _build(self):
         wf = StateGraph(DataIntegrationState)
@@ -227,8 +221,8 @@ class AgentWorkflow:
         intent = state.get("parsed_intent") or {}
         if (str(intent.get("pre_action") or "none").lower() == "truncate"
                 and not state.get("_pre_sync_done")):
-            # 无审批门禁的直达路径（APPROVAL_GATE=false）：破坏性操作不自动执行，
-            # 只告警跳过——清空目标必须有人工审批背书
+            # 策略表 target_truncate=ASK：无审批门禁的直达路径（APPROVAL_GATE=false）
+            # 下破坏性操作不自动执行，只告警跳过——清空目标必须有人工审批背书
             self.task_mgr.log(
                 task_id, "WARN",
                 "任务声明了同步前清空目标，但当前未开启审批门禁，已跳过清空"
@@ -416,6 +410,21 @@ class AgentWorkflow:
                 }
                 if any(v is not None for v in ops_fields.values()):
                     self.task_mgr.update_task(task_id, **ops_fields)
+            # 问数任务：在线 Rubric 阅卷（采样 LLM 评分 + 确定性自检，
+            # rubric_version 落库，fail 回流 badcase；全链路 fail-open）
+            if self.task_type == "data_analysis":
+                try:
+                    from ..eval.rubric import grade_and_persist
+                    grade_and_persist(task_id, tm=self.task_mgr)
+                except Exception as e:  # noqa: BLE001 阅卷绝不影响主链路
+                    logger.warning("Rubric 阅卷钩子异常（忽略）: %s", e)
+            # 问数大结果落盘：tasks.db 只留预览行 + 文件引用（上下文/存储瘦身）
+            if self.task_type == "data_analysis":
+                try:
+                    from ..tools.result_store import offload_task_result
+                    offload_task_result(self.task_mgr, task_id)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("问数结果落盘失败（忽略）: %s", e)
             # 增量任务成功后更新水位（按天窗口：存日期）
             self._persist_incremental_watermark(final, task_id)
             logger.info("完成: %s", final.get("current_step"), extra={"task_id": task_id})
@@ -464,10 +473,11 @@ class AgentWorkflow:
             return {"fixed": False, "reason": "仅失败/取消的任务可修复"}
 
         # ---- 1. 确定性自动修复（数据集成）----
-        # 两类确定性修复，互斥取先命中者：
+        # 三类确定性修复，互斥取先命中者：
         #  a) 对账失败（DataX 成功但校验不通过）：如目标端历史残留 -> 开 truncate
         #  b) 执行失败（DataX rc!=0）：配置缺陷 -> 用最新规则重建配置
-        fixed_cfg = fixed_intent = None
+        #  c) 目标表不存在：生成建表 DDL（pending_ddl），审批后 pre_sync 自动建表
+        fixed_cfg = fixed_intent = fixed_ddl = None
         changes = []
         if allow_fix and task.get("task_type") == "data_integration":
             from ..tools.ops_rules import auto_remediate_validation
@@ -476,14 +486,21 @@ class AgentWorkflow:
                 fixed_intent = rv["intent"]
                 changes = rv.get("changes") or []
             else:
-                from ..tools.remediation import auto_remediate_integration
-                r = auto_remediate_integration(task)
-                if r.get("fixed"):
-                    fixed_cfg = r["config"]
-                    changes = r.get("changes") or []
+                from ..tools.remediation import (
+                    auto_remediate_integration, auto_remediate_missing_table,
+                )
+                mt = auto_remediate_missing_table(task)
+                if mt.get("fixed"):
+                    fixed_ddl = mt["pending_ddl"]
+                    changes = mt.get("changes") or []
+                else:
+                    r = auto_remediate_integration(task)
+                    if r.get("fixed"):
+                        fixed_cfg = r["config"]
+                        changes = r.get("changes") or []
 
-        if fixed_cfg is not None or fixed_intent is not None:
-            # 写回修复后配置/意图，状态从 FAILED 回到待审批（写操作仍需人工放行）
+        if fixed_cfg is not None or fixed_intent is not None or fixed_ddl is not None:
+            # 写回修复后配置/意图/DDL，状态从 FAILED 回到待审批（写操作仍需人工放行）
             updates = {
                 "current_step": "awaiting_approval",
                 "error": None, "execution_status": None,
@@ -493,6 +510,8 @@ class AgentWorkflow:
                 updates["datax_config"] = fixed_cfg
             if fixed_intent is not None:
                 updates["parsed_intent"] = fixed_intent
+            if fixed_ddl is not None:
+                updates["pending_ddl"] = fixed_ddl
             ok = self.task_mgr.transition_status(
                 task_id, TaskStatus.PENDING_APPROVAL,
                 [TaskStatus.FAILED, TaskStatus.CANCELLED],
@@ -648,10 +667,40 @@ class AgentWorkflow:
         """
         task_id = state.get("_task_id", "")
         intent = state.get("parsed_intent") or {}
+
+        # 0) 同步前建表（运维修复方案：目标表缺失时生成 pending_ddl，
+        #    随本次人工审批一并放行；策略 pre_sync_ddl=ASK）
+        ddl = state.get("pending_ddl")
+        if ddl and not state.get("etl_sql") and not state.get("_ddl_done"):
+            from ..tools.pre_sync import execute_target_ddl
+            try:
+                info = execute_target_ddl(intent, ddl)
+            except Exception as e:  # noqa: BLE001 建表失败直接拦截，不让 DataX 打空
+                err = f"同步前建表失败，已拦截执行: {e}"
+                logger.warning("pre_sync 建表失败 task=%s: %s", task_id, e)
+                self.task_mgr.log(task_id, "ERROR", err)
+                self.task_mgr.complete_task(task_id, TaskStatus.FAILED, error=err)
+                return False, {**state, "error": err, "current_step": "pre_sync_failed"}
+            self.task_mgr.record_decision(
+                task_id, "pre_sync_ddl",
+                decision=f"同步前自动建表 {info['target']}（策略 ASK，已人工审批放行）",
+                basis="policy",
+                evidence={"db_type": info["db_type"], "target": info["target"]},
+            )
+            self.task_mgr.audit(task_id, "pre_sync_create_table",
+                                detail=f"{info['db_type']}:{info['target']}")
+            self.task_mgr.log(
+                task_id, "INFO",
+                f"同步前操作：目标表 {info['target']} 不存在，已按运维修复方案自动建表",
+            )
+            # DDL 一次性消费，避免重试重复执行（IF NOT EXISTS 本身也幂等）
+            self.task_mgr.update_task(task_id, pending_ddl=None)
+            state = {**state, "pending_ddl": None, "_ddl_done": True}
+
         if str(intent.get("pre_action") or "none").lower() != "truncate":
             return True, state
         if state.get("etl_sql"):
-            return True, state  # ETL 任务无同步前操作
+            return True, state  # ETL 任务无同步前清空
         from ..tools.pre_sync import truncate_target
         try:
             info = truncate_target(intent)
@@ -661,13 +710,15 @@ class AgentWorkflow:
             self.task_mgr.log(task_id, "ERROR", err)
             self.task_mgr.complete_task(task_id, TaskStatus.FAILED, error=err)
             return False, {**state, "error": err, "current_step": "pre_sync_failed"}
+        # 策略表 target_truncate=ASK：能走到这里说明人工审批已放行；
+        # truncate 来源（运维规则建议/用户显式声明）记入证据
         basis = "rule" if intent.get("_pre_action_source") == "rule" else "explicit"
         self.task_mgr.record_decision(
             task_id, "pre_sync",
-            decision=f"同步前清空目标 {info['target']}",
+            decision=f"同步前清空目标 {info['target']}（策略 ASK，已人工审批放行）",
             basis=basis,
             evidence={"db_type": info["db_type"], "target": info["target"],
-                      "deleted": info["deleted"]},
+                      "deleted": info["deleted"], "policy": "ask"},
         )
         self.task_mgr.audit(
             task_id, "pre_sync_truncate",
@@ -736,6 +787,7 @@ class AgentWorkflow:
             "etl_target_exists": task.get("etl_target_exists"),
             "incremental_field": task.get("incremental_field"),
             "last_value": task.get("last_value"),
+            "pending_ddl": task.get("pending_ddl"),
             "pipeline_id": task.get("pipeline_id"),
             "parent_task_id": task.get("parent_task_id"),
         }

@@ -4,7 +4,7 @@
   - 每个任务类型注册 config/execution/validation 三个步骤
   - BaseAgent 提供 ok/fail/guarded 统一封装，消除每个 run() 里
     "拼 error + current_step" 的重复样板
-  - 审批门禁等任务级策略通过注册元数据声明，workflow 自动读取
+  - 审批门禁等任务级策略统一收敛在 src/tools/policy.py 三态策略表
 """
 import logging
 from typing import Any, Callable, Dict, Optional
@@ -20,7 +20,6 @@ def register_agent(
     name: str,
     *,
     description: str = "",
-    approval_required: Optional[bool] = None,
 ) -> Callable:
     """注册 Agent 类。
 
@@ -28,8 +27,6 @@ def register_agent(
         task_type: 任务类型（data_integration / etl_development / data_ops / data_analysis）
         name: 步骤名（config / execution / validation）
         description: 该步骤的职责说明（用于 UI 展示/文档）
-        approval_required: 该任务类型是否默认需要人工审批；None 表示
-            由 config agent 声明（取第一个非 None），否则默认 False
     """
 
     def decorator(cls):
@@ -38,8 +35,6 @@ def register_agent(
         cls.name = name
         cls.step = name
         cls.description = description
-        if approval_required is not None:
-            cls.approval_required = approval_required
         return cls
 
     return decorator
@@ -51,15 +46,6 @@ def get_step_agents(task_type: str) -> Dict[str, type]:
     if not steps:
         raise KeyError(f"未注册的任务类型: {task_type}")
     return steps
-
-
-def get_task_approval(task_type: str) -> bool:
-    """读取该任务类型声明的审批策略（默认 False）。"""
-    steps = AGENT_REGISTRY.get(task_type) or {}
-    for step_cls in steps.values():
-        if getattr(step_cls, "approval_required", None) is not None:
-            return bool(step_cls.approval_required)
-    return False
 
 
 class BaseAgent:

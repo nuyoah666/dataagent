@@ -162,3 +162,53 @@ def auto_remediate_integration(task: dict) -> Dict[str, Any]:
         "reason": "",
         "source": result.get("source"),
     }
+
+
+def auto_remediate_missing_table(task: Dict[str, Any]) -> Dict[str, Any]:
+    """目标表不存在的确定性修复：生成建表 DDL 作为修复方案。
+
+    与 auto_remediate_integration 的分工：配置没坏、DataX 也没坏，
+    是目标端缺表——修复物不是新配置，而是一份建表 DDL（pending_ddl），
+    人工审批后由 pre_sync 自动执行（IF NOT EXISTS 幂等），再重跑同步。
+
+    Returns:
+        {"fixed": bool, "pending_ddl": str|None, "changes": [...], "reason": str}
+    """
+    intent = task.get("parsed_intent") or {}
+    tgt_type = str(intent.get("target_db_type") or "").lower()
+    if tgt_type not in ("mysql", "starrocks"):
+        return {"fixed": False, "pending_ddl": None, "changes": [],
+                "reason": f"目标端 {tgt_type} 不走 SQL 建表"}
+    cfg = task.get("datax_config")
+    if not cfg:
+        return {"fixed": False, "pending_ddl": None, "changes": [],
+                "reason": "缺少 DataX 配置，无法生成建表 DDL"}
+    try:
+        from .config_view import (
+            build_config_view, enrich_mapping_with_schemas,
+        )
+        view = build_config_view(cfg)
+        if not view.get("available"):
+            return {"fixed": False, "pending_ddl": None, "changes": [],
+                    "reason": "配置视图不可用，无法生成建表 DDL"}
+        view = enrich_mapping_with_schemas(view, task)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("缺表修复：映射补全失败: %s", e)
+        return {"fixed": False, "pending_ddl": None, "changes": [],
+                "reason": f"建表 DDL 生成异常: {e}"}
+
+    if view.get("target_table_exists") is not False:
+        return {"fixed": False, "pending_ddl": None, "changes": [],
+                "reason": "目标表存在或检测失败，非缺表问题"}
+    ddl = str(view.get("target_ddl") or "").strip()
+    if not ddl:
+        return {"fixed": False, "pending_ddl": None, "changes": [],
+                "reason": "字段映射无法生成合法建表 DDL"}
+
+    target = f"{tgt_type}:{intent.get('target_database', '')}.{intent.get('target_table', '')}"
+    return {
+        "fixed": True,
+        "pending_ddl": ddl,
+        "changes": [f"目标表 {target} 不存在：审批通过后自动建表并重跑同步"],
+        "reason": "",
+    }

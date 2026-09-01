@@ -113,3 +113,44 @@ def _truncate_es(kw: dict, index: str) -> Dict[str, Any]:
     deleted = (resp or {}).get("deleted", 0)
     logger.info("同步前清空 ES 索引 %s（%s 条）", idx, deleted)
     return {"db_type": "elasticsearch", "target": idx, "deleted": int(deleted or 0)}
+
+
+def execute_target_ddl(intent: Dict[str, Any], ddl: str) -> Dict[str, Any]:
+    """同步前建表（运维修复方案：目标表缺失时，随人工审批通过后执行）。
+
+    DDL 由平台根据字段映射确定性生成（build_target_table_ddl），非 LLM 输出，
+    仅支持 MySQL/StarRocks（FE MySQL 协议）。IF NOT EXISTS 幂等。
+
+    Returns:
+        {"db_type", "target", "ddl_digest"}；连接/执行异常向上抛，由调用方拦截。
+    """
+    ddl = str(ddl or "").strip().rstrip(";")
+    if not ddl:
+        raise ValueError("建表 DDL 为空")
+    low = ddl.lower()
+    if not low.startswith("create table"):
+        raise ValueError("仅允许 CREATE TABLE 语句")
+    # 确定性护栏：DDL 里不允许夹带其它写/删操作
+    for kw in ("insert ", "update ", "delete ", "drop ", "truncate", "alter "):
+        if kw in low:
+            raise ValueError(f"建表 DDL 含非法关键字: {kw.strip()}")
+
+    kw = _conn_kwargs(intent)
+    if kw["db_type"] not in ("mysql", "starrocks"):
+        raise ValueError(f"同步前建表暂不支持目标端类型: {kw['db_type']}")
+    table = str(intent.get("target_table") or "").strip()
+    validate_identifier(table, allow_qualified=False, field="目标表名")
+    if kw["database"]:
+        validate_identifier(kw["database"], allow_qualified=False, field="目标库名")
+
+    with mysql_conn(
+        kw["db_type"], host=kw["host"], port=kw["port"],
+        username=kw["username"], password=kw["password"],
+        database=kw["database"] or None,
+    ) as conn:
+        with conn.cursor() as cur:
+            cur.execute(ddl)
+    target = f"{kw['database']}.{table}" if kw["database"] else table
+    logger.info("同步前建表 %s: %s", kw["db_type"], target)
+    return {"db_type": kw["db_type"], "target": target,
+            "ddl_digest": ddl[:80]}

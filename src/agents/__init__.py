@@ -3,7 +3,6 @@ from .base import (
     BaseAgent,
     register_agent,
     get_step_agents,
-    get_task_approval,
     AGENT_REGISTRY,
 )
 from .config_agent import ConfigAgent
